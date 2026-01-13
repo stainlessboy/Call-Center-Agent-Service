@@ -1,0 +1,11 @@
+langchain
+langgraph
+rich
+pydantic
+langchain-openai
+python-dotenv
+fastapi
+uvicorn[standard]
+psycopg[binary]
+fpdf2
+ipython
