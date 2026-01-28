@@ -1,0 +1,313 @@
+products:
+  - id: micro_online
+    category: microloan
+    channel: mobile_app
+    channel_text: "Доступен для оформления через мобильное приложение Asakabank."
+    name: "«Онлайн микрозайм» (через мобильное приложение)"
+    purpose_segment: consumer
+    purposes:
+      - personal_any
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 23-летнего возраста,
+        имеющим официальный доход в течение последних 6 месяцев
+        и не достигшим установленного пенсионного возраста (мужчины/женщины).
+      citizen_uz_required: true
+      age_min: 23          # TODO: подставить из тарифа, если другое
+      age_max_male: 60     # TODO: максимум для мужчин по тарифу
+      age_max_female: 55   # TODO: максимум для женщин по тарифу
+    amount_min: 2000000
+    amount_max: 100000000
+    term_min_months: 3
+    term_max_months: 48
+    grace_default_months: null
+    grace_rules: []
+    apr_rules:
+      - when: "income_proof && term<=24"
+        apr: 29
+      - when: "income_proof && term>24"
+        apr: 31
+      - when: "payroll && term<=24"
+        apr: 25
+      - when: "payroll && term>24"
+        apr: 27
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (5+ просрочек и т.п., см. тариф)"
+    extra_conditions:
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам перед МИБ и коммерческими банками"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
+
+  - id: micro_2_5
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "«Микрозайм 2.5» (через ЦБУ)"
+    purpose_segment: consumer
+    purposes:
+      - personal_any
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 23-летнего возраста,
+        имеющим официальный доход в течение последних 6 месяцев
+        и не достигшим установленного пенсионного возраста (мужчины/женщины).
+      citizen_uz_required: true
+      age_min: 23          # TODO: проверить по тарифу
+      age_max_male: 60     # TODO
+      age_max_female: 55   # TODO
+    amount_min: 2000000
+    amount_max: 100000000
+    term_min_months: 3
+    term_max_months: 48
+    grace_default_months: null
+    grace_rules: []
+    apr_rules:
+      - when: "income_proof && term<=24"
+        apr: 29
+      - when: "income_proof && term>24"
+        apr: 31
+      - when: "payroll && term<=24"
+        apr: 25
+      - when: "payroll && term>24"
+        apr: 27
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (5+ просрочек и т.п., см. тариф)"
+    extra_conditions:
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам перед МИБ и коммерческими банками"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
+
+  - id: micro_preferential
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "«Льготный микрозайм» (через ЦБУ)"
+    purpose_segment: consumer
+    purposes:
+      - personal_any
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 23-летнего возраста,
+        имеющим официальный доход в течение последних 6 месяцев
+        и не достигшим установленного пенсионного возраста (мужчины/женщины).
+      citizen_uz_required: true
+      age_min: 23          # TODO: проверить по тарифу
+      age_max_male: 60     # TODO
+      age_max_female: 55   # TODO
+    amount_min: 2000000
+    amount_max: 10000000
+    term_min_months: 3
+    term_max_months: 12
+    grace_default_months: null
+    grace_rules: []
+    apr_rules:
+      - when: "income_proof && term<=3"
+        apr: 20
+      - when: "income_proof && term<=6"
+        apr: 22
+      - when: "income_proof && term<=9"
+        apr: 24
+      - when: "income_proof && term<=12"
+        apr: 26
+      - when: "payroll && term<=3"
+        apr: 20
+      - when: "payroll && term<=6"
+        apr: 22
+      - when: "payroll && term<=9"
+        apr: 24
+      - when: "payroll && term<=12"
+        apr: 26
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (5+ просрочек и т.п., см. тариф)"
+    extra_conditions:
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам перед МИБ и коммерческими банками"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
+
+  - id: micro_first_step_1_0
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "Микрозайм «Первый шаг в бизнес 1.0»"
+    purpose_segment: business
+    purposes:
+      - business_start
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 18-летнего возраста,
+        начинающим предпринимательскую деятельность и/или работающим на себя.
+      citizen_uz_required: true
+      self_employed_required: true
+      age_min: 18          # TODO: проверить по тарифу
+      age_max_male: 60     # TODO: если есть в тарифе
+      age_max_female: 55   # TODO
+    amount_min: 500000
+    amount_max: 5000000
+    term_min_months: null
+    term_max_months: 12
+    grace_default_months: 0
+    grace_rules: []
+    apr_rules:
+      - when: "amount<=3000000 && term<=6"
+        apr: 24
+      - when: "amount<=4000000 && term<=9"
+        apr: 26
+      - when: "amount<=5000000 && term<=12"
+        apr: 28
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (по тарифу)"
+    extra_conditions:
+      - "предоставляется лицам, начинающим предпринимательскую деятельность"
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
+
+  - id: micro_first_step_2_0
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "Микрозайм «Первый шаг в бизнес 2.0»"
+    purpose_segment: business
+    purposes:
+      - business_start
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 18-летнего возраста,
+        имеющим доход за последние 6 месяцев в качестве самозанятого,
+        уплачивающего социальный налог.
+      citizen_uz_required: true
+      self_employed_required: true
+      income_history_months_required: 6
+      age_min: 18           # TODO
+      age_max_male: 60      # TODO
+      age_max_female: 55    # TODO
+    amount_min: 500000
+    amount_max: 17000000
+    term_min_months: 13
+    term_max_months: 36
+    grace_default_months: 6
+    grace_rules:
+      - when: "term==13"
+        grace_max_months: 1
+      - when: "term>13 && term<=24"
+        grace_max_months: 3
+      - when: "term>24 && term<=36"
+        grace_max_months: 6
+    apr_rules:
+      - when: null
+        apr: 27
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (по тарифу)"
+    extra_conditions:
+      - "предоставляется лицам, зарегистрированным в качестве самозанятых и уплачивающим социальный налог"
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам перед МИБ и коммерческими банками"
+      - "заёмщик не должен являться сотрудником АО «Asakabank»"
+
+  - id: micro_first_step_3_0
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "Микрозайм «Первый шаг в бизнес 3.0»"
+    purpose_segment: business
+    purposes:
+      - business_start
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 18 лет и не старше 30 лет,
+        зарегистрированным как самозанятые, уплачивающим социальный налог,
+        и имеющим оборот по картам за последние 6 месяцев.
+      citizen_uz_required: true
+      self_employed_required: true
+      age_min: 18        # TODO: проверить точные границы
+      age_max: 30        # общий максимум
+      age_max_male: 30   # можно дублировать
+      age_max_female: 30
+    amount_min: 2000000
+    amount_max: 100000000
+    term_min_months: null
+    term_max_months: 60
+    grace_default_months: 12
+    grace_rules: []
+    apr_rules:
+      - when: null
+        apr: 18
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (по тарифу)"
+    extra_conditions:
+      - "предоставляется самозанятым, уплачивающим социальный налог"
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам"
+      - "заёмщик должен иметь положительную кредитную историю"
+      - "заёмщик не должен оформлять 2 и более кредитов в течение последних 7 дней"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
+
+  - id: micro_support_entrepreneur
+    category: microloan
+    channel: branch_cbu
+    channel_text: "Оформляется только в филиалах банка (ЦБУ), не через мобильное приложение."
+    name: "Микрозайм «Поддержка предпринимателя»"
+    purpose_segment: business
+    purposes:
+      - business_support
+    eligibility:
+      text: >
+        Гражданам Республики Узбекистан, достигшим 18-летнего возраста,
+        зарегистрированным как самозанятые и ведущим предпринимательскую деятельность,
+        имеющим оборот по картам UzCard и Humo за последние 6 месяцев.
+      citizen_uz_required: true
+      self_employed_required: true
+      age_min: 18         # TODO
+      age_max_male: 60    # TODO
+      age_max_female: 55  # TODO
+    amount_min: 500000
+    amount_max: 25000000
+    term_min_months: 3
+    term_max_months: 36
+    grace_default_months: 0
+    grace_rules: []
+    apr_rules:
+      - when: null
+        apr: 25
+    repayment_types:
+      - "аннуитет"
+      - "дифференцированный"
+    collateral_options:
+      - "поручительство третьего лица"
+      - "страховой полис"
+    stop_factors:
+      - "ограничения по количеству просроченных платежей в кредитном бюро (по тарифу)"
+    extra_conditions:
+      - "предоставляется лицам, зарегистрированным в качестве самозанятых и уплачивающим социальный налог"
+      - "отсутствие задолженностей и незавершённых заявок по обязательным платежам перед МИБ и коммерческими банками"
+      - "заёмщик должен иметь оборот средств на банковской карте (UzCard/Humo) за последние 6 месяцев"
+      - "заёмщик не должен быть сотрудником АО «Asakabank»"
