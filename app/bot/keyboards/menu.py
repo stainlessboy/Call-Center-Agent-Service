@@ -1,6 +1,7 @@
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 NEW_CHAT = "📞 Колл-центр"
+END_SESSION = "✅ Завершить сессию"
 MY_SESSIONS = "🗂️ Мои сессии"
 BACK = "⬅️ Назад"
 CHANGE_LANGUAGE = "🌐 Сменить язык"
@@ -25,6 +26,7 @@ def chat_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=NEW_CHAT)],
+            [KeyboardButton(text=END_SESSION)],
             [KeyboardButton(text=BACK)],
             [KeyboardButton(text=CURRENCY_RATES), KeyboardButton(text=BRANCHES)],
             [KeyboardButton(text=NEAREST_BRANCH), KeyboardButton(text=CHANGE_LANGUAGE)],

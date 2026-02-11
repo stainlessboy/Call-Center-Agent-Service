@@ -102,3 +102,12 @@ class Branch(Base):
     latitude: Mapped[Optional[float]] = mapped_column()
     longitude: Mapped[Optional[float]] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FaqItem(Base):
+    __tablename__ = "faq"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,42 +1,14 @@
 from __future__ import annotations
 
-import json
 import os
-import ssl
-import urllib.request
-from typing import Optional, Tuple
 
 from django import forms
 from django.contrib import admin, messages
 from django.db import transaction
 from django.utils import timezone
 
-from bank_admin.models import Branch, ChatSession, Message, User
-
-
-def _send_telegram_message(token: str, chat_id: int, text: str) -> Tuple[bool, Optional[str]]:
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=_build_ssl_context()) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        if not data.get("ok"):
-            return False, data.get("description") or "telegram api error"
-        return True, None
-    except Exception as exc:  # pragma: no cover - network issues
-        return False, str(exc)
-
-
-def _build_ssl_context() -> ssl.SSLContext:
-    """
-    Default SSL verification is disabled (to tolerate self-signed proxies).
-    Set TELEGRAM_SSL_VERIFY=true to enable verification.
-    """
-    verify_raw = (os.getenv("TELEGRAM_SSL_VERIFY") or "").strip().lower()
-    if verify_raw in {"1", "true", "yes", "on"}:
-        return ssl.create_default_context()
-    return ssl._create_unverified_context()  # pragma: no cover - opt-in only
+from app.services.telegram_sender import send_telegram_message
+from bank_admin.models import Branch, ChatSession, FaqItem, Message, User
 
 
 class ChatSessionAdminForm(forms.ModelForm):
@@ -132,7 +104,7 @@ class ChatSessionAdmin(admin.ModelAdmin):
         label = "👤 Оператор"
         if operator_name:
             label = f"{label} ({operator_name})"
-        ok, error = _send_telegram_message(
+        ok, error = send_telegram_message(
             token,
             user.telegram_user_id,
             f"{label}: {operator_reply}",
@@ -182,3 +154,11 @@ class BranchAdmin(admin.ModelAdmin):
         ("Счета", {"fields": ("uzcard_accounts", "humo_accounts")}),
         ("Гео", {"fields": ("latitude", "longitude")}),
     )
+
+
+@admin.register(FaqItem)
+class FaqItemAdmin(admin.ModelAdmin):
+    list_display = ("id", "question", "answer", "created_at")
+    list_display_links = ("id", "question")
+    search_fields = ("question", "answer")
+    ordering = ("-id",)

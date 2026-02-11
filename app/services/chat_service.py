@@ -111,7 +111,14 @@ class ChatService:
                     chat_session.status = SessionStatus.ENDED
                     chat_session.ended_at = datetime.now(timezone.utc)
                     chat_session.closed_reason = "manual_new"
-                chat_session = ChatSession(user_id=user_id, status=SessionStatus.ACTIVE)
+                chat_session = ChatSession(
+                    user_id=user_id,
+                    status=SessionStatus.ACTIVE,
+                    last_activity_at=datetime.now(timezone.utc),
+                    human_mode=False,
+                    human_mode_since=None,
+                    assigned_operator_id=None,
+                )
                 session.add(chat_session)
             await session.commit()
             await session.refresh(chat_session)

@@ -72,20 +72,10 @@ class Message(models.Model):
 
 
 class Branch(models.Model):
-    class DistrictChoices(models.TextChoices):
-        MIRABAD = "Мирабадский", "Мирабадский"
-        YUNUSABAD = "Юнусабадский", "Юнусабадский"
-
-
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
     region = models.CharField(max_length=255)
-    district = models.CharField(
-        max_length=255,
-        choices=DistrictChoices.choices,
-        blank=True,
-        null=True,
-    )
+    district = models.CharField(max_length=255, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     landmarks = models.TextField(blank=True, null=True)
     metro = models.CharField(max_length=255, blank=True, null=True)
@@ -104,8 +94,24 @@ class Branch(models.Model):
     class Meta:
         managed = False
         db_table = "branches"
-        verbose_name = "Branch"
-        verbose_name_plural = "Branches"
+        verbose_name = "Отделение"
+        verbose_name_plural = "Отделения"
 
     def __str__(self) -> str:
         return f"{self.name} ({self.region})"
+
+
+class FaqItem(models.Model):
+    id = models.AutoField(primary_key=True)
+    question = models.TextField()
+    answer = models.TextField()
+    created_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "faq"
+        verbose_name = "FAQ"
+        verbose_name_plural = "FAQ"
+
+    def __str__(self) -> str:
+        return self.question[:80]

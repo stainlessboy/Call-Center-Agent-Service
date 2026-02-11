@@ -16,6 +16,7 @@ class Settings:
     redis_url: str | None
     log_level: str
     operator_ids: list[int]
+    operator_api_key: str | None
 
 
 def _parse_operator_ids(raw: str | None) -> list[int]:
@@ -42,4 +43,5 @@ def get_settings() -> Settings:
         redis_url=(os.getenv("REDIS_URL") or "").strip() or None,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
         operator_ids=_parse_operator_ids(os.getenv("OPERATOR_IDS")),
+        operator_api_key=(os.getenv("OPERATOR_API_KEY") or "").strip() or None,
     )
