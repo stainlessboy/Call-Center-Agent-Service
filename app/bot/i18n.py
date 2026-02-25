@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+SUPPORTED_LANGS = {"ru", "en", "uz"}
+
+
+def normalize_lang(lang: str | None) -> str:
+    code = (lang or "").strip().lower()
+    return code if code in SUPPORTED_LANGS else "ru"
+
+
+MENU_LABELS: dict[str, dict[str, str]] = {
+    "ru": {
+        "new_chat": "📞 Колл-центр",
+        "end_session": "✅ Завершить сессию",
+        "my_sessions": "🗂️ Мои сессии",
+        "back": "⬅️ Назад",
+        "change_language": "🌐 Сменить язык",
+        "currency_rates": "💱 Курс валют",
+        "branches": "🏢 Отделения",
+        "nearest_branch": "📍 Найти ближайший ЦБУ",
+        "contact_share": "Поделиться телефоном",
+        "send_location": "Отправить геолокацию",
+        "cancel": "Отмена",
+        "branch_tashkent": "🏙 Ташкент",
+        "branch_regions": "🌍 Регионы",
+        "human_mode_on": "👤 Живой оператор",
+        "human_mode_off": "🤖 Вернуться к боту",
+    },
+    "en": {
+        "new_chat": "📞 Call center",
+        "end_session": "✅ End session",
+        "my_sessions": "🗂️ My sessions",
+        "back": "⬅️ Back",
+        "change_language": "🌐 Change language",
+        "currency_rates": "💱 Exchange rates",
+        "branches": "🏢 Branches",
+        "nearest_branch": "📍 Find nearest branch",
+        "contact_share": "Share phone number",
+        "send_location": "Send location",
+        "cancel": "Cancel",
+        "branch_tashkent": "🏙 Tashkent",
+        "branch_regions": "🌍 Regions",
+        "human_mode_on": "👤 Live operator",
+        "human_mode_off": "🤖 Back to bot",
+    },
+    "uz": {
+        "new_chat": "📞 Koll-markaz",
+        "end_session": "✅ Sessiyani yakunlash",
+        "my_sessions": "🗂️ Mening sessiyalarim",
+        "back": "⬅️ Orqaga",
+        "change_language": "🌐 Tilni almashtirish",
+        "currency_rates": "💱 Valyuta kursi",
+        "branches": "🏢 Filiallar",
+        "nearest_branch": "📍 Eng yaqin filialni topish",
+        "contact_share": "Telefon raqamini yuborish",
+        "send_location": "Geolokatsiyani yuborish",
+        "cancel": "Bekor qilish",
+        "branch_tashkent": "🏙 Toshkent",
+        "branch_regions": "🌍 Hududlar",
+        "human_mode_on": "👤 Jonli operator",
+        "human_mode_off": "🤖 Botga qaytish",
+    },
+}
+
+TEXTS: dict[str, dict[str, str]] = {
+    "ask_language": {
+        "ru": "Выберите язык / Choose language / Tilni tanlang:",
+        "en": "Choose language / Выберите язык / Tilni tanlang:",
+        "uz": "Tilni tanlang / Choose language / Выберите язык:",
+    },
+    "start_after_language": {
+        "ru": "Вы в чате с агентом банка. Я сохраню историю сообщений.\nКоманды: /new — новая сессия, /end — завершить текущую.",
+        "en": "You are in a bank support chat. I will keep the message history.\nCommands: /new — new session, /end — end current session.",
+        "uz": "Siz bank agenti bilan chatdasiz. Xabarlar tarixini saqlayman.\nBuyruqlar: /new — yangi sessiya, /end — joriy sessiyani yakunlash.",
+    },
+    "share_phone_first": {
+        "ru": "Поделитесь, пожалуйста, номером телефона для связи.\nКоманды: /new — новая сессия, /end — завершить текущую.",
+        "en": "Please share your phone number for contact.\nCommands: /new — new session, /end — end current session.",
+        "uz": "Aloqa uchun telefon raqamingizni yuboring.\nBuyruqlar: /new — yangi sessiya, /end — joriy sessiyani yakunlash.",
+    },
+    "phone_saved_choose_language": {
+        "ru": "Спасибо, номер телефона сохранен. Теперь выберите язык.",
+        "en": "Thank you, your phone number has been saved. Now choose a language.",
+        "uz": "Rahmat, telefon raqamingiz saqlandi. Endi tilni tanlang.",
+    },
+    "language_saved": {
+        "ru": "Язык сохранён.",
+        "en": "Language saved.",
+        "uz": "Til saqlandi.",
+    },
+    "feedback_saved": {
+        "ru": "Спасибо за оценку!",
+        "en": "Thank you for your rating!",
+        "uz": "Baholaganingiz uchun rahmat!",
+    },
+    "feedback_failed": {
+        "ru": "Не удалось сохранить оценку. Попробуйте позже.",
+        "en": "Could not save your rating. Please try again later.",
+        "uz": "Bahoni saqlab bo‘lmadi. Keyinroq qayta urinib ko‘ring.",
+    },
+    "session_closed_timeout": {
+        "ru": "Сессия закрыта из-за отсутствия активности. Оцените работу агента:",
+        "en": "The session was closed due to inactivity. Please rate the agent:",
+        "uz": "Faollik bo‘lmagani sababli sessiya yopildi. Agent ishini baholang:",
+    },
+    "human_timeout_back_to_bot": {
+        "ru": "Оператор не ответил в течение {minutes} минут. Я снова переключил сессию в режим бота, можем продолжать.",
+        "en": "The operator did not respond within {minutes} minutes. I switched the session back to bot mode, we can continue.",
+        "uz": "Operator {minutes} daqiqa ichida javob bermadi. Sessiya yana bot rejimiga qaytarildi, davom etishimiz mumkin.",
+    },
+    "agent_unavailable": {
+        "ru": "Временно не могу ответить. Попробуйте позже.",
+        "en": "I cannot reply right now. Please try again later.",
+        "uz": "Hozircha javob bera olmayman. Keyinroq urinib ko‘ring.",
+    },
+    "sent_to_operator": {
+        "ru": "Ваше сообщение передано оператору. Ожидайте ответа.",
+        "en": "Your message has been forwarded to an operator. Please wait for a reply.",
+        "uz": "Xabaringiz operatorga yuborildi. Javobni kuting.",
+    },
+    "pdf_caption": {
+        "ru": "График выплат",
+        "en": "Payment schedule",
+        "uz": "To‘lov jadvali",
+    },
+}
+
+LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
+    "ru": "Русский",
+    "en": "English",
+    "uz": "O'zbek",
+}
+
+
+def t(key: str, lang: str | None = None, **kwargs: Any) -> str:
+    code = normalize_lang(lang)
+    variants = TEXTS.get(key, {})
+    template = variants.get(code) or variants.get("ru") or key
+    return template.format(**kwargs) if kwargs else template
+
+
+def menu_label(action: str, lang: str | None = None) -> str:
+    code = normalize_lang(lang)
+    return MENU_LABELS.get(code, MENU_LABELS["ru"]).get(action, action)
+
+
+def _normalize_for_match(text: str | None) -> str:
+    if not text:
+        return ""
+    normalized = re.sub(r"^[^\wА-Яа-я]+", "", text, flags=re.UNICODE).strip().lower()
+    normalized = re.sub(r"[^\w\s]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def menu_action_from_text(text: str | None) -> str | None:
+    norm = _normalize_for_match(text)
+    if not norm:
+        return None
+    for action in next(iter(MENU_LABELS.values())).keys():
+        for labels in MENU_LABELS.values():
+            if _normalize_for_match(labels.get(action)) == norm:
+                return action
+    synonyms = {
+        "back": {"назад", "back", "orqaga"},
+        "cancel": {"отмена", "cancel", "bekor qilish", "bekor"},
+        "change_language": {"язык", "сменить язык", "language", "change language", "til", "tilni almashtirish"},
+        "new_chat": {"новая сессия", "новый чат", "new chat", "new session", "yangi sessiya"},
+        "my_sessions": {"мои сессии", "sessions", "my sessions", "sessiyalarim"},
+        "currency_rates": {"курс", "курс валют", "exchange rate", "exchange rates", "valyuta kursi"},
+        "branches": {"отделения", "branches", "filiallar"},
+        "nearest_branch": {"ближайший цбу", "nearest branch", "eng yaqin filial"},
+        "end_session": {"завершить сессию", "end session", "sessiyani yakunlash"},
+        "branch_tashkent": {"ташкент", "tashkent", "toshkent"},
+        "branch_regions": {"регионы", "regions", "hududlar"},
+    }
+    for action, values in synonyms.items():
+        if norm in values:
+            return action
+    return None

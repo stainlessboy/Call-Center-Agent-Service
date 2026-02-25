@@ -28,6 +28,8 @@ HEADER_ALIASES = {
         "вопросы",
         "вопрос/проблема",
         "вопросы/проблемы",
+        "вопросы по кредитам",
+        "вопросы по кредитам?",
     },
     "answer": {
         "answer",
@@ -41,6 +43,12 @@ HEADER_ALIASES = {
     },
 }
 
+SHEET_LANGUAGE_ALIASES = {
+    "ru": {"ru", "russian", "русский", "рус", "российский"},
+    "en": {"en", "eng", "english", "английский", "англ"},
+    "uz": {"uz", "uzb", "uzbek", "uzbekskiy", "узбекский", "узб"},
+}
+
 
 def _normalize_header(value: object) -> Optional[str]:
     if value is None:
@@ -51,6 +59,18 @@ def _normalize_header(value: object) -> Optional[str]:
     text = re.sub(r"[^\w\s]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text or None
+
+
+def _normalize_language(value: str | None) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = _normalize_header(value)
+    if not normalized:
+        return None
+    for lang, aliases in SHEET_LANGUAGE_ALIASES.items():
+        if normalized in aliases:
+            return lang
+    return None
 
 
 def _find_header_row(rows: Sequence[Sequence[object]]) -> Optional[Tuple[int, int, int]]:
@@ -85,8 +105,12 @@ def _iter_rows(path: Path, sheet: Optional[str]) -> Iterable[Sequence[object]]:
         yield row
 
 
-def _extract_items(path: Path, sheet: Optional[str], limit: Optional[int]) -> List[Tuple[str, str]]:
-    rows = list(_iter_rows(path, sheet))
+def _list_sheet_names(path: Path) -> list[str]:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    return list(workbook.sheetnames)
+
+
+def _extract_items_from_rows(rows: Sequence[Sequence[object]], limit: Optional[int]) -> List[Tuple[str, str]]:
     if not rows:
         return []
 
@@ -95,7 +119,6 @@ def _extract_items(path: Path, sheet: Optional[str], limit: Optional[int]) -> Li
         header_row, question_idx, answer_idx = header
         data_rows = rows[header_row + 1 :]
     else:
-        # Infer columns by non-empty counts if there is no header row.
         max_cols = max(len(row) for row in rows)
         counts = [0] * max_cols
         for row in rows:
@@ -134,36 +157,136 @@ def _extract_items(path: Path, sheet: Optional[str], limit: Optional[int]) -> Li
     return items
 
 
-async def _import_items(items: List[Tuple[str, str]], replace: bool, dry_run: bool) -> None:
+def _extract_items(path: Path, sheet: Optional[str], limit: Optional[int]) -> List[Tuple[str, str]]:
+    return _extract_items_from_rows(list(_iter_rows(path, sheet)), limit)
+
+
+def _extract_multilingual_items(
+    path: Path,
+    sheet: Optional[str],
+    lang: Optional[str],
+    limit: Optional[int],
+) -> List[dict[str, Optional[str]]]:
+    if sheet:
+        rows = _extract_items(path, sheet, limit)
+        resolved_lang = _normalize_language(lang) or _normalize_language(sheet) or "ru"
+        items: List[dict[str, Optional[str]]] = []
+        for q, a in rows:
+            item = {
+                "question_ru": None,
+                "answer_ru": None,
+                "question_en": None,
+                "answer_en": None,
+                "question_uz": None,
+                "answer_uz": None,
+            }
+            item[f"question_{resolved_lang}"] = q
+            item[f"answer_{resolved_lang}"] = a
+            items.append(item)
+        return items
+
+    requested_lang = _normalize_language(lang)
+    if requested_lang:
+        rows = _extract_items(path, None, limit)
+        items: List[dict[str, Optional[str]]] = []
+        for q, a in rows:
+            item = {
+                "question_ru": None,
+                "answer_ru": None,
+                "question_en": None,
+                "answer_en": None,
+                "question_uz": None,
+                "answer_uz": None,
+            }
+            item[f"question_{requested_lang}"] = q
+            item[f"answer_{requested_lang}"] = a
+            items.append(item)
+        return items
+
+    all_sheet_names = _list_sheet_names(path)
+    detected = [(name, _normalize_language(name)) for name in all_sheet_names]
+    detected = [(name, code) for name, code in detected if code]
+    if detected:
+        per_lang: dict[str, List[Tuple[str, str]]] = {}
+        for sheet_name, lang_code in detected:
+            per_lang[lang_code] = _extract_items(path, sheet_name, limit)
+        row_count = max((len(rows) for rows in per_lang.values()), default=0)
+        items: List[dict[str, Optional[str]]] = []
+        for idx in range(row_count):
+            item = {
+                "question_ru": None,
+                "answer_ru": None,
+                "question_en": None,
+                "answer_en": None,
+                "question_uz": None,
+                "answer_uz": None,
+            }
+            for lang_code, rows in per_lang.items():
+                if idx >= len(rows):
+                    continue
+                q, a = rows[idx]
+                item[f"question_{lang_code}"] = q
+                item[f"answer_{lang_code}"] = a
+            if any(item.values()):
+                items.append(item)
+        return items
+
+    rows = _extract_items(path, None, limit)
+    return [
+        {
+            "question_ru": q,
+            "answer_ru": a,
+            "question_en": None,
+            "answer_en": None,
+            "question_uz": None,
+            "answer_uz": None,
+        }
+        for q, a in rows
+    ]
+
+
+async def _import_items(items: List[dict[str, Optional[str]]], replace: bool, dry_run: bool) -> None:
     if dry_run:
         return
     async with get_session() as session:
         if replace:
             await session.execute(delete(FaqItem))
-        session.add_all([FaqItem(question=q, answer=a) for q, a in items])
+        session.add_all([FaqItem(**item) for item in items])
         await session.commit()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import FAQ items from an .xlsx file into the database.")
     parser.add_argument("path", type=Path, help="Path to FAQ .xlsx file")
-    parser.add_argument("--sheet", type=str, help="Sheet name (defaults to active sheet)")
+    parser.add_argument("--sheet", type=str, help="Sheet name (defaults to auto-detect all language sheets)")
+    parser.add_argument("--lang", type=str, choices=["ru", "en", "uz"], help="Language code for single-sheet import")
     parser.add_argument("--replace", action="store_true", help="Delete existing FAQ items before import")
-    parser.add_argument("--limit", type=int, help="Import only first N rows (for testing)")
+    parser.add_argument("--limit", type=int, help="Import only first N rows per sheet (for testing)")
     parser.add_argument("--dry-run", action="store_true", help="Parse and report rows without writing to DB")
     args = parser.parse_args()
 
     if not args.path.exists():
         raise SystemExit(f"File not found: {args.path}")
 
-    items = _extract_items(args.path, args.sheet, args.limit)
+    items = _extract_multilingual_items(args.path, args.sheet, args.lang, args.limit)
     print(f"Parsed {len(items)} FAQ rows from {args.path}")
     if items:
-        sample = items[:3]
+        filled_counts = {
+            "ru": sum(1 for item in items if item.get("question_ru") and item.get("answer_ru")),
+            "en": sum(1 for item in items if item.get("question_en") and item.get("answer_en")),
+            "uz": sum(1 for item in items if item.get("question_uz") and item.get("answer_uz")),
+        }
+        print("Filled languages:", ", ".join(f"{lang}={count}" for lang, count in sorted(filled_counts.items())))
         print("Sample:")
-        for question, answer in sample:
-            print(f"- Q: {question}")
-            print(f"  A: {answer}")
+        for item in items[:3]:
+            print(f"- [ru] Q: {item.get('question_ru')}")
+            print(f"      A: {item.get('answer_ru')}")
+            if item.get("question_en"):
+                print(f"  [en] Q: {item.get('question_en')}")
+                print(f"      A: {item.get('answer_en')}")
+            if item.get("question_uz"):
+                print(f"  [uz] Q: {item.get('question_uz')}")
+                print(f"      A: {item.get('answer_uz')}")
     if args.dry_run:
         print("Dry-run mode: no changes were written to the database.")
         return

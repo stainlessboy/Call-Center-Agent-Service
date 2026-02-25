@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import logging
 import os
 import re
 from typing import Any, Sequence
 
 from aiogram import F, Router
+from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -15,6 +16,7 @@ from aiogram.types import (
     Message,
 )
 
+from app.bot.i18n import menu_action_from_text, menu_label, normalize_lang, t
 from app.bot.keyboards.common import contact_keyboard, location_keyboard
 from app.bot.keyboards.feedback import feedback_keyboard, language_keyboard
 from app.bot.keyboards.human import human_mode_keyboard
@@ -34,7 +36,7 @@ from app.config import get_settings
 from app.services.chat_service import ChatService
 
 router = Router()
-logger = logging.getLogger(__name__)
+TELEGRAM_SAFE_CHUNK = 3800
 
 
 def _normalize_region(text: str | None) -> str | None:
@@ -88,20 +90,164 @@ def _normalize_for_match(text: str) -> str:
 def _format_source_reply(text: str, source: str, name: str | None = None) -> str:
     if not text:
         return text
-    label = "🤖 Бот" if source == "bot" else "👤 Оператор"
-    if name:
-        label = f"{label} ({name})"
-    return f"{label}: {text}"
+    # Operator messages get a human label so clients can tell who's writing.
+    # Bot messages are sent without a prefix to feel more natural.
+    if source != "bot":
+        label = "👤"
+        if name:
+            label = f"{label} ({name})"
+        return f"{label}: {text}"
+    return text
+
+
+def _display_user_alias(username: str | None, first_name: str | None, telegram_user_id: int) -> str:
+    base = (username or first_name or str(telegram_user_id)).strip()
+    cleaned = re.sub(r"[^\w]+", "", base, flags=re.UNICODE)
+    return cleaned or str(telegram_user_id)
+
+
+def _parse_session_switch_request(raw_text: str, alias: str) -> int | str | None:
+    raw = (raw_text or "").strip()
+    if not raw:
+        return None
+
+    alias_norm = _normalize_for_match(alias)
+    raw_norm = _normalize_for_match(raw)
+
+    alias_direct = re.fullmatch(rf"{re.escape(alias_norm)}\s+(\d+)", raw_norm)
+    if alias_direct:
+        return int(alias_direct.group(1))
+
+    lead_cmd = re.match(r"^(?:сессия|session|chat|чат)\s+(.+)$", raw, flags=re.IGNORECASE)
+    if lead_cmd:
+        payload = lead_cmd.group(1).strip()
+        payload_norm = _normalize_for_match(payload)
+        if payload.isdigit():
+            return int(payload)
+        alias_in_payload = re.fullmatch(rf"{re.escape(alias_norm)}\s+(\d+)", payload_norm)
+        if alias_in_payload:
+            return int(alias_in_payload.group(1))
+        if re.fullmatch(r"[0-9a-fA-F-]{6,36}", payload):
+            return payload.lower()
+
+    if re.fullmatch(r"[0-9a-fA-F-]{8,36}", raw) and ("-" in raw or len(raw) >= 24):
+        return raw.lower()
+    return None
+
+
+def _resolve_session_ref(sessions: list[Any], session_ref: int | str) -> tuple[Any | None, str | None]:
+    if isinstance(session_ref, int):
+        idx = session_ref - 1
+        if idx < 0 or idx >= len(sessions):
+            return None, "index_out_of_range"
+        return sessions[idx], None
+
+    ref = session_ref.lower()
+    exact = [s for s in sessions if str(getattr(s, "id", "")).lower() == ref]
+    if len(exact) == 1:
+        return exact[0], None
+    if len(exact) > 1:
+        return None, "ambiguous"
+
+    pref = [s for s in sessions if str(getattr(s, "id", "")).lower().startswith(ref)]
+    if len(pref) == 1:
+        return pref[0], None
+    if len(pref) > 1:
+        return None, "ambiguous"
+    return None, "not_found"
 
 
 def _user_language_text(lang: str | None) -> dict[str, str]:
+    code = normalize_lang(lang)
+    lang_name = {"ru": "русский", "en": "English", "uz": "o'zbek tili"}[code]
+    names = {"ru": "Русский", "en": "English", "uz": "O'zbek"}
     return {
-        "start": "Вы в чате с агентом банка. Я сохраню историю сообщений.\nКоманды: /new — новая сессия, /end — завершить текущую.",
-        "share_phone": "Поделитесь, пожалуйста, номером телефона для связи.\nКоманды: /new — новая сессия, /end — завершить текущую.",
-        "ask_language": "Выберите язык / Choose language / Tilni tanlang:",
-        "session_closed_timeout": "Сессия закрыта из-за отсутствия активности. Оцените работу агента:",
-        "feedback_saved": "Спасибо за оценку!",
-        "feedback_failed": "Не удалось сохранить оценку. Попробуйте позже.",
+        "start": t("start_after_language", code),
+        "share_phone": t("share_phone_first", code),
+        "ask_language": t("ask_language", code),
+        "session_closed_timeout": t("session_closed_timeout", code),
+        "feedback_saved": t("feedback_saved", code),
+        "feedback_failed": t("feedback_failed", code),
+        "main_menu": {
+            "ru": "Главное меню.",
+            "en": "Main menu.",
+            "uz": "Asosiy menyu.",
+        }[code],
+        "end_ok": {
+            "ru": "Текущая сессия завершена. Используйте /new, чтобы начать новую.",
+            "en": "Current session has been ended. Use /new to start a new one.",
+            "uz": "Joriy sessiya yakunlandi. Yangisini boshlash uchun /new dan foydalaning.",
+        }[code],
+        "end_none": {
+            "ru": "Нет активной сессии. Отправьте сообщение, чтобы начать.",
+            "en": "There is no active session. Send a message to start one.",
+            "uz": "Faol sessiya yo‘q. Boshlash uchun xabar yuboring.",
+        }[code],
+        "new_chat_connected": {
+            "ru": "Подключил вас к колл-центру. Чем могу помочь?",
+            "en": "Connected you to the call center. How can I help?",
+            "uz": "Sizni koll-markazga uladim. Qanday yordam bera olaman?",
+        }[code],
+        "id_session": {
+            "ru": "ID сессии",
+            "en": "Session ID",
+            "uz": "Sessiya ID",
+        }[code],
+        "session_code": {
+            "ru": "Код сессии",
+            "en": "Session code",
+            "uz": "Sessiya kodi",
+        }[code],
+        "language_saved": t("language_saved", code),
+        "phone_saved_choose_language": t("phone_saved_choose_language", code),
+        "branches_choose_region": {
+            "ru": "📍 Выберите регион:",
+            "en": "📍 Choose a region:",
+            "uz": "📍 Hududni tanlang:",
+        }[code],
+        "no_tashkent_districts": {
+            "ru": "Нет данных по районам Ташкента.",
+            "en": "No data for Tashkent districts.",
+            "uz": "Toshkent tumanlari bo‘yicha ma’lumot topilmadi.",
+        }[code],
+        "choose_tashkent_district": {
+            "ru": "🏢 Отделения Ташкента. Выберите район:",
+            "en": "🏢 Tashkent branches. Choose a district:",
+            "uz": "🏢 Toshkent filiallari. Tumanni tanlang:",
+        }[code],
+        "no_regions": {
+            "ru": "Регионов не найдено.",
+            "en": "No regions found.",
+            "uz": "Hududlar topilmadi.",
+        }[code],
+        "choose_region": {
+            "ru": "🏢 Отделения. Выберите область:",
+            "en": "🏢 Branches. Choose a region:",
+            "uz": "🏢 Filiallar. Viloyatni tanlang:",
+        }[code],
+        "send_location_prompt": {
+            "ru": "📍 Отправьте геолокацию, чтобы найти ближайший ЦБУ.",
+            "en": "📍 Send your location to find the nearest branch.",
+            "uz": "📍 Eng yaqin filialni topish uchun geolokatsiyani yuboring.",
+        }[code],
+        "no_sessions": {
+            "ru": "Сессий пока нет.",
+            "en": "No sessions yet.",
+            "uz": "Hozircha sessiyalar yo‘q.",
+        }[code],
+        "rates_title": {
+            "ru": "Курс валют к суму (UZS), ориентировочно:",
+            "en": "Approximate exchange rates to UZS:",
+            "uz": "UZS ga nisbatan taxminiy valyuta kurslari:",
+        }[code],
+        "rates_ref": {
+            "ru": "Данные справочные, актуальные курсы уточняйте в отделении.",
+            "en": "Reference data only. Please confirm current rates at a branch.",
+            "uz": "Bu ma’lumot ma’lumot uchun. Amaldagi kurslarni filialda aniqlang.",
+        }[code],
+        "bot_pdf_caption": t("pdf_caption", code),
+        "lang_name_for_prompt": lang_name,
+        "lang_display_name": names[code],
     }
 
 
@@ -134,12 +280,12 @@ def format_branch(branch) -> str:
     return "\n".join(lines)
 
 
-def _branch_region_keyboard() -> InlineKeyboardMarkup:
+def _branch_region_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🏙 Ташкент", callback_data="branches:tashkent"),
-                InlineKeyboardButton(text="🌍 Регионы", callback_data="branches:regions"),
+                InlineKeyboardButton(text=menu_label("branch_tashkent", lang), callback_data="branches:tashkent"),
+                InlineKeyboardButton(text=menu_label("branch_regions", lang), callback_data="branches:regions"),
             ],
         ]
     )
@@ -151,6 +297,49 @@ def _build_branches_response(title: str, branches: Sequence[Any]) -> str:
         parts.append(format_branch(branch))
         parts.append("-" * 20)
     return "\n".join(parts)
+
+
+def _split_message_text(text: str, limit: int = TELEGRAM_SAFE_CHUNK) -> list[str]:
+    content = (text or "").strip()
+    if not content:
+        return []
+    if len(content) <= limit:
+        return [content]
+
+    chunks: list[str] = []
+    rest = content
+    while rest:
+        if len(rest) <= limit:
+            chunks.append(rest)
+            break
+        split_idx = rest.rfind("\n", 0, limit)
+        if split_idx <= 0:
+            split_idx = limit
+        chunk = rest[:split_idx].strip()
+        if not chunk:
+            chunk = rest[:limit]
+            split_idx = limit
+        chunks.append(chunk)
+        rest = rest[split_idx:].lstrip("\n")
+    return chunks
+
+
+async def _answer_safe(message: Message, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
+    chunks = _split_message_text(text, limit=TELEGRAM_SAFE_CHUNK)
+    if not chunks:
+        return
+    for idx, chunk in enumerate(chunks):
+        markup = reply_markup if idx == len(chunks) - 1 else None
+        try:
+            await message.answer(chunk, reply_markup=markup, parse_mode=parse_mode)
+        except TelegramBadRequest as exc:
+            if "message is too long" not in str(exc).lower():
+                raise
+            # Emergency fallback for edge cases with Telegram entity handling.
+            tiny_chunks = _split_message_text(chunk, limit=2000)
+            for tiny_idx, tiny in enumerate(tiny_chunks):
+                tiny_markup = markup if tiny_idx == len(tiny_chunks) - 1 else None
+                await message.answer(tiny, reply_markup=tiny_markup, parse_mode=None)
 
 
 async def _non_tashkent_regions(chat_service: ChatService) -> list[str]:
@@ -172,13 +361,13 @@ async def cmd_start(message: Message, chat_service: ChatService) -> None:
 
     texts = _user_language_text(user.language)
     if not user.phone:
-        await message.answer(texts["share_phone"], reply_markup=contact_keyboard())
+        await message.answer(texts["share_phone"], reply_markup=contact_keyboard(user.language))
         return
     if not user.language:
         await message.answer(texts["ask_language"], reply_markup=language_keyboard())
         return
 
-    await message.answer(texts["start"], reply_markup=main_menu_keyboard())
+    await message.answer(texts["start"], reply_markup=main_menu_keyboard(user.language))
 
 
 @router.message(Command("end"))
@@ -195,9 +384,9 @@ async def cmd_end(message: Message, chat_service: ChatService) -> None:
     )
     ended = await chat_service.end_active_session(user.id)
     if ended:
-        await message.answer("Текущая сессия завершена. Используйте /new, чтобы начать новую.", reply_markup=main_menu_keyboard())
+        await message.answer(_user_language_text(user.language)["end_ok"], reply_markup=main_menu_keyboard(user.language))
     else:
-        await message.answer("Нет активной сессии. Отправьте сообщение, чтобы начать.", reply_markup=main_menu_keyboard())
+        await message.answer(_user_language_text(user.language)["end_none"], reply_markup=main_menu_keyboard(user.language))
 
 
 @router.message(Command("new"))
@@ -212,10 +401,18 @@ async def cmd_new(message: Message, chat_service: ChatService) -> None:
         first_name=tg_user.first_name,
         last_name=tg_user.last_name,
     )
-    await chat_service.start_new_session(user.id)
+    new_session = await chat_service.start_new_session(user.id)
+    alias = _display_user_alias(user.username, user.first_name, user.telegram_user_id)
+    active_sessions = await chat_service.list_active_sessions(user.id, limit=50)
+    session_index = next((idx for idx, s in enumerate(active_sessions, start=1) if s.id == new_session.id), 1)
+    texts = _user_language_text(user.language)
     await message.answer(
-        "Подключил вас к колл-центру. Чем могу помочь?",
-        reply_markup=chat_keyboard(),
+        (
+            f"{texts['new_chat_connected']}\n"
+            f"{texts['id_session']}: {new_session.id}\n"
+            f"{texts['session_code']}: {alias}-{session_index}"
+        ),
+        reply_markup=chat_keyboard(user.language),
     )
 
 
@@ -284,9 +481,9 @@ async def contact_shared(message: Message, chat_service: ChatService) -> None:
     )
     texts = _user_language_text(user.language)
     if not user.language:
-        await message.answer("Спасибо, номер телефона сохранен. Теперь выберите язык.", reply_markup=language_keyboard())
+        await message.answer(texts["phone_saved_choose_language"], reply_markup=language_keyboard())
     else:
-        await message.answer(texts["start"], reply_markup=main_menu_keyboard())
+        await message.answer(texts["start"], reply_markup=main_menu_keyboard(user.language))
 
 
 @router.message(F.text)
@@ -297,131 +494,246 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
 
     raw_text = message.text
     lower_norm = _normalize_for_match(raw_text)
-    logger.info("Incoming text: %r | normalized: %r", raw_text, lower_norm)
-
-    if raw_text == BACK or lower_norm == "назад":
-        await message.answer("Главное меню.", reply_markup=main_menu_keyboard())
-        return
-    if raw_text == "Отмена" or lower_norm == "отмена":
-        await message.answer("Главное меню.", reply_markup=main_menu_keyboard())
-        return
-    if raw_text == END_SESSION or "заверш" in lower_norm:
-        user = await chat_service.get_or_create_user(
-            telegram_user_id=tg_user.id,
-            username=tg_user.username,
-            first_name=tg_user.first_name,
-            last_name=tg_user.last_name,
-        )
-        ended = await chat_service.end_active_session(user.id)
-        if ended:
-            await message.answer("Текущая сессия завершена. Нажмите «📞 Колл-центр» для новой.", reply_markup=main_menu_keyboard())
-        else:
-            await message.answer("Нет активной сессии.", reply_markup=main_menu_keyboard())
-        return
-
     user = await chat_service.get_or_create_user(
         telegram_user_id=tg_user.id,
         username=tg_user.username,
         first_name=tg_user.first_name,
         last_name=tg_user.last_name,
     )
+    lang = normalize_lang(user.language)
+    texts = _user_language_text(lang)
+    action = menu_action_from_text(raw_text)
 
-    if raw_text == NEW_CHAT or ("колл" in lower_norm or "колл-центр" in lower_norm):
-        await chat_service.start_new_session(user.id)
+    if action in {BACK, "cancel"}:
+        await message.answer(texts["main_menu"], reply_markup=main_menu_keyboard(lang))
+        return
+
+    if action == END_SESSION or "заверш" in lower_norm:
+        ended = await chat_service.end_active_session(user.id)
+        if ended:
+            end_ok = {
+                "ru": "Текущая сессия завершена. Нажмите «📞 Колл-центр» для новой.",
+                "en": "Current session ended. Press “📞 Call center” to start a new one.",
+                "uz": "Joriy sessiya yakunlandi. Yangisini boshlash uchun “📞 Koll-markaz”ni bosing.",
+            }[lang]
+            await message.answer(end_ok, reply_markup=main_menu_keyboard(lang))
+        else:
+            no_active = {
+                "ru": "Нет активной сессии.",
+                "en": "No active session.",
+                "uz": "Faol sessiya yo‘q.",
+            }[lang]
+            await message.answer(no_active, reply_markup=main_menu_keyboard(lang))
+        return
+    alias = _display_user_alias(user.username, user.first_name, user.telegram_user_id)
+
+    switch_ref = _parse_session_switch_request(raw_text, alias)
+    if switch_ref is not None:
+        active_sessions = await chat_service.list_active_sessions(user.id, limit=20)
+        if not active_sessions:
+            no_active_sessions = {
+                "ru": "У вас нет активных сессий. Нажмите «📞 Колл-центр», чтобы начать новую.",
+                "en": "You have no active sessions. Press “📞 Call center” to start a new one.",
+                "uz": "Sizda faol sessiyalar yo‘q. Yangisini boshlash uchun “📞 Koll-markaz”ni bosing.",
+            }[lang]
+            await message.answer(no_active_sessions, reply_markup=chat_keyboard(lang))
+            return
+        target, error = _resolve_session_ref(active_sessions, switch_ref)
+        if target is None:
+            if error == "index_out_of_range":
+                text = {
+                    "ru": "Неверный номер сессии. Откройте «🗂️ Мои сессии» и выберите номер из списка.",
+                    "en": "Invalid session number. Open “🗂️ My sessions” and choose a number from the list.",
+                    "uz": "Sessiya raqami noto‘g‘ri. “🗂️ Mening sessiyalarim”ni ochib, ro‘yxatdan tanlang.",
+                }[lang]
+                await message.answer(text)
+            elif error == "ambiguous":
+                text = {
+                    "ru": "Нашлось несколько сессий с таким ID. Укажите полный ID сессии.",
+                    "en": "Several sessions match this ID. Please specify the full session ID.",
+                    "uz": "Bu ID bo‘yicha bir nechta sessiya topildi. To‘liq sessiya ID sini yuboring.",
+                }[lang]
+                await message.answer(text)
+            else:
+                text = {
+                    "ru": "Активная сессия с таким ID не найдена.",
+                    "en": "No active session found with this ID.",
+                    "uz": "Bunday ID li faol sessiya topilmadi.",
+                }[lang]
+                await message.answer(text)
+            return
+        switched = await chat_service.switch_active_session(user.id, target.id)
+        if switched is None:
+            text = {
+                "ru": "Не удалось переключить сессию. Попробуйте еще раз.",
+                "en": "Could not switch the session. Please try again.",
+                "uz": "Sessiyani almashtirib bo‘lmadi. Qayta urinib ko‘ring.",
+            }[lang]
+            await message.answer(text)
+            return
+        switched_title = switched.title or {
+            "ru": "Без названия",
+            "en": "Untitled",
+            "uz": "Nomsiz",
+        }[lang]
+        switched_prefix = {
+            "ru": "Переключил на сессию",
+            "en": "Switched to session",
+            "uz": "Sessiyaga o‘tkazildi",
+        }[lang]
+        id_label = {"ru": "ID", "en": "ID", "uz": "ID"}[lang]
         await message.answer(
-            "Подключил вас к колл-центру. Я могу:\n"
-            "• Ответить на вопросы по продуктам (кредиты, карты, отделения)\n"
-            "• Подобрать ипотеку/автокредит/микрозайм/образовательный кредит\n"
-            "• Показать отделения и реквизиты\n"
-            "• Рассчитать платеж и подготовить PDF-график\n\n"
-            "Чем могу помочь?",
-            reply_markup=chat_keyboard(),
+            f"{switched_prefix}: {switched_title}\n{id_label}: {switched.id}",
+            reply_markup=chat_keyboard(lang),
         )
         return
 
-    if raw_text == BRANCHES or "отдел" in lower_norm:
-        logger.info("Branches command matched. text=%r norm=%r", raw_text, lower_norm)
-        await message.answer("📍 Выберите регион:", reply_markup=_branch_region_keyboard())
+    if action == NEW_CHAT or lower_norm in {"новая сессия", "новый чат", "new chat", "new session"}:
+        new_session = await chat_service.start_new_session(user.id)
+        active_sessions = await chat_service.list_active_sessions(user.id, limit=50)
+        session_index = next((idx for idx, s in enumerate(active_sessions, start=1) if s.id == new_session.id), 1)
+        intro = {
+            "ru": (
+                "Подключил вас к колл-центру. Я могу:\n"
+                "• Ответить на вопросы по продуктам (кредиты, карты, отделения)\n"
+                "• Подобрать ипотеку/автокредит/микрозайм/образовательный кредит\n"
+                "• Показать отделения и реквизиты\n"
+                "• Рассчитать платеж и подготовить PDF-график\n\n"
+            ),
+            "en": (
+                "Connected you to the call center. I can:\n"
+                "• Answer questions about products (loans, cards, branches)\n"
+                "• Help choose mortgage/auto loan/microloan/education loan\n"
+                "• Show branches and bank details\n"
+                "• Calculate payments and prepare a PDF schedule\n\n"
+            ),
+            "uz": (
+                "Sizni koll-markazga uladim. Men:\n"
+                "• Mahsulotlar bo‘yicha savollarga javob bera olaman (kreditlar, kartalar, filiallar)\n"
+                "• Ipoteka/avtokredit/mikroqarz/ta'lim krediti bo‘yicha variant tanlashga yordam beraman\n"
+                "• Filiallar va rekvizitlarni ko‘rsataman\n"
+                "• To‘lovni hisoblab, PDF jadval tayyorlayman\n\n"
+            ),
+        }[lang]
+        help_q = {
+            "ru": "Чем могу помочь?",
+            "en": "How can I help?",
+            "uz": "Qanday yordam bera olaman?",
+        }[lang]
+        await message.answer(
+            (
+                intro
+                + f"{texts['id_session']}: {new_session.id}\n"
+                + f"{texts['session_code']}: {alias}-{session_index}\n\n"
+                + help_q
+            ),
+            reply_markup=chat_keyboard(lang),
+        )
         return
 
-    if raw_text == "🏙 Ташкент" or lower_norm == "ташкент":
-        logger.info("Branches tashkent matched. text=%r norm=%r", raw_text, lower_norm)
+    if action == BRANCHES:
+        await message.answer(texts["branches_choose_region"], reply_markup=_branch_region_keyboard(lang))
+        return
+
+    if action == "branch_tashkent":
         districts = await chat_service.list_districts("Ташкент")
         if not districts:
-            await message.answer("Нет данных по районам Ташкента.", reply_markup=main_menu_keyboard())
+            await message.answer(texts["no_tashkent_districts"], reply_markup=main_menu_keyboard(lang))
             return
         kb = _inline_keyboard(districts, "branches:district", row_size=2)
-        await message.answer("🏢 Отделения Ташкента. Выберите район:", reply_markup=kb)
+        await message.answer(texts["choose_tashkent_district"], reply_markup=kb)
         return
 
-    if raw_text == "🌍 Регионы" or "регион" in lower_norm:
-        logger.info("Branches regions matched. text=%r norm=%r", raw_text, lower_norm)
+    if action == "branch_regions":
         regions = await _non_tashkent_regions(chat_service)
         if not regions:
-            await message.answer("Регионов не найдено.", reply_markup=main_menu_keyboard())
+            await message.answer(texts["no_regions"], reply_markup=main_menu_keyboard(lang))
             return
         kb = _inline_keyboard(regions, "branches:region", row_size=2)
-        await message.answer("🏢 Отделения. Выберите область:", reply_markup=kb)
+        await message.answer(texts["choose_region"], reply_markup=kb)
         return
 
-    # Dynamic match: district first, then region
-    districts_all = await chat_service.list_districts()
-    regions_all_raw = await chat_service.list_regions()
-    regions_all = [_normalize_region(r) for r in regions_all_raw]
-    region_lookup = { _normalize_region(r): r for r in regions_all_raw }
-
-    if message.text in districts_all:
-        branches = await chat_service.list_branches(district=message.text)
-        if not branches:
-            await message.answer("Нет отделений в этом районе.", reply_markup=main_menu_keyboard())
-            return
-        text = _build_branches_response(f"🏢 Отделения ({message.text}):", branches)
-        await message.answer(text, reply_markup=main_menu_keyboard())
-        return
-
-    norm_region = _normalize_region(message.text)
-    if norm_region in regions_all:
-        stored_region = region_lookup.get(norm_region, norm_region)
-        branches = await chat_service.list_branches(region=stored_region)
-        if not branches:
-            await message.answer("Нет отделений в этой области.", reply_markup=main_menu_keyboard())
-            return
-        text = _build_branches_response(f"🏢 Отделения ({norm_region}):", branches)
-        await message.answer(text, reply_markup=main_menu_keyboard())
-        return
-
-    if message.text == NEAREST_BRANCH or ("ближай" in lower_norm and ("цбу" in lower_norm or "отдел" in lower_norm)):
+    if action == NEAREST_BRANCH or ("ближай" in lower_norm and ("цбу" in lower_norm or "отдел" in lower_norm)):
         await message.answer(
-            "📍 Отправьте геолокацию, чтобы найти ближайший ЦБУ.",
-            reply_markup=location_keyboard(),
+            texts["send_location_prompt"],
+            reply_markup=location_keyboard(lang),
         )
         return
 
-    if message.text == MY_SESSIONS or "сесси" in lower_norm:
-        sessions = await chat_service.list_recent_sessions(user.id, limit=5)
-        if not sessions:
-            await message.answer("Сессий пока нет.", reply_markup=main_menu_keyboard())
+    if action == MY_SESSIONS or "сесси" in lower_norm:
+        active_sessions = await chat_service.list_active_sessions(user.id, limit=10)
+        recent_sessions = await chat_service.list_recent_sessions(user.id, limit=5)
+        if not active_sessions and not recent_sessions:
+            await message.answer(texts["no_sessions"], reply_markup=chat_keyboard(lang))
             return
-        lines = ["🗂️ Последние сессии:"]
-        for s in sessions:
+        lines = []
+        if active_sessions:
+            lines.append(
+                {
+                    "ru": "🟢 Активные сессии:",
+                    "en": "🟢 Active sessions:",
+                    "uz": "🟢 Faol sessiyalar:",
+                }[lang]
+            )
+            for idx, s in enumerate(active_sessions, start=1):
+                started = s.started_at.strftime("%Y-%m-%d %H:%M") if s.started_at else "-"
+                last_activity = s.last_activity_at.strftime("%Y-%m-%d %H:%M") if s.last_activity_at else "-"
+                title = s.title or {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
+                started_label = {"ru": "▶️ Начата", "en": "▶️ Started", "uz": "▶️ Boshlangan"}[lang]
+                last_label = {"ru": "⏱ Последняя активность", "en": "⏱ Last activity", "uz": "⏱ Oxirgi faollik"}[lang]
+                lines.append(
+                    f"{idx}) {title}\n"
+                    f"  🆔 ID: {s.id}\n"
+                    f"  🏷 {texts['session_code']}: {alias}-{idx}\n"
+                    f"  {started_label}: {started}\n"
+                    f"  {last_label}: {last_activity}"
+                )
+            lines.append("")
+            lines.append(
+                {
+                    "ru": "Чтобы продолжить сессию, напишите:",
+                    "en": "To continue a session, send:",
+                    "uz": "Sessiyani davom ettirish uchun yuboring:",
+                }[lang]
+            )
+            lines.append("• " + {"ru": "сессия 1", "en": "session 1", "uz": "session 1"}[lang])
+            lines.append("• " + {"ru": "сессия <ID>", "en": "session <ID>", "uz": "session <ID>"}[lang])
+            lines.append(f"• {alias}-1")
+            lines.append("")
+
+        lines.append(
+            {
+                "ru": "🗂️ Последние сессии:",
+                "en": "🗂️ Recent sessions:",
+                "uz": "🗂️ So‘nggi sessiyalar:",
+            }[lang]
+        )
+        for s in recent_sessions:
             started = s.started_at.strftime("%Y-%m-%d %H:%M") if s.started_at else "-"
             ended = s.ended_at.strftime("%Y-%m-%d %H:%M") if s.ended_at else "-"
-            title = s.title or "Без названия"
-            status = "Активна" if s.status == "active" else "Закрыта"
+            title = s.title or {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
+            status = (
+                {"ru": "Активна", "en": "Active", "uz": "Faol"}[lang]
+                if s.status == "active"
+                else {"ru": "Закрыта", "en": "Closed", "uz": "Yopilgan"}[lang]
+            )
+            status_label = {"ru": "📌 Статус", "en": "📌 Status", "uz": "📌 Holat"}[lang]
+            started_label = {"ru": "⏱️ Начата", "en": "⏱️ Started", "uz": "⏱️ Boshlangan"}[lang]
+            ended_label = {"ru": "✅ Завершена", "en": "✅ Ended", "uz": "✅ Yakunlangan"}[lang]
             lines.append(
                 f"• {title}\n"
-                f"  📌 Статус: {status}\n"
-                f"  ⏱️ Начата: {started}\n"
-                f"  ✅ Завершена: {ended}"
+                f"  {status_label}: {status}\n"
+                f"  {started_label}: {started}\n"
+                f"  {ended_label}: {ended}"
             )
-        await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+        await _answer_safe(message, "\n".join(lines), reply_markup=chat_keyboard(lang))
         return
 
-    if message.text == CHANGE_LANGUAGE or "язык" in lower_norm:
-        await message.answer(_user_language_text(user.language)["ask_language"], reply_markup=language_keyboard())
+    if action == CHANGE_LANGUAGE or "язык" in lower_norm:
+        await message.answer(texts["ask_language"], reply_markup=language_keyboard())
         return
 
-    if message.text == CURRENCY_RATES or "курс" in lower_norm:
+    if action == CURRENCY_RATES or "курс" in lower_norm:
         rates = [
             ("💵", "USD", "12 450", "12 650"),
             ("💶", "EUR", "13 300", "13 650"),
@@ -429,44 +741,65 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
             ("🇰🇿", "KZT", "24", "30"),
             ("💷", "GBP", "15 400", "15 900"),
         ]
-        lines = ["Курс валют к суму (UZS), ориентировочно:", "", "Валюта   Покупка    Продажа"]
+        header_line = {
+            "ru": "Валюта   Покупка    Продажа",
+            "en": "Currency  Buy       Sell",
+            "uz": "Valyuta   Sotib ol. Sotish",
+        }[lang]
+        lines = [texts["rates_title"], "", header_line]
         for icon, code, buy, sell in rates:
             lines.append(f"{icon} {code:<3} {buy:>8} | {sell:<8}")
         lines.append("")
-        lines.append("Данные справочные, актуальные курсы уточняйте в отделении.")
+        lines.append(texts["rates_ref"])
 
         rates_text = "<pre>" + "\n".join(lines) + "</pre>"
-        await message.answer(rates_text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
+        await message.answer(rates_text, reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
         return
 
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     reply = await chat_service.handle_user_message(
         user=user,
         text=message.text,
         telegram_message_id=message.message_id,
     )
+    mode_markup = (
+        human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
+        if reply.session_id
+        else None
+    )
+
     if reply.text:
-        await message.answer(_format_source_reply(reply.text, "bot"), reply_markup=chat_keyboard())
+        await _answer_safe(
+            message,
+            _format_source_reply(reply.text, "bot"),
+            reply_markup=mode_markup or chat_keyboard(lang),
+        )
     if reply.pdf_path:
         await message.answer_document(
             FSInputFile(reply.pdf_path),
-            caption=_format_source_reply("График выплат", "bot"),
-            reply_markup=chat_keyboard(),
+            caption=_format_source_reply(texts["bot_pdf_caption"], "bot"),
+            reply_markup=mode_markup if mode_markup and not reply.text else chat_keyboard(lang),
         )
         try:
             os.remove(reply.pdf_path)
         except OSError:
             pass
-    if reply.session_id and not reply.human_mode:
-        await message.answer(
-            "Нужен живой оператор? Нажмите кнопку ниже.",
-            reply_markup=human_mode_keyboard(reply.session_id),
-        )
 
 
 @router.callback_query(F.data.startswith("branches:"))
 async def branches_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
     if not callback.data or callback.message is None:
         return
+    lang = normalize_lang(getattr(callback.from_user, "language_code", None))
+    if callback.from_user is not None:
+        db_user = await chat_service.get_or_create_user(
+            telegram_user_id=callback.from_user.id,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name,
+        )
+        lang = normalize_lang(db_user.language)
+    texts = _user_language_text(lang)
     parts = callback.data.split(":", 2)
     action = parts[1] if len(parts) > 1 else ""
     payload = _unsafecb(parts[2]) if len(parts) > 2 else ""
@@ -474,22 +807,22 @@ async def branches_callback(callback: CallbackQuery, chat_service: ChatService) 
     if action == "tashkent":
         districts = await chat_service.list_districts("Ташкент")
         if not districts:
-            await callback.message.answer("Нет данных по районам Ташкента.", reply_markup=main_menu_keyboard())
+            await callback.message.answer(texts["no_tashkent_districts"], reply_markup=main_menu_keyboard(lang))
             await callback.answer()
             return
         kb = _inline_keyboard(districts, "branches:district", row_size=2)
-        await callback.message.edit_text("🏢 Отделения Ташкента. Выберите район:", reply_markup=kb)
+        await callback.message.edit_text(texts["choose_tashkent_district"], reply_markup=kb)
         await callback.answer()
         return
 
     if action == "regions":
         regions = await _non_tashkent_regions(chat_service)
         if not regions:
-            await callback.message.answer("Регионов не найдено.", reply_markup=main_menu_keyboard())
+            await callback.message.answer(texts["no_regions"], reply_markup=main_menu_keyboard(lang))
             await callback.answer()
             return
         kb = _inline_keyboard(regions, "branches:region", row_size=2)
-        await callback.message.edit_text("🏢 Отделения. Выберите область:", reply_markup=kb)
+        await callback.message.edit_text(texts["choose_region"], reply_markup=kb)
         await callback.answer()
         return
 
@@ -497,11 +830,21 @@ async def branches_callback(callback: CallbackQuery, chat_service: ChatService) 
         district = payload
         branches = await chat_service.list_branches(district=district)
         if not branches:
-            await callback.message.answer("Нет отделений в этом районе.", reply_markup=main_menu_keyboard())
+            no_branches = {
+                "ru": "Нет отделений в этом районе.",
+                "en": "No branches in this district.",
+                "uz": "Bu tumanda filiallar topilmadi.",
+            }[lang]
+            await callback.message.answer(no_branches, reply_markup=main_menu_keyboard(lang))
             await callback.answer()
             return
-        text = _build_branches_response(f"🏢 Отделения ({district}):", branches)
-        await callback.message.answer(text, reply_markup=main_menu_keyboard())
+        title = {
+            "ru": f"🏢 Отделения ({district}):",
+            "en": f"🏢 Branches ({district}):",
+            "uz": f"🏢 Filiallar ({district}):",
+        }[lang]
+        text = _build_branches_response(title, branches)
+        await _answer_safe(callback.message, text, reply_markup=main_menu_keyboard(lang))
         await callback.answer()
         return
 
@@ -509,11 +852,21 @@ async def branches_callback(callback: CallbackQuery, chat_service: ChatService) 
         region = payload
         branches = await chat_service.list_branches(region=region)
         if not branches:
-            await callback.message.answer("Нет отделений в этой области.", reply_markup=main_menu_keyboard())
+            no_branches = {
+                "ru": "Нет отделений в этой области.",
+                "en": "No branches in this region.",
+                "uz": "Bu hududda filiallar topilmadi.",
+            }[lang]
+            await callback.message.answer(no_branches, reply_markup=main_menu_keyboard(lang))
             await callback.answer()
             return
-        text = _build_branches_response(f"🏢 Отделения ({region}):", branches)
-        await callback.message.answer(text, reply_markup=main_menu_keyboard())
+        title = {
+            "ru": f"🏢 Отделения ({region}):",
+            "en": f"🏢 Branches ({region}):",
+            "uz": f"🏢 Filiallar ({region}):",
+        }[lang]
+        text = _build_branches_response(title, branches)
+        await _answer_safe(callback.message, text, reply_markup=main_menu_keyboard(lang))
         await callback.answer()
         return
 
@@ -525,6 +878,9 @@ async def set_language(callback: CallbackQuery, chat_service: ChatService) -> No
     if callback.from_user is None:
         return
     _, lang_code = callback.data.split(":", 1)
+    if callback.message is None:
+        await callback.answer()
+        return
     await chat_service.get_or_create_user(
         telegram_user_id=callback.from_user.id,
         username=callback.from_user.username,
@@ -533,8 +889,8 @@ async def set_language(callback: CallbackQuery, chat_service: ChatService) -> No
         language=lang_code,
     )
     texts = _user_language_text(lang_code)
-    await callback.message.answer(texts["start"], reply_markup=main_menu_keyboard())
-    await callback.answer("Язык сохранён.")
+    await callback.message.answer(texts["start"], reply_markup=main_menu_keyboard(lang_code))
+    await callback.answer(texts["language_saved"])
 
 
 @router.callback_query(F.data.startswith("human:"))
@@ -551,11 +907,30 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
         await callback.answer("Недоступно.", show_alert=True)
         return
     if chat_session.human_mode:
-        await callback.answer("Уже подключаем оператора.")
+        await callback.answer(
+            {
+                "ru": "Уже подключаем оператора.",
+                "en": "Operator request is already in progress.",
+                "uz": "Operatorga ulash jarayoni allaqachon boshlangan.",
+            }[normalize_lang(user.language)]
+        )
         return
     await chat_service.set_human_mode(session_id, True)
-    await callback.message.answer("Переключаю на оператора. Сообщения будут отвечать сотрудники поддержки.")
-    await callback.answer("Запрос отправлен.")
+    lang = normalize_lang(user.language)
+    await callback.message.answer(
+        {
+            "ru": "Переключаю на оператора. Сообщения будут отвечать сотрудники поддержки.",
+            "en": "Switching to an operator. Support staff will reply to your messages.",
+            "uz": "Operatorga o‘tkazyapman. Xabarlarga qo‘llab-quvvatlash xodimlari javob beradi.",
+        }[lang]
+    )
+    await callback.answer(
+        {
+            "ru": "Запрос отправлен.",
+            "en": "Request sent.",
+            "uz": "So‘rov yuborildi.",
+        }[lang]
+    )
 
     settings = get_settings()
     if settings.operator_ids:
@@ -572,25 +947,70 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
                 continue
 
 
+@router.callback_query(F.data.startswith("bot:"))
+async def disable_human_mode(callback: CallbackQuery, chat_service: ChatService) -> None:
+    if callback.from_user is None:
+        return
+    _, session_id = callback.data.split(":", 1)
+    session = await chat_service.get_session_with_user(session_id)
+    if session is None:
+        await callback.answer("Сессия не найдена.", show_alert=True)
+        return
+    chat_session, user = session
+    if user.telegram_user_id != callback.from_user.id:
+        await callback.answer("Недоступно.", show_alert=True)
+        return
+    if not chat_session.human_mode:
+        await callback.answer(
+            {
+                "ru": "Сессия уже в режиме бота.",
+                "en": "The session is already in bot mode.",
+                "uz": "Sessiya allaqachon bot rejimida.",
+            }[normalize_lang(user.language)]
+        )
+        return
+    await chat_service.set_human_mode(session_id, False)
+    lang = normalize_lang(user.language)
+    await callback.message.answer(
+        {
+            "ru": "Переключил сессию в режим бота. Продолжаем.",
+            "en": "Switched the session back to bot mode. Let's continue.",
+            "uz": "Sessiya bot rejimiga qaytarildi. Davom etamiz.",
+        }[lang]
+    )
+    await callback.answer({"ru": "Готово", "en": "Done", "uz": "Tayyor"}[lang])
+
+
 @router.callback_query(F.data.startswith("fb:"))
 async def feedback(callback: CallbackQuery, chat_service: ChatService) -> None:
     if callback.from_user is None:
         return
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+    )
+    lang = normalize_lang(user.language)
     try:
         _, session_id, rating_str = callback.data.split(":")
         rating = int(rating_str)
     except Exception:
-        await callback.answer("Некорректные данные.")
+        await callback.answer(
+            {"ru": "Некорректные данные.", "en": "Invalid data.", "uz": "Noto‘g‘ri ma’lumot."}[lang]
+        )
         return
 
     ok = await chat_service.record_feedback(session_id=session_id, rating=rating)
-    texts = _user_language_text(None)
+    texts = _user_language_text(lang)
     if ok:
-        await callback.message.answer(texts["feedback_saved"])
-        await callback.answer("Спасибо!")
+        if callback.message is not None:
+            await callback.message.answer(texts["feedback_saved"])
+        await callback.answer({"ru": "Спасибо!", "en": "Thank you!", "uz": "Rahmat!"}[lang])
     else:
-        await callback.message.answer(texts["feedback_failed"])
-        await callback.answer("Ошибка.")
+        if callback.message is not None:
+            await callback.message.answer(texts["feedback_failed"])
+        await callback.answer({"ru": "Ошибка.", "en": "Error.", "uz": "Xatolik."}[lang])
 
 
 @router.message(F.location)
@@ -598,10 +1018,26 @@ async def handle_location(message: Message, chat_service: ChatService) -> None:
     loc = message.location
     if loc is None:
         return
+    lang = "ru"
+    if message.from_user is not None:
+        user = await chat_service.get_or_create_user(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+        )
+        lang = normalize_lang(user.language)
     # Naive nearest search via in-memory distance
     branches = await chat_service.list_branches()
     if not branches:
-        await message.answer("Не нашёл отделения.", reply_markup=main_menu_keyboard())
+        await message.answer(
+            {
+                "ru": "Не нашёл отделения.",
+                "en": "No branch found.",
+                "uz": "Filial topilmadi.",
+            }[lang],
+            reply_markup=main_menu_keyboard(lang),
+        )
         return
 
     import math
@@ -624,16 +1060,25 @@ async def handle_location(message: Message, chat_service: ChatService) -> None:
             nearest = {"branch": b, "dist": dist}
 
     if nearest is None:
-        await message.answer("Не нашёл отделения.", reply_markup=main_menu_keyboard())
+        await message.answer(
+            {
+                "ru": "Не нашёл отделения.",
+                "en": "No branch found.",
+                "uz": "Filial topilmadi.",
+            }[lang],
+            reply_markup=main_menu_keyboard(lang),
+        )
         return
 
     b = nearest["branch"]
     dist_km = nearest["dist"]
+    nearest_label = {"ru": "📍 Ближайший ЦБУ", "en": "📍 Nearest branch", "uz": "📍 Eng yaqin filial"}[lang]
+    distance_label = {"ru": "📏 Расстояние", "en": "📏 Distance", "uz": "📏 Masofa"}[lang]
     text = (
-        f"📍 Ближайший ЦБУ: {b.name}\n"
+        f"{nearest_label}: {b.name}\n"
         f"🏛 {b.address or '-'}\n"
-        f"📏 Расстояние: {dist_km:.1f} км\n\n"
+        f"{distance_label}: {dist_km:.1f} км\n\n"
         f"🔗 Google: https://maps.google.com/?q={b.latitude},{b.longitude}\n"
         f"🔗 Yandex: https://yandex.com/maps/?ll={b.longitude},{b.latitude}&z=16&pt={b.longitude},{b.latitude}"
     )
-    await message.answer(text, reply_markup=main_menu_keyboard())
+    await message.answer(text, reply_markup=main_menu_keyboard(lang))

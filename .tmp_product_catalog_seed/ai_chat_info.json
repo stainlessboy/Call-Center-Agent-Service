@@ -1,0 +1,17 @@
+{
+  "source_file": "/Users/user/Desktop/AI CHAT INFO.xlsx",
+  "generated_at": "2026-02-24T09:20:17.045253+00:00",
+  "format_version": 2,
+  "layout": {
+    "credit_products": {
+      "Микрозайм": "ai_chat_info/credit_microloan.json",
+      "Ипотека": "ai_chat_info/credit_mortgage.json",
+      "Автокредит": "ai_chat_info/credit_auto_loan.json",
+      "Образовательный": "ai_chat_info/credit_education.json"
+    },
+    "noncredit_products": {
+      "Вклады": "ai_chat_info/noncredit_deposits.json",
+      "Карты": "ai_chat_info/noncredit_cards.json"
+    }
+  }
+}

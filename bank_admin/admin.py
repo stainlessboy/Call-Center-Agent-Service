@@ -8,7 +8,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from app.services.telegram_sender import send_telegram_message
-from bank_admin.models import Branch, ChatSession, FaqItem, Message, User
+from bank_admin.models import (
+    Branch,
+    CardProductOffer,
+    ChatSession,
+    CreditProductOffer,
+    DepositProductOffer,
+    FaqItem,
+    Message,
+    User,
+)
 
 
 class ChatSessionAdminForm(forms.ModelForm):
@@ -158,7 +167,73 @@ class BranchAdmin(admin.ModelAdmin):
 
 @admin.register(FaqItem)
 class FaqItemAdmin(admin.ModelAdmin):
-    list_display = ("id", "question", "answer", "created_at")
-    list_display_links = ("id", "question")
-    search_fields = ("question", "answer")
+    list_display = ("id", "question_ru", "question_en", "question_uz", "created_at")
+    list_display_links = ("id", "question_ru")
+    search_fields = (
+        "question_ru",
+        "answer_ru",
+        "question_en",
+        "answer_en",
+        "question_uz",
+        "answer_uz",
+    )
     ordering = ("-id",)
+
+
+@admin.register(CreditProductOffer)
+class CreditProductOfferAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "section_name",
+        "service_name",
+        "income_type",
+        "rate_min_pct",
+        "rate_max_pct",
+        "term_min_months",
+        "term_max_months",
+        "downpayment_min_pct",
+        "downpayment_max_pct",
+        "is_active",
+    )
+    list_display_links = ("id", "service_name")
+    search_fields = ("service_name", "section_name", "rate_condition_text", "collateral_text")
+    list_filter = ("section_name", "income_type", "is_active")
+    ordering = ("section_name", "source_row_order", "rate_order")
+
+
+@admin.register(DepositProductOffer)
+class DepositProductOfferAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "service_name",
+        "currency_code",
+        "term_text",
+        "term_months",
+        "rate_pct",
+        "topup_allowed",
+        "is_active",
+    )
+    list_display_links = ("id", "service_name")
+    search_fields = ("service_name", "term_text", "payout_text", "topup_text", "notes_text")
+    list_filter = ("currency_code", "topup_allowed", "payout_monthly_available", "payout_end_available", "is_active")
+    ordering = ("service_name", "currency_code", "source_row_order")
+
+
+@admin.register(CardProductOffer)
+class CardProductOfferAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "service_name",
+        "card_network",
+        "currency_code",
+        "is_fx_card",
+        "payroll_supported",
+        "issue_fee_free",
+        "annual_fee_free",
+        "mobile_order_available",
+        "is_active",
+    )
+    list_display_links = ("id", "service_name")
+    search_fields = ("service_name", "issue_fee_text", "annual_fee_text", "issuance_time_text")
+    list_filter = ("card_network", "currency_code", "is_fx_card", "payroll_supported", "issue_fee_free", "is_active")
+    ordering = ("source_row_order", "service_name")

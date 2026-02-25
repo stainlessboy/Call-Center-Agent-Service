@@ -103,8 +103,12 @@ class Branch(models.Model):
 
 class FaqItem(models.Model):
     id = models.AutoField(primary_key=True)
-    question = models.TextField()
-    answer = models.TextField()
+    question_ru = models.TextField()
+    answer_ru = models.TextField()
+    question_en = models.TextField(blank=True, null=True)
+    answer_en = models.TextField(blank=True, null=True)
+    question_uz = models.TextField(blank=True, null=True)
+    answer_uz = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
@@ -114,4 +118,120 @@ class FaqItem(models.Model):
         verbose_name_plural = "FAQ"
 
     def __str__(self) -> str:
-        return self.question[:80]
+        return self.question_ru[:80]
+
+
+class CreditProductOffer(models.Model):
+    id = models.AutoField(primary_key=True)
+    section_name = models.CharField(max_length=128)
+    service_name = models.CharField(max_length=512)
+    min_age = models.IntegerField(blank=True, null=True)
+    min_age_text = models.CharField(max_length=128, blank=True, null=True)
+    purpose_text = models.TextField(blank=True, null=True)
+    amount_text = models.TextField(blank=True, null=True)
+    amount_min = models.BigIntegerField(blank=True, null=True)
+    amount_max = models.BigIntegerField(blank=True, null=True)
+    term_text = models.CharField(max_length=255, blank=True, null=True)
+    term_min_months = models.IntegerField(blank=True, null=True)
+    term_max_months = models.IntegerField(blank=True, null=True)
+    downpayment_text = models.CharField(max_length=255, blank=True, null=True)
+    downpayment_min_pct = models.FloatField(blank=True, null=True)
+    downpayment_max_pct = models.FloatField(blank=True, null=True)
+    income_type = models.CharField(max_length=32, blank=True, null=True)
+    rate_text = models.TextField(blank=True, null=True)
+    rate_condition_text = models.TextField(blank=True, null=True)
+    rate_min_pct = models.FloatField(blank=True, null=True)
+    rate_max_pct = models.FloatField(blank=True, null=True)
+    collateral_text = models.TextField(blank=True, null=True)
+    source_path = models.CharField(max_length=255, blank=True, null=True)
+    source_row_order = models.IntegerField()
+    rate_order = models.IntegerField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "credit_product_offers"
+        verbose_name = "Кредитный оффер"
+        verbose_name_plural = "Кредитные офферы"
+
+    def __str__(self) -> str:
+        return f"{self.section_name}: {self.service_name} [{self.income_type or 'any'}]"
+
+
+class DepositProductOffer(models.Model):
+    id = models.AutoField(primary_key=True)
+    service_name = models.CharField(max_length=512)
+    currency_code = models.CharField(max_length=8)
+    min_amount_text = models.TextField(blank=True, null=True)
+    min_amount = models.BigIntegerField(blank=True, null=True)
+    term_text = models.CharField(max_length=255, blank=True, null=True)
+    term_months = models.IntegerField(blank=True, null=True)
+    rate_text = models.CharField(max_length=128, blank=True, null=True)
+    rate_pct = models.FloatField(blank=True, null=True)
+    open_channel_text = models.TextField(blank=True, null=True)
+    payout_text = models.TextField(blank=True, null=True)
+    payout_monthly_available = models.BooleanField(blank=True, null=True)
+    payout_end_available = models.BooleanField(blank=True, null=True)
+    topup_text = models.TextField(blank=True, null=True)
+    topup_allowed = models.BooleanField(blank=True, null=True)
+    partial_withdrawal_allowed = models.BooleanField(blank=True, null=True)
+    notes_text = models.TextField(blank=True, null=True)
+    source_path = models.CharField(max_length=255, blank=True, null=True)
+    source_row_order = models.IntegerField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "deposit_product_offers"
+        verbose_name = "Оффер вклада"
+        verbose_name_plural = "Офферы вкладов"
+
+    def __str__(self) -> str:
+        return f"{self.service_name} [{self.currency_code}] {self.term_text or ''}".strip()
+
+
+class CardProductOffer(models.Model):
+    id = models.AutoField(primary_key=True)
+    service_name = models.CharField(max_length=512)
+    card_network = models.CharField(max_length=32, blank=True, null=True)
+    currency_code = models.CharField(max_length=16, blank=True, null=True)
+    is_fx_card = models.BooleanField(default=False)
+    is_debit_card = models.BooleanField(default=True)
+    payroll_supported = models.BooleanField(blank=True, null=True)
+    issue_fee_text = models.TextField(blank=True, null=True)
+    issue_fee_free = models.BooleanField(blank=True, null=True)
+    reissue_fee_text = models.TextField(blank=True, null=True)
+    transfer_fee_text = models.TextField(blank=True, null=True)
+    cashback_text = models.CharField(max_length=128, blank=True, null=True)
+    cashback_pct = models.FloatField(blank=True, null=True)
+    validity_text = models.CharField(max_length=255, blank=True, null=True)
+    validity_months = models.IntegerField(blank=True, null=True)
+    issuance_time_text = models.TextField(blank=True, null=True)
+    pin_setup_cbu_text = models.TextField(blank=True, null=True)
+    sms_setup_cbu_text = models.TextField(blank=True, null=True)
+    pin_setup_mobile_text = models.TextField(blank=True, null=True)
+    sms_setup_mobile_text = models.TextField(blank=True, null=True)
+    annual_fee_text = models.TextField(blank=True, null=True)
+    annual_fee_free = models.BooleanField(blank=True, null=True)
+    mobile_order_available = models.BooleanField(blank=True, null=True)
+    delivery_available = models.BooleanField(blank=True, null=True)
+    pickup_available = models.BooleanField(blank=True, null=True)
+    source_path = models.CharField(max_length=255, blank=True, null=True)
+    source_row_order = models.IntegerField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "card_product_offers"
+        verbose_name = "Оффер карты"
+        verbose_name_plural = "Офферы карт"
+
+    def __str__(self) -> str:
+        kind = "FX" if self.is_fx_card else "Debit"
+        return f"{self.service_name} [{kind}]"

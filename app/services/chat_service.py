@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.bot.i18n import normalize_lang, t
 from app.db.models import Branch, ChatSession, Message, SessionStatus, User
 from app.services.agent_client import AgentClient
 
@@ -81,7 +82,7 @@ class ChatService:
         result = await session.execute(
             select(ChatSession)
             .where(ChatSession.user_id == user_id, ChatSession.status == SessionStatus.ACTIVE)
-            .order_by(ChatSession.started_at.desc())
+            .order_by(ChatSession.last_activity_at.desc(), ChatSession.started_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()
@@ -106,11 +107,6 @@ class ChatService:
     async def start_new_session(self, user_id: int) -> ChatSession:
         async with self.session_factory() as session:
             async with session.begin():
-                chat_session = await self._get_active_session(session, user_id)
-                if chat_session:
-                    chat_session.status = SessionStatus.ENDED
-                    chat_session.ended_at = datetime.now(timezone.utc)
-                    chat_session.closed_reason = "manual_new"
                 chat_session = ChatSession(
                     user_id=user_id,
                     status=SessionStatus.ACTIVE,
@@ -120,6 +116,39 @@ class ChatService:
                     assigned_operator_id=None,
                 )
                 session.add(chat_session)
+            await session.commit()
+            await session.refresh(chat_session)
+            return chat_session
+
+    async def list_active_sessions(self, user_id: int, limit: int = 10) -> list[ChatSession]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ChatSession)
+                .where(ChatSession.user_id == user_id, ChatSession.status == SessionStatus.ACTIVE)
+                .order_by(ChatSession.last_activity_at.desc(), ChatSession.started_at.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    async def switch_active_session(self, user_id: int, session_id: str) -> Optional[ChatSession]:
+        session_id = (session_id or "").strip()
+        if not session_id:
+            return None
+        async with self.session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(ChatSession)
+                    .where(
+                        ChatSession.id == session_id,
+                        ChatSession.user_id == user_id,
+                        ChatSession.status == SessionStatus.ACTIVE,
+                    )
+                    .limit(1)
+                )
+                chat_session = result.scalar_one_or_none()
+                if chat_session is None:
+                    return None
+                chat_session.last_activity_at = datetime.now(timezone.utc)
             await session.commit()
             await session.refresh(chat_session)
             return chat_session
@@ -178,15 +207,25 @@ class ChatService:
         )
 
         if chat_session.human_mode:
-            # Don't call the agent; forward to operator.
+            # Route through LangGraph interrupt so operator reply can resume the graph
+            try:
+                await self.agent_client.send_message(
+                    session_id=chat_session.id,
+                    user_id=user.telegram_user_id,
+                    text=text,
+                    language=normalize_lang(user.language),
+                    human_mode=True,
+                )
+            except Exception:
+                pass
             return AgentReply(
-                text="Ваше сообщение передано оператору. Ожидайте ответа.",
+                text=t("sent_to_operator", user.language),
                 pdf_path=None,
                 session_id=chat_session.id,
                 human_mode=True,
             )
 
-        agent_reply = "Временно не могу ответить. Попробуйте позже."
+        agent_reply = t("agent_unavailable", user.language)
         latency_ms: Optional[int] = None
         try:
             started = time.perf_counter()
@@ -194,6 +233,7 @@ class ChatService:
                 session_id=chat_session.id,
                 user_id=user.telegram_user_id,
                 text=text,
+                language=normalize_lang(user.language),
             )
             latency_ms = int((time.perf_counter() - started) * 1000)
         except Exception as exc:  # pragma: no cover - network failure path
@@ -212,6 +252,15 @@ class ChatService:
             pdf_path = match.group(1).strip()
             agent_reply = PDF_MARKER_RE.sub("", agent_reply).strip()
 
+        if agent_reply:
+            try:
+                agent_reply = await self.agent_client.ensure_language(
+                    text=agent_reply,
+                    language=normalize_lang(user.language),
+                )
+            except Exception:  # pragma: no cover - translation fallback
+                logger.exception("Agent reply language normalization failed")
+
         await self._save_message(
             session_id=chat_session.id,
             role="agent",
@@ -226,6 +275,8 @@ class ChatService:
         )
 
     async def close_inactive_sessions(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:
+        if timeout_minutes <= 0:
+            return []
         threshold = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
         closed: list[tuple[User, ChatSession]] = []
         async with self.session_factory() as session:
@@ -245,6 +296,58 @@ class ChatService:
                     chat_session.closed_reason = "timeout"
                     closed.append((user, chat_session))
         return closed
+
+    async def return_stale_human_sessions_to_bot(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:
+        if timeout_minutes <= 0:
+            return []
+        threshold = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
+        switched: list[tuple[User, ChatSession]] = []
+        sync_targets: list[tuple[str, datetime]] = []
+        async with self.session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(ChatSession, User)
+                    .join(User, ChatSession.user_id == User.id)
+                    .where(
+                        ChatSession.status == SessionStatus.ACTIVE,
+                        ChatSession.human_mode.is_(True),
+                        ChatSession.human_mode_since.is_not(None),
+                        ChatSession.human_mode_since <= threshold,
+                    )
+                )
+                rows = result.all()
+                for chat_session, user in rows:
+                    since = chat_session.human_mode_since
+                    if since is None:
+                        continue
+                    operator_msg_exists = await session.execute(
+                        select(Message.id)
+                        .where(
+                            Message.session_id == chat_session.id,
+                            Message.role == "operator",
+                            Message.created_at >= since,
+                        )
+                        .limit(1)
+                    )
+                    if operator_msg_exists.scalar_one_or_none() is not None:
+                        continue
+                    chat_session.human_mode = False
+                    chat_session.human_mode_since = None
+                    chat_session.assigned_operator_id = None
+                    chat_session.last_activity_at = datetime.now(timezone.utc)
+                    switched.append((user, chat_session))
+                    sync_targets.append((chat_session.id, since))
+                    session.add(
+                        Message(
+                            session_id=chat_session.id,
+                            role="system",
+                            text="Возврат в режим бота: оператор не ответил в течение заданного времени.",
+                            error_code="human_mode_timeout",
+                        )
+                    )
+        for sync_session_id, since in sync_targets:
+            await self.sync_human_mode_history_to_agent(session_id=sync_session_id, since=since)
+        return switched
 
     async def record_feedback(self, session_id: str, rating: int, comment: Optional[str] = None) -> bool:
         async with self.session_factory() as session:
@@ -295,6 +398,7 @@ class ChatService:
         enabled: bool,
         assigned_operator_id: Optional[int] = None,
     ) -> Optional[ChatSession]:
+        sync_since: Optional[datetime] = None
         async with self.session_factory() as session:
             async with session.begin():
                 result = await session.execute(
@@ -303,6 +407,8 @@ class ChatService:
                 chat_session = result.scalar_one_or_none()
                 if chat_session is None:
                     return None
+                if not enabled and chat_session.human_mode and chat_session.human_mode_since is not None:
+                    sync_since = chat_session.human_mode_since
                 chat_session.human_mode = enabled
                 chat_session.human_mode_since = datetime.now(timezone.utc) if enabled else None
                 if assigned_operator_id is not None:
@@ -310,7 +416,46 @@ class ChatService:
                 elif not enabled:
                     chat_session.assigned_operator_id = None
                 chat_session.last_activity_at = datetime.now(timezone.utc)
+        if not enabled and sync_since is not None:
+            await self.sync_human_mode_history_to_agent(session_id=session_id, since=sync_since)
         return chat_session
+
+    async def sync_human_mode_history_to_agent(self, session_id: str, since: Optional[datetime]) -> int:
+        if since is None:
+            return 0
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(Message.role, Message.text)
+                .where(
+                    Message.session_id == session_id,
+                    Message.created_at >= since,
+                    Message.role.in_(("user", "operator")),
+                )
+                .order_by(Message.created_at.asc(), Message.id.asc())
+            )
+            rows = result.all()
+
+        events: list[dict[str, str]] = []
+        for role, text in rows:
+            payload = (text or "").strip()
+            if not payload:
+                continue
+            if role == "user":
+                events.append({"role": "user", "text": payload})
+            elif role == "operator":
+                # Operator responses are injected as assistant replies,
+                # so the bot can continue from the same conversation context.
+                events.append({"role": "assistant", "text": payload})
+
+        if not events:
+            return 0
+
+        try:
+            await self.agent_client.sync_history(session_id=session_id, events=events)
+        except Exception as exc:
+            logger.exception("Failed to sync human-mode history to agent for session=%s: %s", session_id, exc)
+            return 0
+        return len(events)
 
     async def get_session_with_user(self, session_id: str) -> Optional[tuple[ChatSession, User]]:
         async with self.session_factory() as session:
@@ -373,6 +518,11 @@ class ChatService:
                 )
                 session.add(message)
             await session.commit()
+            # After saving operator message, try to resume the LangGraph session
+            try:
+                await self.agent_client.resume_human_mode(str(chat_session.id), text)
+            except Exception:
+                pass
             return user.telegram_user_id
 
     async def list_regions(self) -> list[str]:
