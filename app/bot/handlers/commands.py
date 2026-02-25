@@ -1054,7 +1054,7 @@ async def session_callback(callback: CallbackQuery, chat_service: ChatService) -
             "uz": f"✅ Sessiya «{title[:45]}» faol.\n\n📜 *Oxirgi xabarlar:*",
         }[lang]
 
-        recent = await chat_service.get_recent_messages(switched.id, limit=6)
+        recent = await chat_service.get_recent_messages(switched.id, limit=10)
         if recent:
             lines = []
             for m in recent:

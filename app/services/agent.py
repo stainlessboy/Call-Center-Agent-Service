@@ -698,7 +698,9 @@ _CONVERSATIONAL_FOLLOWUP_RE = re.compile(
     r"и\s+что\s+(потом|дальше)|"
     r"а\s+потом\s+что|потом\s+что|"
     r"что\s+дальше|а\s+дальше|"
-    r"и\s+всё\s+на\s+этом|"
+    r"и\s+(всё?|все)\s*(на\s+этом|это\s+всё?)?[\?!]?$|"
+    r"это\s+всё?[\?!]?$|"
+    r"всё[\?!]?$|"
     r"ладно\s+а|ок\s+а)",
     re.IGNORECASE,
 )
@@ -1337,6 +1339,12 @@ def node_faq(state: BotState) -> BotState:
         elif _is_deposit_intent(user_text) and _is_catalog_style_question(user_text):
             # Tool 3: show deposit/card products from DB
             answer = _noncredit_catalog_overview() or FAQ_FALLBACK_REPLY
+        elif _is_conversational_followup(user_text):
+            # Short follow-up like "и все?", "а потом что?", "это всё?" — answer with context
+            prev_user, prev_ai = _find_last_human_and_ai(prev_messages)
+            answer = _llm_contextual_reply(user_text, prev_user, prev_ai, lang)
+            if not answer:
+                answer = "Да, это всё. Если нужна дополнительная информация — напишите."
         else:
             # Tool 1: FAQ DB lookup
             answer = _faq_lookup(user_text, lang)

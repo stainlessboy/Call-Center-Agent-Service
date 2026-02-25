@@ -458,15 +458,15 @@ class ChatService:
         return len(events)
 
     async def get_recent_messages(
-        self, session_id: str, limit: int = 6
+        self, session_id: str, limit: int = 10
     ) -> list[Message]:
-        """Return the last `limit` user/assistant messages from a session, oldest first."""
+        """Return the last `limit` user/agent messages from a session, oldest first."""
         async with self.session_factory() as session:
             result = await session.execute(
                 select(Message)
                 .where(
                     Message.session_id == session_id,
-                    Message.role.in_(("user", "assistant")),
+                    Message.role.in_(("user", "agent")),
                 )
                 .order_by(Message.created_at.desc(), Message.id.desc())
                 .limit(limit)
