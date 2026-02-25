@@ -1048,12 +1048,43 @@ async def session_callback(callback: CallbackQuery, chat_service: ChatService) -
             return
         no_title = {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
         title = switched.title or no_title
-        msg = {
-            "ru": f"✅ Сессия «{title[:45]}» активна.\nПродолжайте — вся история сохранена.",
-            "en": f"✅ Session «{title[:45]}» is active.\nContinue — full history is saved.",
-            "uz": f"✅ Sessiya «{title[:45]}» faol.\nDavom eting — barcha tarix saqlangan.",
+        header = {
+            "ru": f"✅ Сессия «{title[:45]}» активна.\n\n📜 *Последние сообщения:*",
+            "en": f"✅ Session «{title[:45]}» is active.\n\n📜 *Recent messages:*",
+            "uz": f"✅ Sessiya «{title[:45]}» faol.\n\n📜 *Oxirgi xabarlar:*",
         }[lang]
-        await callback.message.answer(msg, reply_markup=chat_keyboard(lang))
+
+        recent = await chat_service.get_recent_messages(switched.id, limit=6)
+        if recent:
+            lines = []
+            for m in recent:
+                if m.role == "user":
+                    prefix = "👤"
+                else:
+                    prefix = "🤖"
+                # Trim long messages
+                text = (m.text or "").strip()
+                if len(text) > 300:
+                    text = text[:297] + "…"
+                lines.append(f"{prefix} {text}")
+            history_block = "\n\n".join(lines)
+            full_msg = f"{header}\n\n{history_block}"
+        else:
+            full_msg = {
+                "ru": f"✅ Сессия «{title[:45]}» активна. Продолжайте — вся история сохранена.",
+                "en": f"✅ Session «{title[:45]}» is active. Continue — full history is saved.",
+                "uz": f"✅ Sessiya «{title[:45]}» faol. Davom eting — barcha tarix saqlangan.",
+            }[lang]
+
+        # Send in chunks if needed
+        for chunk_start in range(0, max(len(full_msg), 1), TELEGRAM_SAFE_CHUNK):
+            chunk = full_msg[chunk_start : chunk_start + TELEGRAM_SAFE_CHUNK]
+            is_last = (chunk_start + TELEGRAM_SAFE_CHUNK) >= len(full_msg)
+            await callback.message.answer(
+                chunk,
+                reply_markup=chat_keyboard(lang) if is_last else None,
+                parse_mode="Markdown",
+            )
         await callback.answer()
         return
 

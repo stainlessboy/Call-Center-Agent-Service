@@ -457,6 +457,23 @@ class ChatService:
             return 0
         return len(events)
 
+    async def get_recent_messages(
+        self, session_id: str, limit: int = 6
+    ) -> list[Message]:
+        """Return the last `limit` user/assistant messages from a session, oldest first."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(Message)
+                .where(
+                    Message.session_id == session_id,
+                    Message.role.in_(("user", "assistant")),
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+        return list(reversed(rows))
+
     async def get_session_with_user(self, session_id: str) -> Optional[tuple[ChatSession, User]]:
         async with self.session_factory() as session:
             result = await session.execute(
