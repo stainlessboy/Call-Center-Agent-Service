@@ -81,7 +81,7 @@ def get_settings() -> Settings:
         langgraph_ttl_store_path=(os.getenv("LANGGRAPH_TTL_STORE_PATH") or ".langgraph_ttl.sqlite3").strip(),
         session_inactivity_timeout_minutes=_parse_positive_int(
             os.getenv("SESSION_INACTIVITY_TIMEOUT_MINUTES"),
-            default=60,
+            default=1440,  # 24 hours
         ),
         human_mode_operator_timeout_minutes=_parse_positive_int(
             os.getenv("HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES"),
