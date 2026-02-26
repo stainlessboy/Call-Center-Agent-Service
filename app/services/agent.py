@@ -573,8 +573,8 @@ def _classify_new_intent(text: str) -> Intent:
 # ---------------------------------------------------------------------------
 
 _FINANCE_SYSTEM_PROMPT = (
-    "Ты консультант банка. Отвечай кратко и по делу только на финансовые и банковские вопросы. "
-    "Не раскрывай, что ты ИИ. Если вопрос не связан с финансами или банком — вежливо откажи."
+    "Ты консультант банка. Отвечай кратко и по делу на любые вопросы пользователя. "
+    "Не раскрывай, что ты ИИ. Веди себя как живой консультант."
 )
 
 
@@ -1408,12 +1408,10 @@ class Agent:
                 msgs.append(HumanMessage(content=text))
             elif role in {"assistant", "agent", "operator", "bot", "ai"}:
                 msgs.append(AIMessage(content=text))
-        updater = getattr(self._graph, "update_state", None)
-        if callable(updater):
-            try:
-                updater(config, {"messages": msgs})
-            except Exception:
-                pass
+        try:
+            await self._graph.aupdate_state(config, {"messages": msgs})
+        except Exception:
+            pass
 
     def close(self) -> None:
         return None
