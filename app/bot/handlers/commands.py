@@ -80,11 +80,15 @@ def _inline_keyboard(labels: list[str], prefix: str, row_size: int = 2) -> Inlin
 
 
 def _flow_keyboard(options: list[str], row_size: int = 2) -> InlineKeyboardMarkup:
-    """Build an inline keyboard for flow answer buttons (prefix: flow:)."""
+    """Build an inline keyboard for flow answer buttons (prefix: flow:).
+
+    Uses numeric index as callback_data to stay within Telegram's 64-byte limit.
+    The button text is recovered in flow_answer_callback via reply_markup lookup.
+    """
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
-    for label in options:
-        row.append(InlineKeyboardButton(text=label, callback_data=f"flow:{_safe_cb(label)}"))
+    for i, label in enumerate(options):
+        row.append(InlineKeyboardButton(text=label, callback_data=f"flow:{i}"))
         if len(row) >= row_size:
             rows.append(row)
             row = []
@@ -670,27 +674,9 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
     if action == NEW_CHAT or lower_norm in {"новая сессия", "новый чат", "new chat", "new session"}:
         await chat_service.start_new_session(user.id)
         msg = {
-            "ru": (
-                "Новая сессия начата. Чем могу помочь?\n\n"
-                "• Кредит — ипотека, автокредит, микрозайм, образовательный\n"
-                "• Вклад — накопление или ежемесячный доход\n"
-                "• Карта — дебетовая или валютная\n"
-                "• Вопрос — условия, документы, отделения"
-            ),
-            "en": (
-                "New session started. How can I help?\n\n"
-                "• Loan — mortgage, auto, microloan, education\n"
-                "• Deposit — savings or monthly income\n"
-                "• Card — debit or FX\n"
-                "• Question — terms, documents, branches"
-            ),
-            "uz": (
-                "Yangi sessiya boshlandi. Qanday yordam bera olaman?\n\n"
-                "• Kredit — ipoteka, avtokredit, mikroqarz, ta’lim\n"
-                "• Omonat — jamg’arma yoki oylik daromad\n"
-                "• Karta — debet yoki valyuta\n"
-                "• Savol — shartlar, hujjatlar, filiallar"
-            ),
+            "ru": "Привет! Чем могу помочь?",
+            "en": "Hi! How can I help?",
+            "uz": "Salom! Qanday yordam bera olaman?",
         }[lang]
         await message.answer(msg, reply_markup=chat_keyboard(lang))
         return
@@ -818,8 +804,16 @@ async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatServic
         await callback.answer()
         return
 
-    # The button value is the label text (e.g., "🏠 Ипотека", "✅ Да")
-    value = _unsafecb(callback.data[len("flow:"):])
+    # Resolve button index → actual label text from message reply_markup
+    raw = callback.data[len("flow:"):]
+    value = raw  # fallback (in case markup is unavailable)
+    if callback.message and callback.message.reply_markup:
+        for btn_row in callback.message.reply_markup.inline_keyboard:
+            for btn in btn_row:
+                if btn.callback_data == callback.data:
+                    value = btn.text
+                    break
+    value = _unsafecb(value)
     tg_user = callback.from_user
     user = await chat_service.get_or_create_user(
         telegram_user_id=tg_user.id,

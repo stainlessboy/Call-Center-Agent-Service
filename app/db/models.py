@@ -213,6 +213,23 @@ class DepositProductOffer(Base):
     )
 
 
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
+    telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    product_category: Mapped[Optional[str]] = mapped_column(String(64))
+    product_name: Mapped[Optional[str]] = mapped_column(String(512))
+    amount: Mapped[Optional[int]] = mapped_column(BigInteger)
+    term_months: Mapped[Optional[int]] = mapped_column(Integer)
+    rate_pct: Mapped[Optional[float]] = mapped_column(Float)
+    contact_name: Mapped[Optional[str]] = mapped_column(String(255))
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), server_default="new", default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CardProductOffer(Base):
     __tablename__ = "card_product_offers"
     __table_args__ = (
