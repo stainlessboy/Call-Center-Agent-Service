@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bot.i18n import normalize_lang, t
 from app.db.models import Branch, ChatSession, Message, SessionStatus, User
 from app.services.agent_client import AgentClient
+from app.services.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
 
 logger = logging.getLogger(__name__)
 PDF_MARKER_RE = re.compile(r"\[\[PDF:(.+?)\]\]")
@@ -24,6 +25,7 @@ class AgentReply:
     pdf_path: Optional[str] = None
     session_id: Optional[str] = None
     human_mode: bool = False
+    keyboard_options: Optional[list] = None
 
 
 class ChatService:
@@ -225,16 +227,20 @@ class ChatService:
                 human_mode=True,
             )
 
-        agent_reply = t("agent_unavailable", user.language)
+        _unavailable_text = t("agent_unavailable", user.language)
+        agent_text = _unavailable_text
+        agent_keyboard: Optional[list] = None
         latency_ms: Optional[int] = None
         try:
             started = time.perf_counter()
-            agent_reply = await self.agent_client.send_message(
+            turn_result = await self.agent_client.send_message(
                 session_id=chat_session.id,
                 user_id=user.telegram_user_id,
                 text=text,
                 language=normalize_lang(user.language),
             )
+            agent_text = turn_result.text
+            agent_keyboard = turn_result.keyboard_options
             latency_ms = int((time.perf_counter() - started) * 1000)
         except Exception as exc:  # pragma: no cover - network failure path
             logger.exception("Agent request failed: %s", exc)
@@ -244,18 +250,18 @@ class ChatService:
                 text="Агент временно недоступен",
                 error_code="agent_unavailable",
             )
-            return AgentReply(text=agent_reply)
+            return AgentReply(text=agent_text)
 
         pdf_path: Optional[str] = None
-        match = PDF_MARKER_RE.search(agent_reply)
+        match = PDF_MARKER_RE.search(agent_text)
         if match:
             pdf_path = match.group(1).strip()
-            agent_reply = PDF_MARKER_RE.sub("", agent_reply).strip()
+            agent_text = PDF_MARKER_RE.sub("", agent_text).strip()
 
-        if agent_reply:
+        if agent_text:
             try:
-                agent_reply = await self.agent_client.ensure_language(
-                    text=agent_reply,
+                agent_text = await self.agent_client.ensure_language(
+                    text=agent_text,
                     language=normalize_lang(user.language),
                 )
             except Exception:  # pragma: no cover - translation fallback
@@ -264,14 +270,15 @@ class ChatService:
         await self._save_message(
             session_id=chat_session.id,
             role="agent",
-            text=agent_reply,
+            text=agent_text,
             latency_ms=latency_ms,
         )
         return AgentReply(
-            text=agent_reply,
+            text=agent_text,
             pdf_path=pdf_path,
             session_id=chat_session.id,
             human_mode=chat_session.human_mode,
+            keyboard_options=agent_keyboard,
         )
 
     async def close_inactive_sessions(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:

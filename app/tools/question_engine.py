@@ -492,3 +492,256 @@ def is_all_noncredit_required_answered(slots: dict[str, Any], service_type: str)
     """Check if all required non-credit questions are answered."""
     key, _ = get_next_noncredit_question(slots, service_type)
     return key is None
+
+
+# ---------------------------------------------------------------------------
+# Multilingual button labels for inline keyboards
+# ---------------------------------------------------------------------------
+
+QUESTION_BUTTON_LABELS: dict[str, dict[str, dict[str, str]]] = {
+    "credit_category": {
+        "mortgage":         {"ru": "🏠 Ипотека",         "en": "🏠 Mortgage",       "uz": "🏠 Ipoteka"},
+        "autoloan":         {"ru": "🚗 Автокредит",      "en": "🚗 Auto loan",      "uz": "🚗 Avtokredit"},
+        "microloan":        {"ru": "💰 Микрозайм",       "en": "💰 Microloan",      "uz": "💰 Mikroqarz"},
+        "education_credit": {"ru": "🎓 Образовательный", "en": "🎓 Education loan", "uz": "🎓 Ta'lim krediti"},
+    },
+    "citizen_uz": {
+        "yes": {"ru": "✅ Да",  "en": "✅ Yes", "uz": "✅ Ha"},
+        "no":  {"ru": "❌ Нет", "en": "❌ No",  "uz": "❌ Yo'q"},
+    },
+    "gender": {
+        "male":   {"ru": "👨 Мужской", "en": "👨 Male",   "uz": "👨 Erkak"},
+        "female": {"ru": "👩 Женский", "en": "👩 Female", "uz": "👩 Ayol"},
+    },
+    "income_proof": {
+        "yes": {"ru": "✅ Есть доход",  "en": "✅ Have income", "uz": "✅ Daromad bor"},
+        "no":  {"ru": "❌ Нет дохода", "en": "❌ No income",   "uz": "❌ Daromad yo'q"},
+    },
+    "self_employed": {
+        "yes": {"ru": "✅ Да, самозанятый", "en": "✅ Yes, self-employed", "uz": "✅ Ha, o'z-o'zini ish"},
+        "no":  {"ru": "❌ Нет",            "en": "❌ No",                 "uz": "❌ Yo'q"},
+    },
+    "payroll_participant": {
+        "yes": {"ru": "✅ Да", "en": "✅ Yes", "uz": "✅ Ha"},
+        "no":  {"ru": "❌ Нет", "en": "❌ No", "uz": "❌ Yo'q"},
+    },
+    "purpose_keys": {
+        "housing_primary":   {"ru": "🏗 Новостройка",     "en": "🏗 New building",   "uz": "🏗 Yangi qurilish"},
+        "housing_secondary": {"ru": "🏘 Вторичный рынок", "en": "🏘 Secondary",      "uz": "🏘 Ikkilamchi bozor"},
+        "personal_any":      {"ru": "🧑 Личные цели",     "en": "🧑 Personal",       "uz": "🧑 Shaxsiy"},
+        "business_start":    {"ru": "🚀 Открыть бизнес",  "en": "🚀 Start business", "uz": "🚀 Biznes ochish"},
+        "business_support":  {"ru": "📈 Развить бизнес",  "en": "📈 Grow business",  "uz": "📈 Biznesni rivojlantirish"},
+    },
+    "mortgage_program": {
+        "bi_group": {"ru": "BI Group",   "en": "BI Group",   "uz": "BI Group"},
+        "nrg_2_4":  {"ru": "NRG 2-4%",  "en": "NRG 2-4%",  "uz": "NRG 2-4%"},
+        "daho":     {"ru": "DAFO",       "en": "DAFO",       "uz": "DAFO"},
+        "standard": {"ru": "Стандарт",  "en": "Standard",   "uz": "Standart"},
+        "none":     {"ru": "Не знаю",   "en": "Don't know", "uz": "Bilmayman"},
+    },
+    "region_code": {
+        "tashkent": {"ru": "🏙 Ташкент", "en": "🏙 Tashkent", "uz": "🏙 Toshkent"},
+        "regions":  {"ru": "🌍 Регионы", "en": "🌍 Regions",  "uz": "🌍 Hududlar"},
+    },
+    "purpose_segment": {
+        "consumer": {"ru": "🧑 Личные цели", "en": "🧑 Personal",  "uz": "🧑 Shaxsiy"},
+        "business": {"ru": "🏢 Бизнес",      "en": "🏢 Business",  "uz": "🏢 Biznes"},
+    },
+    "study_level": {
+        "bachelor":   {"ru": "🎓 Бакалавриат",     "en": "🎓 Bachelor",  "uz": "🎓 Bakalavr"},
+        "master":     {"ru": "🎓 Магистратура",    "en": "🎓 Master",    "uz": "🎓 Magistr"},
+        "vocational": {"ru": "📚 Проф. образование", "en": "📚 Vocational", "uz": "📚 Kasbiy"},
+    },
+    "institution_type": {
+        "state":   {"ru": "🏛 Государственный", "en": "🏛 State",   "uz": "🏛 Davlat"},
+        "private": {"ru": "🏫 Частный",         "en": "🏫 Private", "uz": "🏫 Xususiy"},
+    },
+    "deposit_goal": {
+        "save":   {"ru": "💰 Накопление",       "en": "💰 Save money",    "uz": "💰 Jamg'arish"},
+        "income": {"ru": "📈 Ежемесячный доход", "en": "📈 Monthly income", "uz": "📈 Oylik daromad"},
+    },
+    "deposit_currency": {
+        "UZS": {"ru": "🇺🇿 Сумы (UZS)", "en": "🇺🇿 UZS",        "uz": "🇺🇿 So'm (UZS)"},
+        "USD": {"ru": "💵 Доллары (USD)", "en": "💵 USD",         "uz": "💵 Dollar (USD)"},
+        "EUR": {"ru": "💶 Евро (EUR)",    "en": "💶 EUR",         "uz": "💶 Evro (EUR)"},
+    },
+    "deposit_topup_needed": {
+        "yes": {"ru": "✅ Да", "en": "✅ Yes", "uz": "✅ Ha"},
+        "no":  {"ru": "❌ Нет", "en": "❌ No", "uz": "❌ Yo'q"},
+    },
+    "deposit_payout_pref": {
+        "monthly": {"ru": "📅 Ежемесячно",    "en": "📅 Monthly",     "uz": "📅 Har oy"},
+        "end":     {"ru": "🏁 В конце срока", "en": "🏁 At maturity", "uz": "🏁 Muddati oxirida"},
+    },
+    "card_type": {
+        "debit": {"ru": "💳 Дебетовая (UZS)",  "en": "💳 Debit (UZS)", "uz": "💳 Debet (so'm)"},
+        "fx":    {"ru": "🌍 Валютная (за рубеж)", "en": "🌍 FX (travel)", "uz": "🌍 Valyuta (xorijga)"},
+    },
+    "card_purpose": {
+        "shopping_transfers": {"ru": "🛒 Покупки и переводы", "en": "🛒 Shopping & transfers", "uz": "🛒 Xaridlar va o'tkazmalar"},
+        "travel":             {"ru": "✈️ Поездки за рубеж",  "en": "✈️ Travel abroad",         "uz": "✈️ Xorijga sayohat"},
+    },
+    "card_network": {
+        "visa":       {"ru": "Visa",       "en": "Visa",       "uz": "Visa"},
+        "mastercard": {"ru": "Mastercard", "en": "Mastercard", "uz": "Mastercard"},
+    },
+    "card_currency": {
+        "USD": {"ru": "💵 Доллары (USD)", "en": "💵 USD", "uz": "💵 Dollar"},
+        "EUR": {"ru": "💶 Евро (EUR)",    "en": "💶 EUR", "uz": "💶 Evro"},
+    },
+}
+
+
+def get_question_buttons(question_key: str, language: str = "ru") -> Optional[list[str]]:
+    """
+    Returns a list of button labels for a question with known discrete options.
+    Returns None for free-form questions (age, amounts, terms).
+    """
+    labels_map = QUESTION_BUTTON_LABELS.get(question_key)
+    if not labels_map:
+        return None
+    result = []
+    for val_labels in labels_map.values():
+        label = val_labels.get(language) or val_labels.get("ru") or next(iter(val_labels.values()), "")
+        if label:
+            result.append(label)
+    return result or None
+
+
+# ---------------------------------------------------------------------------
+# Multilingual question texts
+# ---------------------------------------------------------------------------
+
+_QUESTION_TEXT: dict[str, dict[str, str]] = {
+    "credit_category": {
+        "ru": "Какой тип кредита вас интересует — ипотека, автокредит, микрозайм или образовательный кредит?",
+        "en": "What type of loan are you interested in — mortgage, auto loan, microloan, or education loan?",
+        "uz": "Qaysi turdagi kredit qiziqtiradi — ipoteka, avtokredit, mikroqarz yoki ta'lim krediti?",
+    },
+    "citizen_uz": {
+        "ru": "Вы являетесь гражданином Республики Узбекистан?",
+        "en": "Are you a citizen of the Republic of Uzbekistan?",
+        "uz": "Siz O'zbekiston Respublikasi fuqarosimisiz?",
+    },
+    "age": {
+        "ru": "Сколько вам полных лет?",
+        "en": "What is your age?",
+        "uz": "Yoshingiz nechi?",
+    },
+    "gender": {
+        "ru": "Ваш пол по паспорту — мужской или женский?",
+        "en": "Your gender by passport — male or female?",
+        "uz": "Pasportdagi jinsingiz — erkak yoki ayol?",
+    },
+    "income_proof": {
+        "ru": "Есть ли у вас официально подтверждённый доход (справка о зарплате, налоговая декларация)?",
+        "en": "Do you have officially confirmed income (salary certificate, tax return)?",
+        "uz": "Rasmiy tasdiqlangan daromadingiz bormi (ish haqi ma'lumotnomasi, soliq deklaratsiyasi)?",
+    },
+    "self_employed": {
+        "ru": "Вы зарегистрированы как самозанятый (ИП или самозанятый)?",
+        "en": "Are you registered as self-employed or as an individual entrepreneur?",
+        "uz": "Siz mustaqil ishchi (IP yoki o'z-o'zini bandlik) sifatida ro'yxatdan o'tganmisiz?",
+    },
+    "requested_amount": {
+        "ru": "Какую сумму кредита вы планируете взять (в сумах)?",
+        "en": "What loan amount are you planning to take (in UZS)?",
+        "uz": "Qancha miqdorda kredit olmoqchisiz (so'mda)?",
+    },
+    "requested_term_months": {
+        "ru": "На какой срок планируете взять кредит? Укажите в годах или месяцах.",
+        "en": "For how long do you need the loan? Please specify in years or months.",
+        "uz": "Qancha muddatga kredit kerak? Yil yoki oyda ko'rsating.",
+    },
+    "downpayment_pct": {
+        "ru": "Какой первоначальный взнос вы планируете (в процентах от стоимости)?",
+        "en": "What is your planned down payment (as a percentage of the value)?",
+        "uz": "Boshlang'ich to'lov qancha bo'ladi (qiymatning foizida)?",
+    },
+    "purpose_keys": {
+        "ru": "Уточните цель:",
+        "en": "Please specify the purpose:",
+        "uz": "Maqsadni aniqlashtiring:",
+    },
+    "mortgage_program": {
+        "ru": "Какую ипотечную программу рассматриваете? (BI Group, NRG 2-4%, DAFO, стандарт или ещё не знаю)",
+        "en": "Which mortgage program are you considering? (BI Group, NRG 2-4%, DAFO, standard, or don't know yet)",
+        "uz": "Qaysi ipoteka dasturini ko'rib chiqyapsiz? (BI Group, NRG 2-4%, DAFO, standart yoki hali bilmayman)",
+    },
+    "region_code": {
+        "ru": "В каком регионе находится недвижимость — Ташкент или другой регион?",
+        "en": "In which region is the property — Tashkent or another region?",
+        "uz": "Ko'chmas mulk qaysi hududda — Toshkent yoki boshqa hudud?",
+    },
+    "purpose_segment": {
+        "ru": "Микрозайм для личных целей или для бизнеса?",
+        "en": "Is the microloan for personal purposes or for business?",
+        "uz": "Mikroqarz shaxsiy maqsadlar uchunmi yoki biznes uchun?",
+    },
+    "payroll_participant": {
+        "ru": "Вы получаете зарплату через наш банк?",
+        "en": "Do you receive your salary through our bank?",
+        "uz": "Ish haqi bizning bank orqali to'lanadimi?",
+    },
+    "study_level": {
+        "ru": "Уровень обучения — бакалавриат, магистратура или профессиональное образование?",
+        "en": "Study level — bachelor, master, or vocational?",
+        "uz": "Ta'lim darajasi — bakalavr, magistr yoki kasbiy ta'lim?",
+    },
+    "institution_type": {
+        "ru": "Государственный или частный вуз/учреждение?",
+        "en": "State or private university/institution?",
+        "uz": "Davlat yoki xususiy oliy ta'lim muassasasi?",
+    },
+    "deposit_goal": {
+        "ru": "Цель вклада — накопление средств или получение ежемесячного дохода?",
+        "en": "Deposit goal — saving money or earning monthly income?",
+        "uz": "Omonat maqsadi — jamg'arish yoki oylik daromad olish?",
+    },
+    "deposit_currency": {
+        "ru": "В какой валюте хотите открыть вклад — сумы (UZS), доллары (USD) или евро (EUR)?",
+        "en": "In which currency do you want to open a deposit — UZS, USD, or EUR?",
+        "uz": "Qaysi valyutada omonat ochmoqchisiz — so'm (UZS), dollar (USD) yoki evro (EUR)?",
+    },
+    "deposit_term_months": {
+        "ru": "На какой срок планируете вклад? Укажите в месяцах.",
+        "en": "For how long do you plan to keep the deposit? Specify in months.",
+        "uz": "Omonat qancha muddatga mo'ljallangan? Oyda ko'rsating.",
+    },
+    "deposit_topup_needed": {
+        "ru": "Нужна ли возможность пополнять вклад в течение срока?",
+        "en": "Do you need the option to top up the deposit during the term?",
+        "uz": "Muddat davomida omonatni to'ldirish imkoniyati kerakmi?",
+    },
+    "deposit_payout_pref": {
+        "ru": "Как предпочитаете получать проценты — ежемесячно или в конце срока?",
+        "en": "How do you prefer to receive interest — monthly or at the end of the term?",
+        "uz": "Foizlarni qanday olishni afzal ko'rasiz — har oy yoki muddat oxirida?",
+    },
+    "card_type": {
+        "ru": "Вам нужна обычная дебетовая карта (UZS) или валютная карта для поездок за рубеж?",
+        "en": "Do you need a regular debit card (UZS) or an FX card for travel abroad?",
+        "uz": "Oddiy debet karta (UZS) kerakmi yoki xorijga sayohat uchun valyuta kartasi?",
+    },
+    "card_purpose": {
+        "ru": "Для каких целей в основном — покупки и переводы или поездки за границу?",
+        "en": "What is the main purpose — shopping & transfers or travel abroad?",
+        "uz": "Asosiy maqsad — xaridlar va o'tkazmalar yoki xorijga sayohat?",
+    },
+    "card_network": {
+        "ru": "Какая платёжная система предпочтительнее — VISA или Mastercard?",
+        "en": "Which payment system do you prefer — Visa or Mastercard?",
+        "uz": "Qaysi to'lov tizimini afzal ko'rasiz — Visa yoki Mastercard?",
+    },
+    "card_currency": {
+        "ru": "В какой валюте карта — доллары (USD) или евро (EUR)?",
+        "en": "In which currency — dollars (USD) or euros (EUR)?",
+        "uz": "Qaysi valyutada — dollar (USD) yoki evro (EUR)?",
+    },
+}
+
+
+def get_question_text(question_key: str, language: str = "ru") -> Optional[str]:
+    """Return the localized question text for a given question key."""
+    texts = _QUESTION_TEXT.get(question_key, {})
+    return texts.get(language) or texts.get("ru") or None

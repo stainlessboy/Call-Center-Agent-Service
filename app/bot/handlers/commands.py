@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from datetime import datetime, timezone
@@ -76,6 +77,47 @@ def _inline_keyboard(labels: list[str], prefix: str, row_size: int = 2) -> Inlin
     if row:
         rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _flow_keyboard(options: list[str], row_size: int = 2) -> InlineKeyboardMarkup:
+    """Build an inline keyboard for flow answer buttons (prefix: flow:)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for label in options:
+        row.append(InlineKeyboardButton(text=label, callback_data=f"flow:{_safe_cb(label)}"))
+        if len(row) >= row_size:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _with_typing(message: Message, coro) -> Any:
+    """Run *coro* while continuously sending typing action every 4 s."""
+    stop = asyncio.Event()
+
+    async def _keep_typing() -> None:
+        while not stop.is_set():
+            try:
+                await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.shield(stop.wait()), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+
+    task = asyncio.create_task(_keep_typing())
+    try:
+        return await coro
+    finally:
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def _strip_leading_symbols(text: str) -> str:
@@ -734,28 +776,99 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await message.answer(rates_text, reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
         return
 
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    reply = await chat_service.handle_user_message(
-        user=user,
-        text=message.text,
-        telegram_message_id=message.message_id,
+    reply = await _with_typing(
+        message,
+        chat_service.handle_user_message(
+            user=user,
+            text=message.text,
+            telegram_message_id=message.message_id,
+        ),
     )
     mode_markup = (
         human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
         if reply.session_id
         else None
     )
+    # Build inline keyboard from agent-suggested options (questions / product selection)
+    flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
 
     if reply.text:
         await _answer_safe(
             message,
             _format_source_reply(reply.text, "bot"),
-            reply_markup=mode_markup or chat_keyboard(lang),
+            reply_markup=flow_markup or mode_markup or chat_keyboard(lang),
+            parse_mode="HTML",
         )
     if reply.pdf_path:
         await message.answer_document(
             FSInputFile(reply.pdf_path),
             caption=_format_source_reply(texts["bot_pdf_caption"], "bot"),
+            reply_markup=mode_markup if mode_markup and not reply.text else chat_keyboard(lang),
+        )
+        try:
+            os.remove(reply.pdf_path)
+        except OSError:
+            pass
+
+
+@router.callback_query(F.data.startswith("flow:"))
+async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
+    """Handle inline button answers for flow questions (credit/cross_sell/greeting)."""
+    if not callback.data or callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    # The button value is the label text (e.g., "🏠 Ипотека", "✅ Да")
+    value = _unsafecb(callback.data[len("flow:"):])
+    tg_user = callback.from_user
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=tg_user.id,
+        username=tg_user.username,
+        first_name=tg_user.first_name,
+        last_name=tg_user.last_name,
+    )
+    lang = normalize_lang(user.language)
+
+    # Dismiss the loading spinner and remove buttons from the previous message
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Echo user's button selection as a message (so it appears in chat history)
+    try:
+        await callback.message.answer(value)
+    except Exception:
+        pass
+
+    # Forward the selection to the agent
+    reply = await _with_typing(
+        callback.message,
+        chat_service.handle_user_message(
+            user=user,
+            text=value,
+            telegram_message_id=callback.message.message_id,
+        ),
+    )
+    mode_markup = (
+        human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
+        if reply.session_id
+        else None
+    )
+    flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
+
+    if reply.text:
+        await _answer_safe(
+            callback.message,
+            _format_source_reply(reply.text, "bot"),
+            reply_markup=flow_markup or mode_markup or chat_keyboard(lang),
+            parse_mode="HTML",
+        )
+    if reply.pdf_path:
+        await callback.message.answer_document(
+            FSInputFile(reply.pdf_path),
+            caption=_format_source_reply({"ru": "График платежей", "en": "Payment schedule", "uz": "To'lov jadvali"}.get(lang, "График платежей"), "bot"),
             reply_markup=mode_markup if mode_markup and not reply.text else chat_keyboard(lang),
         )
         try:

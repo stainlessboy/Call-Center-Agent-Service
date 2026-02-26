@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import html as _html
 import json
 import os
 import re
@@ -49,6 +50,8 @@ from app.tools.question_engine import (
     NON_CREDIT_QUESTION_BLOCKS,
     get_next_credit_question,
     get_next_noncredit_question,
+    get_question_buttons,
+    get_question_text,
     extract_slot_value,
     is_all_credit_required_answered,
     is_all_noncredit_required_answered,
@@ -85,8 +88,19 @@ class BotState(TypedDict, total=False):
     last_user_text: str
     answer: str
     dialog: Dict[str, Any]
-    human_mode: bool    # signals human operator takeover
-    _route: str         # internal routing signal
+    human_mode: bool            # signals human operator takeover
+    _route: str                 # internal routing signal
+    keyboard_options: Optional[List[str]]  # inline button labels for next question
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class AgentTurnResult:
+    """Structured result returned by Agent.send_message."""
+    text: str
+    keyboard_options: Optional[List[str]] = None
 
 
 SYSTEM_POLICY = (
@@ -368,6 +382,12 @@ _CONTEXTUAL_REPLY_SYSTEM = (
     "Отвечай коротко (1-3 предложения), по-деловому, без лишних вступлений."
 )
 
+_LANG_INSTRUCTION = {
+    "en": " Reply in English.",
+    "uz": " Javobni o'zbek tilida yoz.",
+    "ru": "",
+}
+
 
 def _llm_contextual_reply(
     user_text: str,
@@ -384,7 +404,9 @@ def _llm_contextual_reply(
     if client is None:
         return None
     model = os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL", "gpt-4o-mini")
-    messages: list[dict[str, str]] = [{"role": "system", "content": _CONTEXTUAL_REPLY_SYSTEM}]
+    lang_code = (lang or "ru").lower()[:2]
+    system = _CONTEXTUAL_REPLY_SYSTEM + _LANG_INSTRUCTION.get(lang_code, "")
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
     if prev_user:
         messages.append({"role": "user", "content": prev_user})
     messages.append({"role": "assistant", "content": prev_ai})
@@ -399,7 +421,7 @@ def _llm_contextual_reply(
         if getattr(resp, "choices", None):
             content = str(resp.choices[0].message.content or "").strip()
             if content:
-                return content
+                return _html.escape(content)
     except Exception:
         pass
     return None
@@ -582,6 +604,8 @@ def _llm_finance_answer(text: str, lang: str | None = None) -> Optional[str]:
     """Use LLM to answer general financial questions not found in FAQ DB."""
     if not _intent_llm_enabled():
         return None
+    lang_code = (lang or "ru").lower()[:2]
+    system = _FINANCE_SYSTEM_PROMPT + _LANG_INSTRUCTION.get(lang_code, "")  # noqa: F821 (defined above)
     client = _get_openai_client()
     if client is None:
         return None
@@ -592,13 +616,13 @@ def _llm_finance_answer(text: str, lang: str | None = None) -> Optional[str]:
             temperature=0.3,
             max_tokens=350,
             messages=[
-                {"role": "system", "content": _FINANCE_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": text},
             ],
         )
         if getattr(resp, "choices", None):
             content = str(resp.choices[0].message.content or "").strip()
-            return content if content else None
+            return _html.escape(content) if content else None
     except Exception:
         pass
     return None
@@ -627,7 +651,7 @@ def _credit_catalog_overview() -> str:
         sections.setdefault(sn, []).append(offer)
     lines = ["Кредитные продукты банка:\n"]
     for section, section_offers in sections.items():
-        lines.append(f"*{section}:*")
+        lines.append(f"<b>{_html.escape(section)}:</b>")
         seen: set[str] = set()
         for o in section_offers[:4]:
             name = str(o.get("service_name") or "")
@@ -645,7 +669,7 @@ def _noncredit_catalog_overview() -> str:
     cards = _load_card_product_offers_sync()
     lines: list[str] = []
     if deposits:
-        lines.append("*Вклады:*")
+        lines.append("<b>Вклады:</b>")
         seen: set[str] = set()
         for d in deposits[:5]:
             name = str(d.get("service_name") or d.get("name") or "")
@@ -654,7 +678,7 @@ def _noncredit_catalog_overview() -> str:
                 rate = str(d.get("rate_text") or "")
                 lines.append(f"  • {name}" + (f" — {rate}" if rate else ""))
     if cards:
-        lines.append("*Карты:*")
+        lines.append("<b>Карты:</b>")
         seen = set()
         for c in cards[:5]:
             name = str(c.get("service_name") or c.get("name") or "")
@@ -772,9 +796,11 @@ def _format_credit_offers_list(offers: list[dict], product_type: str) -> str:
         return "К сожалению, по вашим параметрам подходящих программ не найдено. Могу передать ваш запрос специалисту."
     title_map = {"mortgage": "Ипотека", "autoloan": "Автокредит", "microloan": "Микрозайм", "education_credit": "Образовательный кредит"}
     title = title_map.get(product_type, "Кредит")
-    lines = [f"Подобрал {len(offers)} вариант{'а' if len(offers) > 1 else ''} по {title.lower()}:"]
+    count = len(offers)
+    lines = [f"<b>Подобрал {count} вариант{'а' if count > 1 else ''} по {title.lower()}:</b>"]
     for i, offer in enumerate(offers[:3], 1):
-        parts = [f"{i}) {offer.get('service_name') or 'Программа'}"]
+        name = _html.escape(str(offer.get("service_name") or "Программа"))
+        parts = [f"{i}) <b>{name}</b>"]
         parts.append(f"ставка: {_fmt_rate_range(offer)}")
         parts.append(f"срок: {_fmt_term_range(offer)}")
         down = _fmt_downpayment_range(offer)
@@ -824,15 +850,17 @@ def _format_noncredit_offers(offers: list[dict], service_type: str) -> str:
     if not offers:
         return "Подходящих предложений не найдено. Обратитесь в филиал банка для подбора."
     if service_type == "deposit":
-        lines = [f"Вот {len(offers)} подходящих вклада:"]
+        lines = [f"<b>Вот {len(offers)} подходящих вклада:</b>"]
         for i, o in enumerate(offers[:3], 1):
-            rate = o.get("rate") or o.get("rate_text") or "ставка уточняется"
-            term = o.get("term") or o.get("term_text") or "срок уточняется"
-            lines.append(f"{i}) {o.get('name')} — ставка: {rate}, срок: {term}")
+            name = _html.escape(str(o.get("name") or "Вклад"))
+            rate = _html.escape(str(o.get("rate") or o.get("rate_text") or "ставка уточняется"))
+            term = _html.escape(str(o.get("term") or o.get("term_text") or "срок уточняется"))
+            lines.append(f"{i}) <b>{name}</b> — ставка: {rate}, срок: {term}")
     else:
-        lines = [f"Вот {len(offers)} подходящих карт:"]
+        lines = [f"<b>Вот {len(offers)} подходящих карт:</b>"]
         for i, o in enumerate(offers[:3], 1):
-            lines.append(f"{i}) {o.get('name')}")
+            name = _html.escape(str(o.get("name") or "Карта"))
+            lines.append(f"{i}) <b>{name}</b>")
     lines.append("\nЗапишитесь в ближайший филиал или свяжитесь с нашим специалистом для оформления.")
     return "\n".join(lines)
 
@@ -841,7 +869,12 @@ def _format_noncredit_offers(offers: list[dict], service_type: str) -> str:
 # _finalize_turn: shared by all node functions
 # ---------------------------------------------------------------------------
 
-def _finalize_turn(state: BotState, answer: str, new_dialog: dict) -> BotState:
+def _finalize_turn(
+    state: BotState,
+    answer: str,
+    new_dialog: dict,
+    keyboard_options: Optional[List[str]] = None,
+) -> BotState:
     """Append turn messages to history and set answer/dialog on state."""
     user_text = (state.get("last_user_text") or "").strip()
     msgs = list(state.get("messages") or [])
@@ -855,6 +888,7 @@ def _finalize_turn(state: BotState, answer: str, new_dialog: dict) -> BotState:
     state["messages"] = msgs
     state["answer"] = answer
     state["dialog"] = new_dialog
+    state["keyboard_options"] = keyboard_options
     return state
 
 
@@ -922,10 +956,30 @@ def _route_turn(state: BotState) -> str:
 # FAQ NODE
 # ---------------------------------------------------------------------------
 
-def _greeting_with_menu() -> str:
+def _greeting_with_menu(lang: str = "ru") -> str:
+    if lang == "en":
+        return (
+            "Hello! I'm your bank consultant, happy to help you find the right product.\n\n"
+            "<b>How can I help?</b>\n"
+            "• Loan — mortgage, auto loan, microloan, education\n"
+            "• Deposit — savings or monthly income\n"
+            "• Card — debit or FX\n"
+            "• Question — terms, documents, branches\n\n"
+            "Just write what you're interested in."
+        )
+    if lang == "uz":
+        return (
+            "Assalomu alaykum! Men bank maslahatchisiman, sizga mos mahsulot topishda yordam beraman.\n\n"
+            "<b>Qanday yordam bera olaman?</b>\n"
+            "• Kredit — ipoteka, avtokredit, mikroqarz, ta'lim\n"
+            "• Omonat — jamg'arish yoki oylik daromad\n"
+            "• Karta — debet yoki valyuta\n"
+            "• Savol — shartlar, hujjatlar, filiallar\n\n"
+            "Nima qiziqtirishini yozing."
+        )
     return (
         "Здравствуйте! Я консультант банка, помогу подобрать подходящий продукт.\n\n"
-        "Чем могу помочь?\n"
+        "<b>Чем могу помочь?</b>\n"
         "• Кредит — ипотека, автокредит, микрозайм, образовательный\n"
         "• Вклад — накопление или доход\n"
         "• Карта — дебетовая или валютная\n"
@@ -943,7 +997,16 @@ def node_faq(state: BotState) -> BotState:
     token = _TURN_MESSAGES.set(prev_messages)
     try:
         if _is_greeting(user_text):
-            answer = _greeting_with_menu()
+            answer = _greeting_with_menu(lang)
+            # Suggest top-level product categories as buttons
+            _greeting_buttons = get_question_buttons("credit_category", lang) or []
+            if lang == "en":
+                _greeting_buttons = ["🏠 Mortgage", "🚗 Auto loan", "💰 Microloan", "💳 Deposit", "🃏 Card", "❓ Other question"]
+            elif lang == "uz":
+                _greeting_buttons = ["🏠 Ipoteka", "🚗 Avtokredit", "💰 Mikroqarz", "💳 Omonat", "🃏 Karta", "❓ Boshqa savol"]
+            else:
+                _greeting_buttons = ["🏠 Ипотека", "🚗 Автокредит", "💰 Микрозайм", "💳 Вклад", "🃏 Карта", "❓ Другой вопрос"]
+            return _finalize_turn(state, answer, dialog, keyboard_options=_greeting_buttons)
         elif _is_thanks(user_text):
             answer = "Пожалуйста! Если понадоблюсь — пишите."
         elif _is_general_products_question(user_text):
@@ -1119,9 +1182,16 @@ def node_product_credit(state: BotState) -> BotState:
                 faq_answer = _llm_finance_answer(user_text, lang)
 
             if faq_answer:
-                # Re-show remaining batch (updated with any newly extracted slots)
+                # Answer the question, then offer to continue (don't force-show questions)
+                _credit_labels = {
+                    "mortgage": "ипотеки", "autoloan": "автокредита",
+                    "microloan": "микрозайма", "education_credit": "образовательного кредита",
+                }
+                credit_type = new_slots.get("credit_category", "кредита")
+                credit_label = _credit_labels.get(credit_type, "кредита")
                 batch = _make_batch_credit_questions(new_slots)
-                combined = f"{faq_answer}\n\n---\n{batch}" if batch else faq_answer
+                continue_prompt = f"\n\nХотите продолжить подбор {credit_label}?" if batch else ""
+                combined = f"{faq_answer}{continue_prompt}"
                 return _finalize_turn(state, combined, {**dialog, "slots": new_slots, "step": "batch_collect"})
 
         # ── Update slots ─────────────────────────────────────────────────────
@@ -1136,7 +1206,7 @@ def node_product_credit(state: BotState) -> BotState:
             answer = _format_credit_offers_list(offers, product_type)
             return _finalize_turn(state, answer, {**dialog, "slots": slots, "step": "await_selection"})
 
-        # ── Show remaining batch questions ───────────────────────────────────
+        # ── Show remaining batch questions (text input only, no inline buttons) ──
         batch = _make_batch_credit_questions(slots)
         return _finalize_turn(state, batch or next_q, {**dialog, "slots": slots, "step": "batch_collect"})
 
@@ -1166,16 +1236,22 @@ def node_cross_sell(state: BotState) -> BotState:
             if value is not None:
                 slots[step] = value
 
-        # Check for FAQ interruption
-        if _is_question_like(user_text):
+        # Check for FAQ / off-topic interruption
+        if _is_question_like(user_text) or _is_followup_like_question(user_text):
             faq_answer = _faq_lookup(user_text, lang)
+            if not faq_answer:
+                faq_answer = _contextual_faq_lookup(user_text, prev_messages, lang)
+            if not faq_answer:
+                prev_user, prev_ai = _find_last_human_and_ai(prev_messages)
+                faq_answer = _llm_contextual_reply(user_text, prev_user, prev_ai, lang)
             if not faq_answer:
                 faq_answer = _llm_finance_answer(user_text, lang)
             if faq_answer:
-                next_key, next_q = get_next_noncredit_question(slots, service_type)
-                combined = f"{faq_answer}\n\n{next_q}" if next_q else faq_answer
-                new_step = next_key if next_key else step
-                return _finalize_turn(state, combined, {**dialog, "slots": slots, "step": new_step})
+                service_label = "вклада" if service_type == "deposit" else "карты"
+                _, next_q = get_next_noncredit_question(slots, service_type)
+                continue_prompt = f"\n\nХотите продолжить подбор {service_label}?" if next_q else ""
+                combined = f"{faq_answer}{continue_prompt}"
+                return _finalize_turn(state, combined, {**dialog, "slots": slots})
 
         # Next question
         next_key, next_q = get_next_noncredit_question(slots, service_type)
@@ -1184,9 +1260,17 @@ def node_cross_sell(state: BotState) -> BotState:
             # All questions answered -> match and present
             offers = _match_noncredit_offers_from_slots(slots, service_type)
             answer = _format_noncredit_offers(offers, service_type)
-            return _finalize_turn(state, answer, _clear_flow())
+            # Build offer selection buttons
+            offer_buttons = [
+                str(o.get("name") or o.get("service_name") or f"Вариант {i}")
+                for i, o in enumerate(offers[:3], 1)
+            ] if offers else None
+            return _finalize_turn(state, answer, _clear_flow(), keyboard_options=offer_buttons)
 
-        return _finalize_turn(state, next_q, {**dialog, "slots": slots, "step": next_key})
+        # Use localized question text if available
+        localized_q = get_question_text(next_key, lang) or next_q
+        buttons = get_question_buttons(next_key, lang)
+        return _finalize_turn(state, localized_q, {**dialog, "slots": slots, "step": next_key}, keyboard_options=buttons)
 
     finally:
         _TURN_MESSAGES.reset(token)
@@ -1346,7 +1430,7 @@ class Agent:
         language: str | None = None,
         human_mode: bool = False,
         user_id: Optional[int] = None,
-    ) -> str:
+    ) -> AgentTurnResult:
         # Load user language preference from store if not provided
         if user_id and language is None:
             preferred_lang = self._get_user_preference(user_id, "language")
@@ -1363,7 +1447,9 @@ class Agent:
                 "human_mode": human_mode,
             }
             out = await self._graph.ainvoke(state_in, config=config)
-            return str(out.get("answer") or "Уточните, пожалуйста, ваш вопрос.")
+            text_out = str(out.get("answer") or "Уточните, пожалуйста, ваш вопрос.")
+            keyboard_options = out.get("keyboard_options") or None
+            return AgentTurnResult(text=text_out, keyboard_options=keyboard_options)
         finally:
             _REQUEST_LANGUAGE.reset(lang_token)
 
@@ -1374,7 +1460,7 @@ class Agent:
         text: str,
         language: str | None = None,
         human_mode: bool = False,
-    ) -> str:
+    ) -> AgentTurnResult:
         if user_id and language:
             self._save_user_preference(user_id, "language", language)
         return await self._ainvoke(session_id, text, language, human_mode=human_mode, user_id=user_id)
