@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import contextvars
-import difflib
 import json
 import os
 import re
@@ -14,9 +12,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from app.tools.data_loaders import (
     _normalize_language_code,
-    _fmt_pct,
-    _load_faq_items_sync,
-    _load_builtin_faq_alias_items,
     _load_credit_product_offers_sync,
     _load_deposit_product_offers_sync,
     _load_card_product_offers_sync,
@@ -44,14 +39,10 @@ from app.tools.credit_tools import (
     _format_exact_credit_offers_reply,
     _format_near_credit_offers_reply,
 )
-from app.tools.deposit_tools import _select_deposit_options, _pick_deposit
-from app.tools.card_tools import (
-    _select_debit_card_options,
-    _select_fx_card_options,
-    _pick_debit_card,
-    _pick_fx_card,
-)
+from app.tools.deposit_tools import _select_deposit_options
+from app.tools.card_tools import _select_debit_card_options, _select_fx_card_options
 from app.tools.faq_tools import FAQ_FALLBACK_REPLY, _faq_lookup
+from app.tools.text_utils import normalize_text as _normalize_text
 from app.tools.question_engine import (
     GENERAL_QUESTIONS,
     SERVICE_QUESTION_BLOCKS,
@@ -151,56 +142,9 @@ LLM_INTENT_SYSTEM_PROMPT = (
 )
 
 
-def _normalize_text(text: str) -> str:
-    lowered = (text or "").lower()
-    lowered = re.sub(r"[^\w\s]+", " ", lowered, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", lowered).strip()
-
-
-def _token_stem(token: str) -> str:
-    token = token.strip()
-    if len(token) <= 3:
-        return token
-    for suffix in (
-        "ами", "ями", "ого", "ому", "ему", "ыми", "ими", "иях", "ах", "ях",
-        "ов", "ев", "ей", "ой", "ый", "ий", "ая", "ое", "ые", "ую", "ам",
-        "ям", "ом", "ем", "а", "я", "у", "ю", "е", "ы", "и",
-    ):
-        if len(token) > 4 and token.endswith(suffix):
-            return token[: -len(suffix)]
-    return token
-
-
-def _token_set(text: str) -> set[str]:
-    return {t for t in (_token_stem(x) for x in _normalize_text(text).split()) if t}
-
-
 def _contains_any(text: str, tokens: Sequence[str]) -> bool:
     lower = text.lower()
     return any(t in lower for t in tokens)
-
-
-def _is_yes(text: str) -> bool:
-    lower = _normalize_text(text)
-    yes_tokens = ("да", "ага", "угу", "хочу", "да хочу", "конечно", "ок", "окей", "yes")
-    return any(token in lower for token in yes_tokens)
-
-
-def _is_no(text: str) -> bool:
-    lower = _normalize_text(text)
-    return any(token in lower for token in ("нет", "не хочу", "неа", "no"))
-
-
-def _wants_callback(text: str) -> bool:
-    return _contains_any(text, ("позвон", "свяж", "перезвон", "пусть мне позвонят", "лучше чтобы мне позвонили"))
-
-
-def _asks_details(text: str) -> bool:
-    return _contains_any(text, ("подробнее", "подробн", "условия", "можно подробнее", "расскажите подробнее"))
-
-
-def _is_thinking(text: str) -> bool:
-    return _contains_any(text, ("думаю", "пока думаю", "сомнева", "подумаю"))
 
 
 def _is_branch_question(text: str) -> bool:
@@ -323,14 +267,6 @@ def _is_mobile_app_intent(text: str) -> bool:
     return _contains_any(text, ("мобильное приложение", "приложение банка", "в приложении", "asakabank"))
 
 
-def _is_complaint(text: str) -> bool:
-    return _contains_any(text, ("не работает", "недоволен", "недовольн", "ошибка", "жалоб", "проблема"))
-
-
-def _is_active_operation_request(text: str) -> bool:
-    return _contains_any(text, ("прямо сейчас", "оформить прямо сейчас", "сделать перевод", "оформить кредит"))
-
-
 def _find_last_human_and_ai(messages: Sequence[Any]) -> tuple[Optional[str], Optional[str]]:
     last_human: Optional[str] = None
     last_ai: Optional[str] = None
@@ -346,301 +282,6 @@ def _find_last_human_and_ai(messages: Sequence[Any]) -> tuple[Optional[str], Opt
         if last_human and last_ai:
             break
     return last_human, last_ai
-
-
-def _extract_phone(text: str) -> Optional[str]:
-    digits = re.sub(r"\D", "", text)
-    if len(digits) < 9:
-        return None
-    if len(digits) > 15:
-        digits = digits[-15:]
-    return digits
-
-
-def _parse_number_with_unit(num_text: str, unit_text: str | None) -> Optional[int]:
-    try:
-        value = float(str(num_text).replace(",", "."))
-    except Exception:
-        return None
-    unit = (unit_text or "").lower()
-    if any(t in unit for t in ("млрд", "миллиард")):
-        value *= 1_000_000_000
-    elif any(t in unit for t in ("млн", "миллион")):
-        value *= 1_000_000
-    elif any(t in unit for t in ("тыс", "тысяч")):
-        value *= 1_000
-    amount = int(value)
-    return amount if amount > 0 else None
-
-
-def _extract_amount_sum(text: str) -> Optional[int]:
-    lower = text.lower().replace("\xa0", " ")
-    normalized = re.sub(r"(?<=\d)\s+(?=\d)", "", lower)
-    matches = list(
-        re.finditer(
-            r"(\d+(?:[.,]\d+)?)(?:\s*(млрд|миллиард(?:а|ов)?|млн|миллион(?:а|ов)?|тыс|тысяч[аи]?))?",
-            normalized,
-        )
-    )
-    if not matches:
-        return None
-    amounts: list[int] = []
-    for m in matches:
-        amount = _parse_number_with_unit(m.group(1), m.group(2))
-        if amount is not None:
-            amounts.append(amount)
-    if not amounts:
-        return None
-    return max(amounts)
-
-
-def _extract_amount_near_keywords(text: str, keywords: Sequence[str]) -> Optional[int]:
-    lower = text.lower().replace("\xa0", " ")
-    normalized = re.sub(r"(?<=\d)\s+(?=\d)", "", lower)
-    if not keywords:
-        return None
-    kw = "|".join(re.escape(k) for k in keywords)
-    unit_pattern = r"(?:млрд|миллиард(?:а|ов)?|млн|миллион(?:а|ов)?|тыс|тысяч[аи]?)"
-    patterns = (
-        rf"(?:{kw})[^\d]{{0,24}}(\d+(?:[.,]\d+)?)(?:\s*({unit_pattern}))?",
-        rf"(\d+(?:[.,]\d+)?)(?:\s*({unit_pattern}))?[^\d]{{0,24}}(?:{kw})",
-    )
-    for pattern in patterns:
-        m = re.search(pattern, normalized)
-        if m:
-            return _parse_number_with_unit(m.group(1), m.group(2))
-    return None
-
-
-def _extract_credit_amount_from_mixed_text(text: str) -> Optional[int]:
-    named = _extract_amount_near_keywords(text, ("сумм", "кредит", "займ", "лимит"))
-    if named is not None:
-        return named
-    lower = text.lower()
-    has_term_or_pct = "%" in lower or _contains_any(lower, ("год", "лет", "месяц", "мес", "взнос", "процент"))
-    has_money_cue = _contains_any(lower, ("млн", "миллион", "тыс", "тысяч", "сум", "стоим", "цена"))
-    if has_term_or_pct and not has_money_cue:
-        return None
-    return _extract_amount_sum(text)
-
-
-def _format_missing_fields(items: Sequence[str]) -> str:
-    return ", ".join(items)
-
-
-def _format_amount(value: Optional[int]) -> str:
-    if not value:
-        return "не указана"
-    return f"{value:,}".replace(",", " ") + " сум"
-
-
-def _extract_mortgage_purpose_hint(text: str) -> Optional[str]:
-    lower = text.lower()
-    if _contains_any(lower, ("первич", "вторич", "ремонт", "квартир", "жиль", "новострой", "дом")):
-        return text.strip()
-    return None
-
-
-def _extract_microloan_purpose_hint(text: str) -> Optional[str]:
-    lower = text.lower()
-    if _contains_any(lower, ("бизнес", "самозан", "предприним", "личн", "для себя")):
-        return text.strip()
-    return None
-
-
-def _extract_term_months(text: str) -> Optional[int]:
-    lower = text.lower()
-    nums = re.findall(r"\d+(?:[.,]\d+)?", lower)
-    if not nums:
-        return None
-    value = float(nums[0].replace(",", "."))
-    if any(t in lower for t in ("год", "года", "лет", "year")):
-        return int(value * 12)
-    if any(t in lower for t in ("мес", "месяц", "месяцев", "month")):
-        return int(value)
-    if re.search(r"\d", lower):
-        return int(value)
-    return None
-
-
-def _extract_downpayment_pct(text: str) -> Optional[int]:
-    lower = text.lower()
-    if "%" not in lower and "взнос" not in lower and "процент" not in lower:
-        return None
-    nums = re.findall(r"\d+(?:[.,]\d+)?", lower)
-    if not nums:
-        return None
-    value = float(nums[-1].replace(",", "."))
-    if value <= 0 or value > 100:
-        return None
-    return int(value)
-
-
-def _parse_card_purpose(text: str) -> Optional[str]:
-    lower = text.lower()
-    if any(t in lower for t in ("поезд", "за границ", "границу", "visa", "mastercard", "валют")):
-        return "travel"
-    if any(t in lower for t in ("перевод", "покуп", "оплат")):
-        return "shopping_transfers"
-    return None
-
-
-def _parse_deposit_goal(text: str) -> Optional[str]:
-    lower = text.lower()
-    if any(t in lower for t in ("коп", "накоп")):
-        return "save"
-    if any(t in lower for t in ("ежемесяч", "доход", "процент каждый месяц")):
-        return "income"
-    return None
-
-
-def _parse_deposit_payout_pref(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "ежемесяч" in lower:
-        return "monthly"
-    if any(t in lower for t in ("в конце", "в конце срока", "по окончан")):
-        return "end"
-    return None
-
-
-def _parse_deposit_topup_needed(text: str) -> Optional[bool]:
-    lower = text.lower()
-    if "пополн" not in lower:
-        return None
-    if any(t in lower for t in ("без пополн", "не нужно пополн", "необязательно пополн")):
-        return False
-    return True
-
-
-def _parse_app_installed_answer(text: str) -> Optional[bool]:
-    lower = text.lower()
-    if _is_yes(lower) or "есть приложение" in lower:
-        return True
-    if _is_no(lower) or "нет приложения" in lower:
-        return False
-    return None
-
-
-def _parse_transfer_channel(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "онлайн" in lower or "прилож" in lower:
-        return "online"
-    if "филиал" in lower or "отделен" in lower or "цбу" in lower:
-        return "branch"
-    return None
-
-
-def _parse_transfer_direction(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "внутри" in lower or "по стране" in lower or "внутри страны" in lower:
-        return "domestic"
-    if "за границ" in lower or "международ" in lower:
-        return "abroad"
-    return None
-
-
-def _parse_transfer_system(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "western" in lower:
-        return "Western Union"
-    if "moneygram" in lower:
-        return "MoneyGram"
-    if "корона" in lower:
-        return "Золотая Корона"
-    if "contact" in lower:
-        return "Contact"
-    return None
-
-
-def _parse_fx_system(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "master" in lower:
-        return "mastercard"
-    if "visa" in lower:
-        return "visa"
-    return None
-
-
-def _parse_auto_program_hint(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "sonet" in lower:
-        return "KIA Sonet"
-    if "onix" in lower:
-        return "Chevrolet Onix"
-    if "tracker" in lower:
-        return "Chevrolet Tracker"
-    if "damas" in lower:
-        return "Chevrolet Damas"
-    if "онлайн" in lower or "online" in lower:
-        return "Онлайн автокредит"
-    if "2.5" in lower or "2,5" in lower:
-        return "Автокредит 2.5"
-    return None
-
-
-def _parse_currency(text: str) -> Optional[str]:
-    lower = text.lower()
-    if any(t in lower for t in ("доллар", "usd", "долларах")):
-        return "usd"
-    if any(t in lower for t in ("евро", "eur")):
-        return "eur"
-    if any(t in lower for t in ("сум", "uzs")):
-        return "uzs"
-    return None
-
-
-def _parse_card_usage_type(text: str) -> Optional[str]:
-    lower = text.lower()
-    if "зарплат" in lower:
-        return "payroll"
-    if any(t in lower for t in ("лич", "для себя", "личного польз")):
-        return "personal"
-    return None
-
-
-def _parse_product_category(text: str) -> Optional[str]:
-    lower = text.lower()
-    if any(t in lower for t in ("автокредит", "авто кредит", "для машины", "машин", "машины", "kia", "onix", "tracker", "damas")):
-        return "auto_loan"
-    if any(t in lower for t in ("ипотек", "квартир", "жиль", "недвижим")):
-        return "mortgage"
-    if any(t in lower for t in ("микрозайм", "микро займ", "микрокредит")):
-        return "microloan"
-    if any(t in lower for t in ("вклад", "накоп")):
-        return "deposit"
-    if "карт" in lower:
-        if any(t in lower for t in ("валют", "visa", "mastercard", "за границ")):
-            return "fx_card"
-        return "card"
-    if "кредит" in lower:
-        return "credit"
-    if "перевод" in lower:
-        return "transfer"
-    if "прилож" in lower:
-        return "mobile_app"
-    return None
-
-
-def _greeting_reply() -> str:
-    return (
-        "Здравствуйте! Рад помочь. "
-        "Чем могу помочь — вклад, карта, кредит, переводы или вопрос по приложению?"
-    )
-
-
-def _operator_offer_reply() -> str:
-    return (
-        "Понимаю. Чтобы помочь быстрее, могу направить вас на чат с оператором — он проверит запрос и поможет оформить продукт или решить проблему. "
-        "Хотите, чтобы я подключил вас к оператору?"
-    )
-
-
-def _branch_reply_for_district(district: str) -> str:
-    district = district.strip() or "ваш район"
-    return (
-        f"Спасибо. По району «{district}» могу подсказать ближайший филиал и график работы. "
-        "Если хотите, напишите город/район точнее или воспользуйтесь кнопкой отделений в боте."
-    )
 
 
 def _is_followup_like_question(text: str) -> bool:
@@ -762,29 +403,6 @@ def _llm_contextual_reply(
     except Exception:
         pass
     return None
-
-
-def _faq_or_fallback(text: str) -> str:
-    if _is_thanks(text):
-        return "Пожалуйста. Если захотите, я помогу с вкладами, картами, кредитами, переводами или отделениями."
-    lang = _REQUEST_LANGUAGE.get()
-    faq = _faq_lookup(text, lang)
-    if faq:
-        return faq
-    if _is_branch_question(text):
-        return (
-            "Да, отделения и ЦБУ банка есть. Напишите ваш город/район, и я подскажу ближайший филиал и график работы."
-        )
-    if not _is_bank_related(text):
-        turn_messages = _TURN_MESSAGES.get()
-        if turn_messages:
-            prev_user, prev_ai = _find_last_human_and_ai(turn_messages)
-            if prev_ai:
-                llm_reply = _llm_contextual_reply(text, prev_user, prev_ai, lang)
-                if llm_reply:
-                    return llm_reply
-        return "Я отвечаю только на вопросы по продуктам и услугам банка. Сформулируйте, пожалуйста, вопрос про вклады, карты, кредиты, переводы или отделения."
-    return FAQ_FALLBACK_REPLY + f" Можно переформулировать вопрос одним предложением или уточнить в {CALL_CENTER_PHONE}."
 
 
 def _intent_llm_enabled() -> bool:
