@@ -194,6 +194,31 @@ class DepositProductOffer(models.Model):
         return f"{self.service_name} [{self.currency_code}] {self.term_text or ''}".strip()
 
 
+class Lead(models.Model):
+    id = models.AutoField(primary_key=True)
+    session_id = models.CharField(max_length=36, blank=True, null=True)
+    telegram_user_id = models.BigIntegerField(blank=True, null=True)
+    product_category = models.CharField(max_length=64, blank=True, null=True)
+    product_name = models.CharField(max_length=512, blank=True, null=True)
+    amount = models.BigIntegerField(blank=True, null=True)
+    term_months = models.IntegerField(blank=True, null=True)
+    rate_pct = models.FloatField(blank=True, null=True)
+    contact_name = models.CharField(max_length=255, blank=True, null=True)
+    contact_phone = models.CharField(max_length=64, blank=True, null=True)
+    status = models.CharField(max_length=32, blank=True, null=True)
+    created_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "leads"
+        verbose_name = "Лид"
+        verbose_name_plural = "Лиды"
+
+    def __str__(self) -> str:
+        base = self.product_name or self.product_category or "Lead"
+        return f"{base} ({self.status or 'new'})"
+
+
 class CardProductOffer(models.Model):
     id = models.AutoField(primary_key=True)
     service_name = models.CharField(max_length=512)

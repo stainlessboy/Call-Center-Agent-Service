@@ -15,6 +15,7 @@ from bank_admin.models import (
     CreditProductOffer,
     DepositProductOffer,
     FaqItem,
+    Lead,
     Message,
     User,
 )
@@ -217,6 +218,34 @@ class DepositProductOfferAdmin(admin.ModelAdmin):
     search_fields = ("service_name", "term_text", "payout_text", "topup_text", "notes_text")
     list_filter = ("currency_code", "topup_allowed", "payout_monthly_available", "payout_end_available", "is_active")
     ordering = ("service_name", "currency_code", "source_row_order")
+
+
+@admin.register(Lead)
+class LeadAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "created_at",
+        "status",
+        "product_category",
+        "product_name",
+        "amount",
+        "term_months",
+        "rate_pct",
+        "contact_name",
+        "contact_phone",
+        "telegram_user_id",
+    )
+    list_display_links = ("id", "product_name")
+    search_fields = (
+        "session_id",
+        "telegram_user_id",
+        "product_category",
+        "product_name",
+        "contact_name",
+        "contact_phone",
+    )
+    list_filter = ("status", "product_category", "created_at")
+    ordering = ("-created_at", "-id")
 
 
 @admin.register(CardProductOffer)

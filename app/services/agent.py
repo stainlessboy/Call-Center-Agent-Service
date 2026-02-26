@@ -153,6 +153,14 @@ def _is_yes(text: str) -> bool:
     return any(t in lower for t in ("да", "yes", "✅", "позвоните", "хочу", "конечно", "ок", "ok", "ага"))
 
 
+def _is_comparison_request(text: str) -> bool:
+    lower = text.lower()
+    return any(t in lower for t in (
+        "разница между", "сравни", "сравнение", "чем отличается", "чем отличаются",
+        "в чем разница", "отличие между", "что лучше",
+    ))
+
+
 def _detect_product_category(text: str) -> Optional[str]:
     """Rule-based product category detection. Returns category string or None."""
     lower = text.lower()
@@ -419,7 +427,8 @@ def _llm_finance_answer(text: str, lang: Optional[str] = None) -> Optional[str]:
         return None
     lang_code = (lang or "ru").lower()[:2]
     system = (
-        "Ты консультант банка. Отвечай кратко и по делу. Не раскрывай, что ты ИИ."
+        "Ты консультант банка. Отвечай кратко и по делу. Не раскрывай, что ты ИИ. "
+        "Не используй таблицы с символом |. Для сравнений используй маркированный список с эмодзи."
         + _LANG_INSTRUCTION.get(lang_code, "")
     )
     model = os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL", "gpt-4o-mini")
@@ -448,7 +457,8 @@ def _llm_contextual_reply(
     lang_code = (lang or "ru").lower()[:2]
     system = (
         "Ты консультант банка. Пользователь уточняет или продолжает предыдущий ответ. "
-        "Ответь по теме последнего обмена, коротко (1-3 предложения)."
+        "Ответь по теме последнего обмена, коротко (1-3 предложения). "
+        "Не используй таблицы с символом |."
         + _LANG_INSTRUCTION.get(lang_code, "")
     )
     model = os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL", "gpt-4o-mini")
@@ -597,6 +607,32 @@ def node_faq(state: BotState) -> BotState:
         first_step, first_q = calc_qs[0]
         new_dialog = {**dialog, "flow": "calc_flow", "calc_step": first_step, "calc_slots": {}}
         return _finalize_turn(state, first_q, new_dialog)
+
+    # 4.5. Comparison request — must come before product selection to avoid misrouting
+    if _is_comparison_request(user_text):
+        cmp_products: list[dict] = list(products) if flow == "show_products" else []
+        if not cmp_products:
+            # Auto-detect category from the comparison text and load products
+            detected_cmp = _detect_product_category(user_text)
+            if detected_cmp and detected_cmp != "credit_menu":
+                cmp_products = _get_products_by_category(detected_cmp)
+        cmp_prompt = user_text
+        if cmp_products:
+            prods_text = "\n".join(
+                f"• {p['name']}: ставка {p.get('rate') or '—'}, "
+                f"сумма {p.get('amount') or p.get('min_amount') or '—'}, "
+                f"срок {p.get('term') or '—'}"
+                for p in cmp_products
+            )
+            cmp_prompt = (
+                f"{user_text}\n\n"
+                f"Продукты нашего банка:\n{prods_text}\n\n"
+                "Сравни только продукты нашего банка из списка выше. Не упоминай другие банки."
+            )
+        answer = _llm_finance_answer(cmp_prompt, lang)
+        if answer:
+            keyboard = [p["name"] for p in cmp_products] if cmp_products else None
+            return _finalize_turn(state, answer, dialog, keyboard)
 
     # 5. User selected a product from list
     if flow == "show_products" and products:

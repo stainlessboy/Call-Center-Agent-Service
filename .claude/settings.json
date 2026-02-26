@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(alembic revision -m \"add lead table\" --autogenerate)",
-      "Bash(alembic upgrade head)"
+      "Bash(alembic upgrade head)",
+      "Bash(xargs ls -lh)"
     ]
   }
 }
