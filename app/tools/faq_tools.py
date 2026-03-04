@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import difflib
-from typing import Any, Optional
+from typing import Optional
 
-from app.tools.data_loaders import _load_faq_items_sync, _load_builtin_faq_alias_items
+from app.tools.data_loaders import _load_faq_items, _load_builtin_faq_alias_items
 from app.tools.text_utils import normalize_text, token_set
 
 FAQ_FALLBACK_REPLY = (
@@ -26,8 +26,8 @@ def _faq_similarity(a: str, b: str) -> float:
     return max(seq, overlap)
 
 
-def _faq_lookup(query: str, language: str | None = None) -> Optional[str]:
-    items = _load_faq_items_sync(language)
+async def _faq_lookup(query: str, language: str | None = None) -> Optional[str]:
+    items = await _load_faq_items(language)
     best_answer = None
     best_score = 0.0
     for item in items:

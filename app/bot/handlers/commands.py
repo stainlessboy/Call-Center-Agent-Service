@@ -770,11 +770,12 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
             telegram_message_id=message.message_id,
         ),
     )
-    mode_markup = (
-        human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
-        if reply.session_id
-        else None
-    )
+    if reply.human_mode and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=True, lang=lang)
+    elif reply.show_operator_button and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=False, lang=lang)
+    else:
+        mode_markup = None
     # Build inline keyboard from agent-suggested options (questions / product selection)
     flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
 
@@ -845,11 +846,12 @@ async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatServic
             telegram_message_id=callback.message.message_id,
         ),
     )
-    mode_markup = (
-        human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
-        if reply.session_id
-        else None
-    )
+    if reply.human_mode and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=True, lang=lang)
+    elif reply.show_operator_button and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=False, lang=lang)
+    else:
+        mode_markup = None
     flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
 
     if reply.text:

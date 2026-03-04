@@ -47,6 +47,9 @@ class User(Base):
         order_by="ChatSession.started_at",
     )
 
+    def __str__(self) -> str:
+        return self.username or str(self.telegram_user_id)
+
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -75,6 +78,9 @@ class ChatSession(Base):
         cascade="all, delete-orphan",
         order_by="Message.created_at",
     )
+
+    def __str__(self) -> str:
+        return f"{self.id} ({self.status})"
 
 
 class Message(Base):

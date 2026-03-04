@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -10,6 +10,8 @@ from sqlalchemy import select
 
 from app.db.models import CardProductOffer, CreditProductOffer, DepositProductOffer, FaqItem
 from app.db.session import get_session
+
+logger = logging.getLogger(__name__)
 
 
 def _fmt_pct(value: Any) -> str | None:
@@ -54,6 +56,7 @@ async def _load_faq_items(language: str | None = None) -> list[dict[str, str]]:
             )
             rows = result.all()
     except Exception:
+        logger.exception("Failed to load FAQ items from DB")
         return []
     items: list[dict[str, str]] = []
     for q_ru, a_ru, q_en, a_en, q_uz, a_uz in rows:
@@ -66,13 +69,6 @@ async def _load_faq_items(language: str | None = None) -> list[dict[str, str]]:
         if q and a:
             items.append({"q": str(q), "a": str(a)})
     return items
-
-
-def _load_faq_items_sync(language: str | None = None) -> list[dict[str, str]]:
-    try:
-        return asyncio.run(_load_faq_items(language))
-    except Exception:
-        return []
 
 
 @lru_cache(maxsize=1)
@@ -96,6 +92,7 @@ def _load_builtin_faq_alias_items() -> tuple[dict[str, Any], ...]:
             parsed.append({"q": q, "a": a, "aliases": aliases})
         return tuple(parsed)
     except Exception:
+        logger.exception("Failed to load builtin FAQ aliases")
         return tuple()
 
 
@@ -127,6 +124,7 @@ async def _load_credit_product_offers() -> list[dict[str, Any]]:
             )
             rows = result.all()
     except Exception:
+        logger.exception("Failed to load credit product offers from DB")
         return []
 
     items: list[dict[str, Any]] = []
@@ -178,14 +176,6 @@ async def _load_credit_product_offers() -> list[dict[str, Any]]:
     return items
 
 
-@lru_cache(maxsize=1)
-def _load_credit_product_offers_sync() -> tuple[dict[str, Any], ...]:
-    try:
-        return tuple(asyncio.run(_load_credit_product_offers()))
-    except Exception:
-        return tuple()
-
-
 async def _load_deposit_product_offers() -> list[dict[str, Any]]:
     try:
         async with get_session() as session:
@@ -212,6 +202,7 @@ async def _load_deposit_product_offers() -> list[dict[str, Any]]:
             )
             rows = result.all()
     except Exception:
+        logger.exception("Failed to load deposit product offers from DB")
         return []
 
     items: list[dict[str, Any]] = []
@@ -259,14 +250,6 @@ async def _load_deposit_product_offers() -> list[dict[str, Any]]:
     return items
 
 
-@lru_cache(maxsize=1)
-def _load_deposit_product_offers_sync() -> tuple[dict[str, Any], ...]:
-    try:
-        return tuple(asyncio.run(_load_deposit_product_offers()))
-    except Exception:
-        return tuple()
-
-
 async def _load_card_product_offers() -> list[dict[str, Any]]:
     try:
         async with get_session() as session:
@@ -301,6 +284,7 @@ async def _load_card_product_offers() -> list[dict[str, Any]]:
             )
             rows = result.all()
     except Exception:
+        logger.exception("Failed to load card product offers from DB")
         return []
 
     items: list[dict[str, Any]] = []
@@ -364,9 +348,3 @@ async def _load_card_product_offers() -> list[dict[str, Any]]:
     return items
 
 
-@lru_cache(maxsize=1)
-def _load_card_product_offers_sync() -> tuple[dict[str, Any], ...]:
-    try:
-        return tuple(asyncio.run(_load_card_product_offers()))
-    except Exception:
-        return tuple()

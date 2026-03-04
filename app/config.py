@@ -13,7 +13,6 @@ load_dotenv()
 class Settings:
     bot_token: str
     database_url: str
-    redis_url: str | None
     log_level: str
     operator_ids: list[int]
     operator_api_key: str | None
@@ -23,9 +22,11 @@ class Settings:
     langgraph_checkpoint_backend: str
     langgraph_checkpoint_url: str | None
     langgraph_dialog_ttl_minutes: int
-    langgraph_ttl_store_path: str
     session_inactivity_timeout_minutes: int
     human_mode_operator_timeout_minutes: int
+    admin_username: str
+    admin_password: str
+    admin_secret_key: str
 
 
 def _parse_operator_ids(raw: str | None) -> list[int]:
@@ -67,8 +68,7 @@ def _parse_positive_int(raw: str | None, default: int) -> int:
 def get_settings() -> Settings:
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
-        database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db").strip(),
-        redis_url=(os.getenv("REDIS_URL") or "").strip() or None,
+        database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://bankbot:bankbot@localhost:5432/bankbot").strip(),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
         operator_ids=_parse_operator_ids(os.getenv("OPERATOR_IDS")),
         operator_api_key=(os.getenv("OPERATOR_API_KEY") or "").strip() or None,
@@ -78,7 +78,6 @@ def get_settings() -> Settings:
         langgraph_checkpoint_backend=(os.getenv("LANGGRAPH_CHECKPOINT_BACKEND") or "auto").strip().lower(),
         langgraph_checkpoint_url=(os.getenv("LANGGRAPH_CHECKPOINT_URL") or "").strip() or None,
         langgraph_dialog_ttl_minutes=_parse_positive_int(os.getenv("LANGGRAPH_DIALOG_TTL_MINUTES"), default=720),
-        langgraph_ttl_store_path=(os.getenv("LANGGRAPH_TTL_STORE_PATH") or ".langgraph_ttl.sqlite3").strip(),
         session_inactivity_timeout_minutes=_parse_positive_int(
             os.getenv("SESSION_INACTIVITY_TIMEOUT_MINUTES"),
             default=1440,  # 24 hours
@@ -87,4 +86,7 @@ def get_settings() -> Settings:
             os.getenv("HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES"),
             default=10,
         ),
+        admin_username=os.getenv("ADMIN_USERNAME", "admin").strip(),
+        admin_password=os.getenv("ADMIN_PASSWORD", "admin").strip(),
+        admin_secret_key=os.getenv("ADMIN_SECRET_KEY", "change-me-in-production").strip(),
     )

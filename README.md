@@ -45,7 +45,7 @@ python3 main.py               # запустить (http://0.0.0.0:8001)
 |---|---|---|---|
 | `BOT_TOKEN` | да | — | Telegram bot token |
 | `OPENAI_API_KEY` | да | — | OpenAI API key |
-| `DATABASE_URL` | нет | `sqlite+aiosqlite:///./bot.db` | SQLAlchemy async URL |
+| `DATABASE_URL` | нет | `postgresql+asyncpg://bankbot:bankbot@localhost:5432/bankbot` | SQLAlchemy async URL |
 | `WEBHOOK_BASE_URL` | нет | — | Если задан — регистрирует webhook; иначе polling |
 | `WEBHOOK_PATH` | нет | `/telegram/webhook` | Путь webhook |
 | `WEBHOOK_SECRET` | нет | — | Секрет для X-Telegram-Bot-Api-Secret-Token |
@@ -55,8 +55,10 @@ python3 main.py               # запустить (http://0.0.0.0:8001)
 | `LANGGRAPH_CHECKPOINT_URL` | нет | `.langgraph_checkpoints.sqlite3` | Путь/URL к базе чекпоинтов |
 | `SESSION_INACTIVITY_TIMEOUT_MINUTES` | нет | `1440` | Автозакрытие неактивной сессии |
 | `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` | нет | `10` | Автовозврат из human-mode если оператор не ответил |
-| `LOCAL_AGENT_INTENT_LLM_ENABLED` | нет | `1` | Включить LLM-ответы (0 = только правила) |
 | `LOCAL_AGENT_INTENT_LLM_MODEL` | нет | `gpt-4o-mini` | Модель OpenAI |
+| `ADMIN_USERNAME` | нет | `admin` | Логин для админ-панели |
+| `ADMIN_PASSWORD` | нет | `admin` | Пароль для админ-панели |
+| `ADMIN_SECRET_KEY` | нет | — | Секрет для cookie-сессий админки |
 | `APP_HOST` | нет | `0.0.0.0` | Bind host |
 | `APP_PORT` | нет | `8001` | Bind port |
 
@@ -71,7 +73,7 @@ Telegram → POST /telegram/webhook → FastAPI → aiogram Dispatcher
   → commands.py handlers
       → ChatService.handle_user_message()
           → AgentClient → Agent.send_message()
-              → LangGraph: node_classify_intent → node_faq | node_calc_flow | node_human_mode_turn
+              → LangGraph: router → faq (LLM + tools) | calc_flow | human_mode
   → Database (SQLAlchemy async)
 ```
 
@@ -89,8 +91,12 @@ app/
 │   ├── models.py             # ORM-модели
 │   ├── session.py            # Async engine + get_session()
 │   └── alembic/versions/     # Миграции
+├── admin/
+│   ├── auth.py               # SQLAdmin аутентификация (env-based)
+│   ├── views.py              # ModelView для всех 9 моделей
+│   └── setup.py              # Инициализация и монтирование SQLAdmin
 ├── services/
-│   ├── agent.py              # LangGraph-агент: граф, ноды, BotState
+│   ├── agent.py              # LangGraph-агент: граф, ноды, 11 LLM-тулов, BotState
 │   ├── agent_client.py       # Тонкая обёртка вокруг Agent
 │   ├── chat_service.py       # Сессии, история, human mode
 │   └── telegram_sender.py    # HTTP-отправка сообщений операторов
@@ -107,60 +113,72 @@ app/
 
 ## LangGraph агент (`app/services/agent.py`)
 
+### Архитектура: 3 ноды + 11 LLM-тулов
+
+Агент использует **LangGraph `StateGraph`** с тремя нодами. Интент-классификация в `node_faq` полностью делегирована LLM через `ChatOpenAI.bind_tools()` + `ToolNode` — LLM сам решает, какой тул вызвать.
+
 ### Граф
 
 ```
-START
-  └─► node_classify_intent
-          ├─► node_faq               (FAQ, приветствие, каталог продуктов)
-          ├─► node_calc_flow         (расчёт + захват лида)
-          └─► node_human_mode_turn   (режим оператора)
+START → router
+          ├─► faq         (LLM + 11 тулов: приветствие, FAQ, продукты, сравнение...)
+          ├─► calc_flow   (расчёт кредита/вклада + захват лида)
+          └─► human_mode  (режим оператора, interrupt())
          → END
 ```
 
-### Маршрутизация (`node_classify_intent`)
+### Маршрутизация (`node_router`)
 
 | Условие | Маршрут |
 |---|---|
-| `state.human_mode == True` | `human` → `node_human_mode_turn` |
-| `dialog.flow == "calc_flow"` | `calc_flow` → `node_calc_flow` |
-| Всё остальное | `faq` → `node_faq` |
+| `state.human_mode == True` | `human_mode` |
+| `dialog.lead_step` задан | `calc_flow` |
+| `dialog.flow == "calc_flow"` | `calc_flow` |
+| Всё остальное | `faq` |
 
-### Узел `node_faq`
+### Узел `node_faq` — LLM + тулы
 
-Обрабатывает в порядке приоритета:
+LLM (`gpt-4o-mini`) получает системный промпт + историю сообщений + описания 11 тулов. Он сам определяет интент и вызывает нужный тул. Цикл до 3 раундов tool-calling.
 
-1. **Приветствие** — отвечает с меню-кнопками (ипотека / авто / микрозайм / вклад / карта / вопрос)
-2. **Спасибо** — короткий ответ
-3. **Назад** — возврат к списку продуктов
-4. **Рассчитать / Подать заявку** — переход в `calc_flow`
-5. **Сравнение** (`_is_comparison_request`) — подгружает продукты категории, передаёт в LLM с инструкцией "только наш банк"
-6. **Выбор продукта из списка** — показывает карточку, кнопки "Рассчитать / Назад"
-7. **Категория продукта** (`_detect_product_category`) — показывает список продуктов
-8. **Вопрос об отделениях** — краткий ответ
-9. **Курс валют** — краткий ответ
-10. **FAQ из БД** → **LLM (контекстный)** → **LLM (finance)** → **Статичный fallback**
+| Тул | Описание |
+|---|---|
+| `greeting_response` | Приветствие с главным меню (кнопки категорий) |
+| `thanks_response` | Ответ на «спасибо» |
+| `get_branch_info` | Информация об отделениях |
+| `get_currency_info` | Информация о курсах валют |
+| `show_credit_menu` | Меню типов кредитов (ипотека / авто / микрозайм / образовательный) |
+| `get_products(category)` | Список продуктов по категории (из БД) |
+| `select_product(product_name)` | Карточка конкретного продукта |
+| `compare_products(query)` | Сравнение продуктов через LLM |
+| `back_to_product_list` | Возврат к списку продуктов |
+| `start_calculator` | Запуск калькулятора / подача заявки |
+| `faq_lookup(query)` | Поиск в FAQ-базе (token similarity) |
 
-### Узел `node_calc_flow`
+После вызова тулов `_update_dialog_from_tools()` обновляет `dialog` и `keyboard_options` на основе того, какие тулы были вызваны.
 
-Многошаговый сбор данных для расчёта:
+### Узел `node_calc_flow` — пошаговый сбор данных
+
+Детерминированный узел (без LLM). Собирает данные для расчёта через `dialog.calc_step` и `dialog.lead_step`:
 
 ```
-lead_step == "offer"  → "Хотите оформить?" (кнопки Да/Нет)
-lead_step == "name"   → "Как вас зовут?"
-lead_step == "phone"  → "Укажите телефон:" → _save_lead_sync() → _default_dialog()
-
-calc_step == "amount"      → _parse_amount()
-calc_step == "term"        → _parse_term_months()
-calc_step == "downpayment" → _parse_downpayment()
-
-Если вопрос по теме → FAQ + повтор вопроса
-Если неверный формат → подсказка ("Введите цифрами, например: 500 млн")
+calc_step == "amount"      → парсинг суммы (_parse_amount)
+calc_step == "term"        → парсинг срока (_parse_term_months)
+calc_step == "downpayment" → парсинг взноса (_parse_downpayment)
 
 Все слоты собраны:
   ├─► deposit → текстовый расчёт дохода → lead_step = "offer"
   └─► credit  → PDF аннуитетного графика → lead_step = "offer"
+
+lead_step == "offer" → "Хотите оформить?" (Да/Нет)
+lead_step == "name"  → "Как вас зовут?"
+lead_step == "phone" → телефон → _save_lead_async() → сброс dialog
 ```
+
+Если пользователь задаёт вопрос по теме во время сбора данных → ответ через LLM + повтор текущего вопроса.
+
+### Узел `node_human_mode` — оператор
+
+Использует `langgraph.types.interrupt()` для приостановки графа. Сообщения сохраняются в БД, ожидается ответ оператора.
 
 ### BotState
 
@@ -248,8 +266,8 @@ curl -X POST http://127.0.0.1:8001/operator/send \
 2. Создать миграцию: `alembic revision -m "add_new_product" --autogenerate`
 3. Создать seed-скрипт в `scripts/`
 4. Добавить loader в `app/tools/data_loaders.py`
-5. Добавить категорию в `_detect_product_category()` и `CALC_QUESTIONS` в `app/services/agent.py`
-6. Добавить метку в `CATEGORY_LABELS` и `CREDIT_SECTION_MAP` (если кредит)
+5. Добавить категорию в `CALC_QUESTIONS`, `CATEGORY_LABELS`, `CREDIT_SECTION_MAP` (если кредит) в `app/services/agent.py`
+6. При необходимости — добавить новый `@lc_tool` и включить в `_FAQ_TOOLS`, обновить `_update_dialog_from_tools()`
 
 ---
 

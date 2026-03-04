@@ -21,6 +21,7 @@ from app.bot.middlewares.chat_service import ChatServiceMiddleware
 from app.config import get_settings
 from app.db.models import ChatSession, Message, SessionStatus, User
 from app.db.session import AsyncSessionLocal
+from app.admin.setup import setup_admin
 from app.services.agent_client import AgentClient
 from app.services.chat_service import ChatService
 from app.services.telegram_sender import send_telegram_message
@@ -51,7 +52,7 @@ def _format_operator_text(text: str, operator_name: Optional[str]) -> str:
 def _require_api_key(x_api_key: Optional[str]) -> None:
     api_key = (get_settings().operator_api_key or "").strip()
     if not api_key:
-        return
+        raise HTTPException(status_code=403, detail="OPERATOR_API_KEY not configured")
     if not x_api_key or x_api_key != api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -150,6 +151,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Finance Bot API", lifespan=lifespan)
+setup_admin(app)
 WEBHOOK_PATH = get_settings().webhook_path
 
 
@@ -177,7 +179,10 @@ async def telegram_webhook(
         update = Update.model_validate(data, context={"bot": bot})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid update payload: {exc}") from exc
-    await dp.feed_update(bot, update)
+    try:
+        await dp.feed_update(bot, update)
+    except Exception as exc:
+        logger.exception("Webhook handler error: %s", exc)
     return {"ok": True}
 
 

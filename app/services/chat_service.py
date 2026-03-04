@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -26,6 +27,7 @@ class AgentReply:
     session_id: Optional[str] = None
     human_mode: bool = False
     keyboard_options: Optional[list] = None
+    show_operator_button: bool = False
 
 
 class ChatService:
@@ -233,15 +235,27 @@ class ChatService:
         latency_ms: Optional[int] = None
         try:
             started = time.perf_counter()
-            turn_result = await self.agent_client.send_message(
-                session_id=chat_session.id,
-                user_id=user.telegram_user_id,
-                text=text,
-                language=normalize_lang(user.language),
+            turn_result = await asyncio.wait_for(
+                self.agent_client.send_message(
+                    session_id=chat_session.id,
+                    user_id=user.telegram_user_id,
+                    text=text,
+                    language=normalize_lang(user.language),
+                ),
+                timeout=25.0,
             )
             agent_text = turn_result.text
             agent_keyboard = turn_result.keyboard_options
             latency_ms = int((time.perf_counter() - started) * 1000)
+        except asyncio.TimeoutError:
+            logger.warning("Agent timed out for session %s", chat_session.id)
+            await self._save_message(
+                session_id=chat_session.id,
+                role="system",
+                text="Таймаут агента",
+                error_code="agent_timeout",
+            )
+            return AgentReply(text=t("agent_unavailable", user.language))
         except Exception as exc:  # pragma: no cover - network failure path
             logger.exception("Agent request failed: %s", exc)
             await self._save_message(
@@ -279,6 +293,7 @@ class ChatService:
             session_id=chat_session.id,
             human_mode=chat_session.human_mode,
             keyboard_options=agent_keyboard,
+            show_operator_button=getattr(turn_result, "show_operator_button", False),
         )
 
     async def close_inactive_sessions(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:

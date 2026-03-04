@@ -8,6 +8,7 @@ logs/*
 .venv
 .env
 *.db
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 __pycache__/
-staticfiles
-static
