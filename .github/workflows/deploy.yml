@@ -1,0 +1,52 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to agent-bot.uz
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+
+            cd ${{ secrets.PROJECT_PATH || '~/complex-agent-api' }}
+
+            echo "▶ Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "▶ Building and restarting containers..."
+            docker compose -f docker-compose.prod.yml up -d --build
+
+            echo "▶ Waiting for API to be ready..."
+            sleep 5
+
+            echo "▶ Running migrations..."
+            docker compose -f docker-compose.prod.yml exec -T api alembic upgrade head
+
+            echo "▶ Reloading nginx..."
+            docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload
+
+            echo "▶ Checking health..."
+            sleep 3
+            curl -sf http://localhost:8001/health || echo "⚠️ Health check failed, check logs"
+
+            echo "✅ Deploy complete!"
