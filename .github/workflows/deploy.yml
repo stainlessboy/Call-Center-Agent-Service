@@ -22,12 +22,11 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          script_stop: true
+          port: ${{ secrets.SERVER_PORT }}
           script: |
             set -e
 
-            cd ${{ secrets.PROJECT_PATH || '~/complex-agent-api' }}
+            cd ${{ secrets.PROJECT_PATH }}
 
             echo "▶ Pulling latest code..."
             git fetch origin main
