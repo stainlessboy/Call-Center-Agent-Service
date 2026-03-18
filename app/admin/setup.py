@@ -28,6 +28,7 @@ def setup_admin(app: FastAPI) -> Admin:
         engine,
         authentication_backend=authentication_backend,
         title="Bank Bot CRM",
+        base_url="/admin",
     )
 
     admin.add_view(UserAdmin)
