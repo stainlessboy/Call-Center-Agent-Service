@@ -150,6 +150,8 @@ class CreditProductOffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     section_name: Mapped[str] = mapped_column(String(128), index=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     min_age: Mapped[Optional[int]] = mapped_column(Integer)
     min_age_text: Mapped[Optional[str]] = mapped_column(String(128))
     purpose_text: Mapped[Optional[str]] = mapped_column(Text)
@@ -193,6 +195,8 @@ class DepositProductOffer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     currency_code: Mapped[str] = mapped_column(String(8), index=True)  # UZS / USD / EUR
     min_amount_text: Mapped[Optional[str]] = mapped_column(Text)
     min_amount: Mapped[Optional[int]] = mapped_column(BigInteger)
@@ -244,6 +248,8 @@ class CardProductOffer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     card_network: Mapped[Optional[str]] = mapped_column(String(32), index=True)  # uzcard/humo/visa/mastercard
     currency_code: Mapped[Optional[str]] = mapped_column(String(16), index=True)  # UZS / USD / EUR / MULTI / UNKNOWN
     is_fx_card: Mapped[bool] = mapped_column(Boolean, server_default="false", default=False, index=True)

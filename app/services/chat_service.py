@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bot.i18n import normalize_lang, t
 from app.db.models import Branch, ChatSession, Message, SessionStatus, User
 from app.services.agent_client import AgentClient
-from app.services.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
+from app.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
 
 logger = logging.getLogger(__name__)
 PDF_MARKER_RE = re.compile(r"\[\[PDF:(.+?)\]\]")

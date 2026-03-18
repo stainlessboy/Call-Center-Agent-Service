@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from app.services.agent import Agent, AgentTurnResult
+from app.agent import Agent, AgentTurnResult
 
 if TYPE_CHECKING:
     from app.config import Settings

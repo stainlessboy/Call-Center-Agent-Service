@@ -9,7 +9,7 @@ import httpx
 import wtforms
 from sqladmin import ModelView, action
 from sqladmin.filters import BooleanFilter, AllUniqueStringValuesFilter
-from sqlalchemy import select
+from sqlalchemy import func as sa_func, select
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _next_row_order(model_class: Any, **filters: Any) -> int:
+    """Get next available source_row_order for a model, auto-incrementing."""
+    async with AsyncSessionLocal() as session:
+        q = select(sa_func.coalesce(sa_func.max(model_class.source_row_order), 0) + 1)
+        for col, val in filters.items():
+            if val and hasattr(model_class, col):
+                q = q.where(getattr(model_class, col) == val)
+        result = await session.execute(q)
+        return result.scalar() or 1
+
 
 async def _send_telegram_message_async(token: str, chat_id: int, text: str) -> tuple[bool, str | None]:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -266,13 +277,14 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         CreditProductOffer.is_active,
     ]
     column_searchable_list = [
-        CreditProductOffer.service_name, CreditProductOffer.section_name,
+        CreditProductOffer.service_name, CreditProductOffer.service_name_en,
+        CreditProductOffer.service_name_uz, CreditProductOffer.section_name,
         CreditProductOffer.rate_condition_text, CreditProductOffer.collateral_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(CreditProductOffer.section_name, title="Section"),
-        AllUniqueStringValuesFilter(CreditProductOffer.income_type, title="Income Type"),
-        BooleanFilter(CreditProductOffer.is_active, title="Active"),
+        AllUniqueStringValuesFilter(CreditProductOffer.section_name, title="Раздел"),
+        AllUniqueStringValuesFilter(CreditProductOffer.income_type, title="Тип дохода"),
+        BooleanFilter(CreditProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         CreditProductOffer.id, CreditProductOffer.section_name,
@@ -283,6 +295,38 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         (CreditProductOffer.source_row_order, False),
         (CreditProductOffer.rate_order, False),
     ]
+
+    column_labels = {
+        "section_name": "Раздел", "service_name": "Название продукта",
+        "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
+        "income_type": "Тип дохода", "rate_min_pct": "Ставка мин. %",
+        "rate_max_pct": "Ставка макс. %", "rate_text": "Ставка (текст)",
+        "rate_condition_text": "Условие ставки",
+        "term_min_months": "Срок мин. (мес.)", "term_max_months": "Срок макс. (мес.)",
+        "term_text": "Срок (текст)",
+        "downpayment_min_pct": "Взнос мин. %", "downpayment_max_pct": "Взнос макс. %",
+        "downpayment_text": "Взнос (текст)",
+        "amount_text": "Сумма (текст)", "amount_min": "Сумма мин.", "amount_max": "Сумма макс.",
+        "min_age": "Мин. возраст", "min_age_text": "Возраст (текст)",
+        "purpose_text": "Цель кредита", "collateral_text": "Обеспечение",
+        "source_row_order": "Номер строки", "rate_order": "Номер ставки",
+        "is_active": "Активен",
+    }
+    form_args = {
+        "section_name": {"description": "Ипотека / Автокредит / Микрозайм / Образовательный"},
+        "income_type": {"description": "payroll / official / no_official (пусто = для всех)"},
+        "source_row_order": {"description": "Заполняется автоматически для новых записей"},
+        "rate_order": {"description": "Номер варианта ставки внутри продукта (по умолч. 1)"},
+    }
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        if is_created:
+            if not model.source_row_order:
+                model.source_row_order = await _next_row_order(
+                    CreditProductOffer, section_name=model.section_name,
+                )
+            if not model.rate_order:
+                model.rate_order = 1
 
 
 # ---------------------------------------------------------------------------
@@ -301,16 +345,17 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         DepositProductOffer.topup_allowed, DepositProductOffer.is_active,
     ]
     column_searchable_list = [
-        DepositProductOffer.service_name, DepositProductOffer.term_text,
+        DepositProductOffer.service_name, DepositProductOffer.service_name_en,
+        DepositProductOffer.service_name_uz, DepositProductOffer.term_text,
         DepositProductOffer.payout_text, DepositProductOffer.topup_text,
         DepositProductOffer.notes_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(DepositProductOffer.currency_code, title="Currency"),
-        BooleanFilter(DepositProductOffer.topup_allowed, title="Topup Allowed"),
-        BooleanFilter(DepositProductOffer.payout_monthly_available, title="Monthly Payout"),
-        BooleanFilter(DepositProductOffer.payout_end_available, title="End Payout"),
-        BooleanFilter(DepositProductOffer.is_active, title="Active"),
+        AllUniqueStringValuesFilter(DepositProductOffer.currency_code, title="Валюта"),
+        BooleanFilter(DepositProductOffer.topup_allowed, title="Пополнение"),
+        BooleanFilter(DepositProductOffer.payout_monthly_available, title="Ежемесячная выплата"),
+        BooleanFilter(DepositProductOffer.payout_end_available, title="Выплата в конце"),
+        BooleanFilter(DepositProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         DepositProductOffer.id, DepositProductOffer.service_name,
@@ -321,6 +366,36 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         (DepositProductOffer.currency_code, False),
         (DepositProductOffer.source_row_order, False),
     ]
+
+    column_labels = {
+        "service_name": "Название вклада",
+        "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
+        "currency_code": "Валюта",
+        "term_text": "Срок (текст)", "term_months": "Срок (мес.)",
+        "rate_text": "Ставка (текст)", "rate_pct": "Ставка %",
+        "min_amount_text": "Мин. сумма (текст)", "min_amount": "Мин. сумма",
+        "open_channel_text": "Способ оформления",
+        "payout_text": "Выплата процентов",
+        "payout_monthly_available": "Ежемесячная выплата",
+        "payout_end_available": "Выплата в конце",
+        "topup_text": "Пополнение (текст)", "topup_allowed": "Пополнение",
+        "partial_withdrawal_allowed": "Частичное снятие",
+        "notes_text": "Примечания",
+        "source_row_order": "Номер строки", "is_active": "Активен",
+    }
+    form_args = {
+        "currency_code": {"description": "UZS / USD / EUR"},
+        "rate_pct": {"description": "Годовая процентная ставка (число, например 15.0)"},
+        "source_row_order": {"description": "Заполняется автоматически для новых записей"},
+    }
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        if is_created and not model.source_row_order:
+            model.source_row_order = await _next_row_order(
+                DepositProductOffer,
+                service_name=model.service_name,
+                currency_code=model.currency_code,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -368,16 +443,17 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         CardProductOffer.mobile_order_available, CardProductOffer.is_active,
     ]
     column_searchable_list = [
-        CardProductOffer.service_name, CardProductOffer.issue_fee_text,
+        CardProductOffer.service_name, CardProductOffer.service_name_en,
+        CardProductOffer.service_name_uz, CardProductOffer.issue_fee_text,
         CardProductOffer.annual_fee_text, CardProductOffer.issuance_time_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(CardProductOffer.card_network, title="Network"),
-        AllUniqueStringValuesFilter(CardProductOffer.currency_code, title="Currency"),
-        BooleanFilter(CardProductOffer.is_fx_card, title="FX Card"),
-        BooleanFilter(CardProductOffer.payroll_supported, title="Payroll"),
-        BooleanFilter(CardProductOffer.issue_fee_free, title="Free Issue"),
-        BooleanFilter(CardProductOffer.is_active, title="Active"),
+        AllUniqueStringValuesFilter(CardProductOffer.card_network, title="Платёжная сеть"),
+        AllUniqueStringValuesFilter(CardProductOffer.currency_code, title="Валюта"),
+        BooleanFilter(CardProductOffer.is_fx_card, title="Валютная карта"),
+        BooleanFilter(CardProductOffer.payroll_supported, title="Зарплатная"),
+        BooleanFilter(CardProductOffer.issue_fee_free, title="Бесплатный выпуск"),
+        BooleanFilter(CardProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         CardProductOffer.id, CardProductOffer.service_name, CardProductOffer.source_row_order,
@@ -386,3 +462,36 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         (CardProductOffer.source_row_order, False),
         (CardProductOffer.service_name, False),
     ]
+
+    column_labels = {
+        "service_name": "Название карты",
+        "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
+        "card_network": "Платёжная сеть",
+        "currency_code": "Валюта", "is_fx_card": "Валютная карта",
+        "is_debit_card": "Дебетовая карта", "payroll_supported": "Зарплатная",
+        "issue_fee_text": "Стоимость выпуска", "issue_fee_free": "Бесплатный выпуск",
+        "reissue_fee_text": "Стоимость перевыпуска",
+        "transfer_fee_text": "Комиссия за переводы",
+        "cashback_text": "Кэшбэк (текст)", "cashback_pct": "Кэшбэк %",
+        "validity_text": "Срок действия", "validity_months": "Срок (мес.)",
+        "issuance_time_text": "Время выпуска",
+        "pin_setup_cbu_text": "Установка PIN (ЦБУ)",
+        "sms_setup_cbu_text": "Установка SMS (ЦБУ)",
+        "pin_setup_mobile_text": "Установка PIN (мобилка)",
+        "sms_setup_mobile_text": "Установка SMS (мобилка)",
+        "annual_fee_text": "Годовое обслуживание", "annual_fee_free": "Бесплатное обслуживание",
+        "mobile_order_available": "Заказ через приложение",
+        "delivery_available": "Доставка", "pickup_available": "Самовывоз",
+        "source_row_order": "Номер строки", "is_active": "Активен",
+    }
+    form_args = {
+        "card_network": {"description": "uzcard / humo / visa / mastercard"},
+        "currency_code": {"description": "UZS / USD / EUR / MULTI"},
+        "source_row_order": {"description": "Заполняется автоматически для новых записей"},
+    }
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        if is_created and not model.source_row_order:
+            model.source_row_order = await _next_row_order(
+                CardProductOffer, service_name=model.service_name,
+            )
