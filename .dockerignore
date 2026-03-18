@@ -25,5 +25,4 @@ deploy.sh
 README.md
 CLAUDE.md
 tests/
-scripts/
 .claude/
