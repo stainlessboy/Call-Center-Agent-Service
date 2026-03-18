@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(alembic revision -m \"add lead table\" --autogenerate)",
+      "Bash(alembic upgrade head)",
+      "Bash(xargs ls -lh)",
+      "Bash(pip show langgraph langchain-openai aiogram fastapi)",
+      "Bash(pip install django-unfold -q)",
+      "Bash(pip show django-unfold)",
+      "Bash(python -c \":*)",
+      "Bash(python manage.py collectstatic --noinput)",
+      "Bash(ls /Users/user/PycharmProjects/complex-agent-api/.env*)",
+      "Bash(grep -n \"except.*:$\\\\|except Exception\" /Users/user/PycharmProjects/complex-agent-api/app/services/*.py)",
+      "Bash(wc -l /Users/user/PycharmProjects/complex-agent-api/scripts/*.py)",
+      "Bash(wc -l /Users/user/PycharmProjects/complex-agent-api/app/services/*.py /Users/user/PycharmProjects/complex-agent-api/app/db/session.py /Users/user/PycharmProjects/complex-agent-api/app/db/alembic/env.py /Users/user/PycharmProjects/complex-agent-api/app/bot/i18n.py /Users/user/PycharmProjects/complex-agent-api/bank_admin/models.py)",
+      "Bash(grep -n \"TODO\\\\|FIXME\\\\|XXX\\\\|HACK\\\\|BUG\" /Users/user/PycharmProjects/complex-agent-api/app/services/*.py)",
+      "Bash(grep -E \"^def |^class \" /Users/user/PycharmProjects/complex-agent-api/app/bot/keyboards/*.py)",
+      "Bash(docker compose up -d)",
+      "Bash(docker ps --format \"{{.Names}} {{.Ports}}\")",
+      "Bash(docker start postgres_local)",
+      "Bash(docker exec postgres_local psql -U postgres -c \"SELECT 1 FROM pg_database WHERE datname = ''bankbot''\")",
+      "Bash(docker exec postgres_local psql -U postgres -c \"CREATE USER bankbot WITH PASSWORD ''bankbot'';\" -c \"CREATE DATABASE bankbot OWNER bankbot;\")",
+      "Bash(docker rm complex-agent-api-postgres-1)",
+      "Bash(docker exec postgres_local psql -U bankbot -d bankbot -c \"SELECT 1\")",
+      "Bash(pip install psycopg2-binary)",
+      "Bash(gtimeout 10 python3 main.py)",
+      "Bash(DJANGO_SETTINGS_MODULE=admin_site.settings python3 -c \":*)"
+    ],
+    "additionalDirectories": [
+      "/Users/user/.claude/projects/-Users-user-PycharmProjects-complex-agent-api/memory"
+    ]
+  }
+}

@@ -47,6 +47,9 @@ class User(Base):
         order_by="ChatSession.started_at",
     )
 
+    def __str__(self) -> str:
+        return self.username or str(self.telegram_user_id)
+
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -75,6 +78,9 @@ class ChatSession(Base):
         cascade="all, delete-orphan",
         order_by="Message.created_at",
     )
+
+    def __str__(self) -> str:
+        return f"{self.id} ({self.status})"
 
 
 class Message(Base):
@@ -144,6 +150,8 @@ class CreditProductOffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     section_name: Mapped[str] = mapped_column(String(128), index=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     min_age: Mapped[Optional[int]] = mapped_column(Integer)
     min_age_text: Mapped[Optional[str]] = mapped_column(String(128))
     purpose_text: Mapped[Optional[str]] = mapped_column(Text)
@@ -187,6 +195,8 @@ class DepositProductOffer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     currency_code: Mapped[str] = mapped_column(String(8), index=True)  # UZS / USD / EUR
     min_amount_text: Mapped[Optional[str]] = mapped_column(Text)
     min_amount: Mapped[Optional[int]] = mapped_column(BigInteger)
@@ -213,6 +223,23 @@ class DepositProductOffer(Base):
     )
 
 
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
+    telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    product_category: Mapped[Optional[str]] = mapped_column(String(64))
+    product_name: Mapped[Optional[str]] = mapped_column(String(512))
+    amount: Mapped[Optional[int]] = mapped_column(BigInteger)
+    term_months: Mapped[Optional[int]] = mapped_column(Integer)
+    rate_pct: Mapped[Optional[float]] = mapped_column(Float)
+    contact_name: Mapped[Optional[str]] = mapped_column(String(255))
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), server_default="new", default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CardProductOffer(Base):
     __tablename__ = "card_product_offers"
     __table_args__ = (
@@ -221,6 +248,8 @@ class CardProductOffer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(String(512), index=True)
+    service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
+    service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     card_network: Mapped[Optional[str]] = mapped_column(String(32), index=True)  # uzcard/humo/visa/mastercard
     currency_code: Mapped[Optional[str]] = mapped_column(String(16), index=True)  # UZS / USD / EUR / MULTI / UNKNOWN
     is_fx_card: Mapped[bool] = mapped_column(Boolean, server_default="false", default=False, index=True)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from aiogram import F, Router
@@ -77,6 +79,51 @@ def _inline_keyboard(labels: list[str], prefix: str, row_size: int = 2) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _flow_keyboard(options: list[str], row_size: int = 2) -> InlineKeyboardMarkup:
+    """Build an inline keyboard for flow answer buttons (prefix: flow:).
+
+    Uses numeric index as callback_data to stay within Telegram's 64-byte limit.
+    The button text is recovered in flow_answer_callback via reply_markup lookup.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i, label in enumerate(options):
+        row.append(InlineKeyboardButton(text=label, callback_data=f"flow:{i}"))
+        if len(row) >= row_size:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _with_typing(message: Message, coro) -> Any:
+    """Run *coro* while continuously sending typing action every 4 s."""
+    stop = asyncio.Event()
+
+    async def _keep_typing() -> None:
+        while not stop.is_set():
+            try:
+                await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.shield(stop.wait()), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+
+    task = asyncio.create_task(_keep_typing())
+    try:
+        return await coro
+    finally:
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 def _strip_leading_symbols(text: str) -> str:
     return re.sub(r"^[^\wА-Яа-я]+", "", text).strip()
 
@@ -104,6 +151,42 @@ def _display_user_alias(username: str | None, first_name: str | None, telegram_u
     base = (username or first_name or str(telegram_user_id)).strip()
     cleaned = re.sub(r"[^\w]+", "", base, flags=re.UNICODE)
     return cleaned or str(telegram_user_id)
+
+
+def _format_relative_time(dt: datetime, lang: str) -> str:
+    """Return a human-readable relative time string for a datetime."""
+    aware = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    diff = datetime.now(timezone.utc) - aware
+    minutes = int(diff.total_seconds() / 60)
+    if minutes < 1:
+        return {"ru": "только что", "en": "just now", "uz": "hozir"}[lang]
+    if minutes < 60:
+        return {"ru": f"{minutes} мин. назад", "en": f"{minutes}m ago", "uz": f"{minutes} daq. oldin"}[lang]
+    hours = minutes // 60
+    if hours < 24:
+        return {"ru": f"{hours} ч. назад", "en": f"{hours}h ago", "uz": f"{hours} soat oldin"}[lang]
+    days = hours // 24
+    if days == 1:
+        return {"ru": "вчера", "en": "yesterday", "uz": "kecha"}[lang]
+    if days < 7:
+        return {"ru": f"{days} дн. назад", "en": f"{days}d ago", "uz": f"{days} kun oldin"}[lang]
+    return aware.strftime("%d.%m")
+
+
+def _sessions_inline_keyboard(sessions: list, lang: str) -> InlineKeyboardMarkup:
+    """Build InlineKeyboard with one resume-button per active session + 'New session' button."""
+    no_title = {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
+    buttons = []
+    for s in sessions:
+        title = (s.title or no_title)[:38]
+        time_str = _format_relative_time(s.last_activity_at, lang) if s.last_activity_at else ""
+        label = f"▶️ {title}"
+        if time_str:
+            label += f"  •  {time_str}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"session:resume:{s.id}")])
+    new_label = {"ru": "➕ Новая сессия", "en": "➕ New session", "uz": "➕ Yangi sessiya"}[lang]
+    buttons.append([InlineKeyboardButton(text=new_label, callback_data="session:new")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _parse_session_switch_request(raw_text: str, alias: str) -> int | str | None:
@@ -589,46 +672,13 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         return
 
     if action == NEW_CHAT or lower_norm in {"новая сессия", "новый чат", "new chat", "new session"}:
-        new_session = await chat_service.start_new_session(user.id)
-        active_sessions = await chat_service.list_active_sessions(user.id, limit=50)
-        session_index = next((idx for idx, s in enumerate(active_sessions, start=1) if s.id == new_session.id), 1)
-        intro = {
-            "ru": (
-                "Подключил вас к колл-центру. Я могу:\n"
-                "• Ответить на вопросы по продуктам (кредиты, карты, отделения)\n"
-                "• Подобрать ипотеку/автокредит/микрозайм/образовательный кредит\n"
-                "• Показать отделения и реквизиты\n"
-                "• Рассчитать платеж и подготовить PDF-график\n\n"
-            ),
-            "en": (
-                "Connected you to the call center. I can:\n"
-                "• Answer questions about products (loans, cards, branches)\n"
-                "• Help choose mortgage/auto loan/microloan/education loan\n"
-                "• Show branches and bank details\n"
-                "• Calculate payments and prepare a PDF schedule\n\n"
-            ),
-            "uz": (
-                "Sizni koll-markazga uladim. Men:\n"
-                "• Mahsulotlar bo‘yicha savollarga javob bera olaman (kreditlar, kartalar, filiallar)\n"
-                "• Ipoteka/avtokredit/mikroqarz/ta'lim krediti bo‘yicha variant tanlashga yordam beraman\n"
-                "• Filiallar va rekvizitlarni ko‘rsataman\n"
-                "• To‘lovni hisoblab, PDF jadval tayyorlayman\n\n"
-            ),
+        await chat_service.start_new_session(user.id)
+        msg = {
+            "ru": "Привет! Чем могу помочь?",
+            "en": "Hi! How can I help?",
+            "uz": "Salom! Qanday yordam bera olaman?",
         }[lang]
-        help_q = {
-            "ru": "Чем могу помочь?",
-            "en": "How can I help?",
-            "uz": "Qanday yordam bera olaman?",
-        }[lang]
-        await message.answer(
-            (
-                intro
-                + f"{texts['id_session']}: {new_session.id}\n"
-                + f"{texts['session_code']}: {alias}-{session_index}\n\n"
-                + help_q
-            ),
-            reply_markup=chat_keyboard(lang),
-        )
+        await message.answer(msg, reply_markup=chat_keyboard(lang))
         return
 
     if action == BRANCHES:
@@ -661,72 +711,28 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         return
 
     if action == MY_SESSIONS or "сесси" in lower_norm:
-        active_sessions = await chat_service.list_active_sessions(user.id, limit=10)
-        recent_sessions = await chat_service.list_recent_sessions(user.id, limit=5)
-        if not active_sessions and not recent_sessions:
-            await message.answer(texts["no_sessions"], reply_markup=chat_keyboard(lang))
-            return
-        lines = []
-        if active_sessions:
-            lines.append(
-                {
-                    "ru": "🟢 Активные сессии:",
-                    "en": "🟢 Active sessions:",
-                    "uz": "🟢 Faol sessiyalar:",
-                }[lang]
-            )
-            for idx, s in enumerate(active_sessions, start=1):
-                started = s.started_at.strftime("%Y-%m-%d %H:%M") if s.started_at else "-"
-                last_activity = s.last_activity_at.strftime("%Y-%m-%d %H:%M") if s.last_activity_at else "-"
-                title = s.title or {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
-                started_label = {"ru": "▶️ Начата", "en": "▶️ Started", "uz": "▶️ Boshlangan"}[lang]
-                last_label = {"ru": "⏱ Последняя активность", "en": "⏱ Last activity", "uz": "⏱ Oxirgi faollik"}[lang]
-                lines.append(
-                    f"{idx}) {title}\n"
-                    f"  🆔 ID: {s.id}\n"
-                    f"  🏷 {texts['session_code']}: {alias}-{idx}\n"
-                    f"  {started_label}: {started}\n"
-                    f"  {last_label}: {last_activity}"
-                )
-            lines.append("")
-            lines.append(
-                {
-                    "ru": "Чтобы продолжить сессию, напишите:",
-                    "en": "To continue a session, send:",
-                    "uz": "Sessiyani davom ettirish uchun yuboring:",
-                }[lang]
-            )
-            lines.append("• " + {"ru": "сессия 1", "en": "session 1", "uz": "session 1"}[lang])
-            lines.append("• " + {"ru": "сессия <ID>", "en": "session <ID>", "uz": "session <ID>"}[lang])
-            lines.append(f"• {alias}-1")
-            lines.append("")
-
-        lines.append(
-            {
-                "ru": "🗂️ Последние сессии:",
-                "en": "🗂️ Recent sessions:",
-                "uz": "🗂️ So‘nggi sessiyalar:",
+        active_sessions = await chat_service.list_active_sessions(user.id, limit=8)
+        if not active_sessions:
+            no_active_msg = {
+                "ru": "У вас нет активных сессий.\nНажмите «➕ Новая сессия» или напишите вопрос — начнётся автоматически.",
+                "en": "You have no active sessions.\nTap «➕ New session» or just send a message to start one.",
+                "uz": "Faol sessiyalaringiz yo’q.\n«➕ Yangi sessiya» tugmasini bosing yoki xabar yuboring.",
             }[lang]
-        )
-        for s in recent_sessions:
-            started = s.started_at.strftime("%Y-%m-%d %H:%M") if s.started_at else "-"
-            ended = s.ended_at.strftime("%Y-%m-%d %H:%M") if s.ended_at else "-"
-            title = s.title or {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
-            status = (
-                {"ru": "Активна", "en": "Active", "uz": "Faol"}[lang]
-                if s.status == "active"
-                else {"ru": "Закрыта", "en": "Closed", "uz": "Yopilgan"}[lang]
-            )
-            status_label = {"ru": "📌 Статус", "en": "📌 Status", "uz": "📌 Holat"}[lang]
-            started_label = {"ru": "⏱️ Начата", "en": "⏱️ Started", "uz": "⏱️ Boshlangan"}[lang]
-            ended_label = {"ru": "✅ Завершена", "en": "✅ Ended", "uz": "✅ Yakunlangan"}[lang]
-            lines.append(
-                f"• {title}\n"
-                f"  {status_label}: {status}\n"
-                f"  {started_label}: {started}\n"
-                f"  {ended_label}: {ended}"
-            )
-        await _answer_safe(message, "\n".join(lines), reply_markup=chat_keyboard(lang))
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text={"ru": "➕ Новая сессия", "en": "➕ New session", "uz": "➕ Yangi sessiya"}[lang],
+                    callback_data="session:new",
+                )
+            ]])
+            await message.answer(no_active_msg, reply_markup=kb)
+            return
+        header = {
+            "ru": "🗂 Активные сессии — нажмите, чтобы продолжить:",
+            "en": "🗂 Active sessions — tap to resume:",
+            "uz": "🗂 Faol sessiyalar — davom ettirish uchun bosing:",
+        }[lang]
+        kb = _sessions_inline_keyboard(active_sessions, lang)
+        await message.answer(header, reply_markup=kb)
         return
 
     if action == CHANGE_LANGUAGE or "язык" in lower_norm:
@@ -756,28 +762,109 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await message.answer(rates_text, reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
         return
 
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    reply = await chat_service.handle_user_message(
-        user=user,
-        text=message.text,
-        telegram_message_id=message.message_id,
+    reply = await _with_typing(
+        message,
+        chat_service.handle_user_message(
+            user=user,
+            text=message.text,
+            telegram_message_id=message.message_id,
+        ),
     )
-    mode_markup = (
-        human_mode_keyboard(reply.session_id, human_mode=bool(reply.human_mode), lang=lang)
-        if reply.session_id
-        else None
-    )
+    if reply.human_mode and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=True, lang=lang)
+    elif reply.show_operator_button and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=False, lang=lang)
+    else:
+        mode_markup = None
+    # Build inline keyboard from agent-suggested options (questions / product selection)
+    flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
 
     if reply.text:
         await _answer_safe(
             message,
             _format_source_reply(reply.text, "bot"),
-            reply_markup=mode_markup or chat_keyboard(lang),
+            reply_markup=flow_markup or mode_markup or chat_keyboard(lang),
+            parse_mode="HTML",
         )
     if reply.pdf_path:
         await message.answer_document(
             FSInputFile(reply.pdf_path),
             caption=_format_source_reply(texts["bot_pdf_caption"], "bot"),
+            reply_markup=mode_markup if mode_markup and not reply.text else chat_keyboard(lang),
+        )
+        try:
+            os.remove(reply.pdf_path)
+        except OSError:
+            pass
+
+
+@router.callback_query(F.data.startswith("flow:"))
+async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
+    """Handle inline button answers for flow questions (credit/cross_sell/greeting)."""
+    if not callback.data or callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+
+    # Resolve button index → actual label text from message reply_markup
+    raw = callback.data[len("flow:"):]
+    value = raw  # fallback (in case markup is unavailable)
+    if callback.message and callback.message.reply_markup:
+        for btn_row in callback.message.reply_markup.inline_keyboard:
+            for btn in btn_row:
+                if btn.callback_data == callback.data:
+                    value = btn.text
+                    break
+    value = _unsafecb(value)
+    tg_user = callback.from_user
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=tg_user.id,
+        username=tg_user.username,
+        first_name=tg_user.first_name,
+        last_name=tg_user.last_name,
+    )
+    lang = normalize_lang(user.language)
+
+    # Dismiss the loading spinner and remove buttons from the previous message
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Echo user's button selection as a message (so it appears in chat history)
+    try:
+        await callback.message.answer(value)
+    except Exception:
+        pass
+
+    # Forward the selection to the agent
+    reply = await _with_typing(
+        callback.message,
+        chat_service.handle_user_message(
+            user=user,
+            text=value,
+            telegram_message_id=callback.message.message_id,
+        ),
+    )
+    if reply.human_mode and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=True, lang=lang)
+    elif reply.show_operator_button and reply.session_id:
+        mode_markup = human_mode_keyboard(reply.session_id, human_mode=False, lang=lang)
+    else:
+        mode_markup = None
+    flow_markup = _flow_keyboard(reply.keyboard_options) if reply.keyboard_options else None
+
+    if reply.text:
+        await _answer_safe(
+            callback.message,
+            _format_source_reply(reply.text, "bot"),
+            reply_markup=flow_markup or mode_markup or chat_keyboard(lang),
+            parse_mode="HTML",
+        )
+    if reply.pdf_path:
+        await callback.message.answer_document(
+            FSInputFile(reply.pdf_path),
+            caption=_format_source_reply({"ru": "График платежей", "en": "Payment schedule", "uz": "To'lov jadvali"}.get(lang, "График платежей"), "bot"),
             reply_markup=mode_markup if mode_markup and not reply.text else chat_keyboard(lang),
         )
         try:
@@ -1011,6 +1098,106 @@ async def feedback(callback: CallbackQuery, chat_service: ChatService) -> None:
         if callback.message is not None:
             await callback.message.answer(texts["feedback_failed"])
         await callback.answer({"ru": "Ошибка.", "en": "Error.", "uz": "Xatolik."}[lang])
+
+
+@router.callback_query(F.data.startswith("session:"))
+async def session_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
+    """Handle session resume and new-session actions from InlineKeyboard."""
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+    )
+    lang = normalize_lang(user.language)
+    data = callback.data or ""
+
+    if data == "session:new":
+        await chat_service.start_new_session(user.id)
+        msg = {
+            "ru": (
+                "Новая сессия начата. Чем могу помочь?\n\n"
+                "• Кредит — ипотека, автокредит, микрозайм, образовательный\n"
+                "• Вклад — накопление или ежемесячный доход\n"
+                "• Карта — дебетовая или валютная\n"
+                "• Вопрос — условия, документы, отделения"
+            ),
+            "en": (
+                "New session started. How can I help?\n\n"
+                "• Loan — mortgage, auto, microloan, education\n"
+                "• Deposit — savings or monthly income\n"
+                "• Card — debit or FX\n"
+                "• Question — terms, documents, branches"
+            ),
+            "uz": (
+                "Yangi sessiya boshlandi. Qanday yordam bera olaman?\n\n"
+                "• Kredit — ipoteka, avtokredit, mikroqarz, ta'lim\n"
+                "• Omonat — jamg'arma yoki oylik daromad\n"
+                "• Karta — debet yoki valyuta\n"
+                "• Savol — shartlar, hujjatlar, filiallar"
+            ),
+        }[lang]
+        await callback.message.answer(msg, reply_markup=chat_keyboard(lang))
+        await callback.answer()
+        return
+
+    if data.startswith("session:resume:"):
+        session_id = data[len("session:resume:"):]
+        switched = await chat_service.switch_active_session(user.id, session_id)
+        if switched is None:
+            err = {
+                "ru": "Сессия не найдена или уже закрыта.",
+                "en": "Session not found or already closed.",
+                "uz": "Sessiya topilmadi yoki yopilgan.",
+            }[lang]
+            await callback.answer(err, show_alert=True)
+            return
+        no_title = {"ru": "Без названия", "en": "Untitled", "uz": "Nomsiz"}[lang]
+        title = switched.title or no_title
+        header = {
+            "ru": f"✅ Сессия «{title[:45]}» активна.\n\n📜 *Последние сообщения:*",
+            "en": f"✅ Session «{title[:45]}» is active.\n\n📜 *Recent messages:*",
+            "uz": f"✅ Sessiya «{title[:45]}» faol.\n\n📜 *Oxirgi xabarlar:*",
+        }[lang]
+
+        recent = await chat_service.get_recent_messages(switched.id, limit=10)
+        if recent:
+            lines = []
+            for m in recent:
+                if m.role == "user":
+                    prefix = "👤"
+                else:
+                    prefix = "🤖"
+                # Trim long messages
+                text = (m.text or "").strip()
+                if len(text) > 300:
+                    text = text[:297] + "…"
+                lines.append(f"{prefix} {text}")
+            history_block = "\n\n".join(lines)
+            full_msg = f"{header}\n\n{history_block}"
+        else:
+            full_msg = {
+                "ru": f"✅ Сессия «{title[:45]}» активна. Продолжайте — вся история сохранена.",
+                "en": f"✅ Session «{title[:45]}» is active. Continue — full history is saved.",
+                "uz": f"✅ Sessiya «{title[:45]}» faol. Davom eting — barcha tarix saqlangan.",
+            }[lang]
+
+        # Send in chunks if needed
+        for chunk_start in range(0, max(len(full_msg), 1), TELEGRAM_SAFE_CHUNK):
+            chunk = full_msg[chunk_start : chunk_start + TELEGRAM_SAFE_CHUNK]
+            is_last = (chunk_start + TELEGRAM_SAFE_CHUNK) >= len(full_msg)
+            await callback.message.answer(
+                chunk,
+                reply_markup=chat_keyboard(lang) if is_last else None,
+                parse_mode="Markdown",
+            )
+        await callback.answer()
+        return
+
+    await callback.answer()
 
 
 @router.message(F.location)

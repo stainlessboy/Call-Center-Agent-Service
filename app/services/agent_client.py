@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence
 
-from app.services.agent import Agent
+from app.agent import Agent, AgentTurnResult
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -30,7 +30,7 @@ class AgentClient:
         text: str,
         language: str | None = None,
         human_mode: bool = False,
-    ) -> str:
+    ) -> AgentTurnResult:
         return await self._agent.send_message(
             session_id=session_id,
             user_id=user_id,
