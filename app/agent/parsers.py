@@ -22,14 +22,14 @@ def _parse_amount(text: str) -> Optional[int]:
 
 
 def _parse_term_months(text: str) -> Optional[int]:
-    """Parse term from text, returns months."""
+    """Parse term from text, returns months. Supports years and months in ru/en/uz."""
     lower = text.lower().strip()
-    m = re.search(r"(\d+)\s*(лет|год|years?|г\.?|yil|months?|мес\.?|м\.?|oy)?", lower)
+    m = re.search(r"(\d+)\s*(лет|года?|years?|г\.?|yil|months?|мес\.?|м\.?|oy)?", lower)
     if not m:
         return None
     value = int(m.group(1))
-    unit = (m.group(2) or "").lower()
-    if any(u in unit for u in ("лет", "год", "year", "г.", "yil")):
+    unit = (m.group(2) or "").lower().rstrip(".")
+    if unit in ("лет", "год", "года", "year", "years", "г", "yil"):
         return value * 12
     return value  # assume months
 

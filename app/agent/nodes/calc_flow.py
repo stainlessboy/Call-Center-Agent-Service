@@ -19,6 +19,62 @@ from app.utils.pdf_generator import generate_amortization_pdf
 _agent_logger = _logging.getLogger(__name__)
 
 
+def _get_product_term_range(product: dict, category: str) -> tuple[int | None, int | None]:
+    """Extract (min_months, max_months) from product constraints."""
+    if category == "deposit":
+        schedule = product.get("rate_schedule") or []
+        terms = [e["term_months"] for e in schedule if e.get("term_months") is not None]
+        if terms:
+            return min(terms), max(terms)
+        return None, None
+
+    matrix = product.get("rate_matrix") or []
+    all_min = [e["term_min_months"] for e in matrix if e.get("term_min_months") is not None]
+    all_max = [e["term_max_months"] for e in matrix if e.get("term_max_months") is not None]
+    t_min = min(all_min) if all_min else None
+    t_max = max(all_max) if all_max else None
+    return t_min, t_max
+
+
+def _get_product_downpayment_range(product: dict) -> tuple[float | None, float | None]:
+    """Extract (min_pct, max_pct) for downpayment from rate_matrix."""
+    matrix = product.get("rate_matrix") or []
+    all_min = [e["downpayment_min_pct"] for e in matrix if e.get("downpayment_min_pct") is not None]
+    all_max = [e["downpayment_max_pct"] for e in matrix if e.get("downpayment_max_pct") is not None]
+    d_min = min(all_min) if all_min else None
+    d_max = max(all_max) if all_max else None
+    return d_min, d_max
+
+
+def _clamp_term(term_months: int, product: dict, category: str) -> tuple[int, bool]:
+    """Clamp term to product constraints. Returns (clamped_value, was_adjusted)."""
+    t_min, t_max = _get_product_term_range(product, category)
+
+    if category == "deposit":
+        schedule = product.get("rate_schedule") or []
+        available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
+        if available and term_months not in available:
+            closest = min(available, key=lambda t: abs(t - term_months))
+            return closest, True
+        return term_months, False
+
+    if t_min is not None and term_months < t_min:
+        return t_min, True
+    if t_max is not None and term_months > t_max:
+        return t_max, True
+    return term_months, False
+
+
+def _clamp_downpayment(dp: float, product: dict) -> tuple[float, bool]:
+    """Clamp downpayment to product constraints. Returns (clamped_value, was_adjusted)."""
+    d_min, d_max = _get_product_downpayment_range(product)
+    if d_min is not None and dp < d_min:
+        return d_min, True
+    if d_max is not None and dp > d_max:
+        return d_max, True
+    return dp, False
+
+
 def _lookup_credit_rate(product: dict, calc_slots: dict) -> float:
     """Find the best matching rate from rate_matrix for user's inputs."""
     rate_matrix = product.get("rate_matrix") or []
@@ -161,6 +217,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
 
     # Parse answer for current step
     parsed_value = False
+    adjustment_note = ""
     if calc_step == "amount":
         val = _parse_amount(user_text)
         if val is not None:
@@ -169,12 +226,26 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     elif calc_step == "term":
         val = _parse_term_months(user_text)
         if val is not None:
-            calc_slots["term_months"] = val
+            clamped, adjusted = _clamp_term(val, selected_product, category)
+            if adjusted:
+                t_min, t_max = _get_product_term_range(selected_product, category)
+                if category == "deposit":
+                    schedule = selected_product.get("rate_schedule") or []
+                    available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
+                    avail_str = ", ".join(str(t) for t in available)
+                    adjustment_note = at("term_adjusted_deposit", lang, user_val=val, new_val=clamped, available=avail_str)
+                else:
+                    adjustment_note = at("term_adjusted", lang, user_val=val, new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
+            calc_slots["term_months"] = clamped
             parsed_value = True
     elif calc_step == "downpayment":
         val = _parse_downpayment(user_text)
         if val is not None:
-            calc_slots["downpayment"] = val
+            clamped, adjusted = _clamp_downpayment(val, selected_product)
+            if adjusted:
+                d_min, d_max = _get_product_downpayment_range(selected_product)
+                adjustment_note = at("dp_adjusted", lang, user_val=f"{val:.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
+            calc_slots["downpayment"] = clamped
             parsed_value = True
 
     # Off-topic or unrecognised input during calc
@@ -214,7 +285,8 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         slot_key = "term_months" if step_key == "term" else step_key
         if slot_key not in calc_slots:
             new_dialog = {**dialog, "calc_step": step_key, "calc_slots": calc_slots}
-            return _finalize_turn(state, step_q, new_dialog)
+            msg = f"{adjustment_note}\n\n{step_q}" if adjustment_note else step_q
+            return _finalize_turn(state, msg, new_dialog)
 
     # All slots collected → generate result
     product_name = _localized_name(selected_product, lang) or selected_product.get("name") or "—"
@@ -237,6 +309,8 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             interest=interest_fmt,
             total=total_fmt,
         )
+        if adjustment_note:
+            answer = f"{adjustment_note}\n\n{answer}"
         lead_dialog = {
             **_default_dialog(),
             "flow": "calc_flow",
@@ -274,6 +348,8 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             rate=f"{rate_pct:.1f}",
             term=str(term_months),
         )
+    if adjustment_note:
+        answer = f"{adjustment_note}\n\n{answer}"
 
     lead_dialog = {
         **_default_dialog(),

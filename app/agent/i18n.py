@@ -50,14 +50,14 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "uz": "Qancha miqdorda kredit olishni rejalashtirmoqdasiz (so'mda)?",
     },
     "calc_term_years": {
-        "ru": "На какой срок? (укажите в годах)",
-        "en": "For what term? (specify in years)",
-        "uz": "Qancha muddatga? (yillarda ko'rsating)",
+        "ru": "На какой срок? (например: <b>10 лет</b> или <b>120 мес</b>)",
+        "en": "For what term? (e.g.: <b>10 years</b> or <b>120 months</b>)",
+        "uz": "Qancha muddatga? (masalan: <b>10 yil</b> yoki <b>120 oy</b>)",
     },
     "calc_term_months": {
-        "ru": "На какой срок? (укажите в месяцах)",
-        "en": "For what term? (specify in months)",
-        "uz": "Qancha muddatga? (oylarda ko'rsating)",
+        "ru": "На какой срок? (например: <b>36 мес</b> или <b>3 года</b>)",
+        "en": "For what term? (e.g.: <b>36 months</b> or <b>3 years</b>)",
+        "uz": "Qancha muddatga? (masalan: <b>36 oy</b> yoki <b>3 yil</b>)",
     },
     "calc_downpayment": {
         "ru": "Первоначальный взнос (в %)?",
@@ -191,6 +191,23 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "uz": "Boshlang'ich to'lovni tushunmadim. Foizni kiriting, masalan: <b>20</b>",
     },
     "hint_generic": {"ru": "Введите число.", "en": "Enter a number.", "uz": "Raqam kiriting."},
+
+    # ── Calc validation / adjustment ──────────────────────────────────────
+    "term_adjusted": {
+        "ru": "⚠️ Указанный срок ({user_val} мес.) не соответствует условиям продукта (от {t_min} до {t_max} мес.). Используем {new_val} мес.",
+        "en": "⚠️ The specified term ({user_val} mo.) doesn't match the product conditions ({t_min}–{t_max} mo.). Using {new_val} mo.",
+        "uz": "⚠️ Ko'rsatilgan muddat ({user_val} oy) mahsulot shartlariga mos emas ({t_min}–{t_max} oy). {new_val} oy qo'llanilmoqda.",
+    },
+    "term_adjusted_deposit": {
+        "ru": "⚠️ Срок {user_val} мес. недоступен для этого вклада. Доступные сроки: {available} мес. Используем {new_val} мес.",
+        "en": "⚠️ Term of {user_val} mo. is not available for this deposit. Available terms: {available} mo. Using {new_val} mo.",
+        "uz": "⚠️ {user_val} oy muddati bu omonat uchun mavjud emas. Mavjud muddatlar: {available} oy. {new_val} oy qo'llanilmoqda.",
+    },
+    "dp_adjusted": {
+        "ru": "⚠️ Указанный первоначальный взнос ({user_val}%) ниже минимального ({d_min}%). Используем {new_val}%.",
+        "en": "⚠️ The specified down payment ({user_val}%) is below the minimum ({d_min}%). Using {new_val}%.",
+        "uz": "⚠️ Ko'rsatilgan boshlang'ich to'lov ({user_val}%) minimal ({d_min}%)dan past. {new_val}% qo'llanilmoqda.",
+    },
 
     # ── Deposit result ────────────────────────────────────────────────────
     "deposit_result": {
