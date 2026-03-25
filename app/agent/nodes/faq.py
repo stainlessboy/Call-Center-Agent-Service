@@ -151,8 +151,11 @@ async def node_faq(state: BotState) -> dict:
         if flow:
             context_parts.append(f"Current flow: {flow}")
         if products:
-            names = ", ".join(p["name"] for p in products[:10])
-            context_parts.append(f"Products displayed: {names}")
+            numbered = ", ".join(f"{i+1}. {p['name']}" for i, p in enumerate(products[:10]))
+            context_parts.append(f"Products displayed: {numbered}")
+            context_parts.append(
+                "If the user sends a number (e.g. '2'), call select_product with the corresponding product name."
+            )
         if dialog.get("selected_product"):
             context_parts.append(f"Selected: {dialog['selected_product'].get('name')}")
         if dialog.get("category"):

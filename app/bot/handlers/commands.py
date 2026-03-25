@@ -740,26 +740,38 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         return
 
     if action == CURRENCY_RATES or "курс" in lower_norm:
-        rates = [
-            ("💵", "USD", "12 450", "12 650"),
-            ("💶", "EUR", "13 300", "13 650"),
-            ("₽", "RUB", "130", "145"),
-            ("🇰🇿", "KZT", "24", "30"),
-            ("💷", "GBP", "15 400", "15 900"),
-        ]
-        header_line = {
-            "ru": "Валюта   Покупка    Продажа",
-            "en": "Currency  Buy       Sell",
-            "uz": "Valyuta   Sotib ol. Sotish",
-        }[lang]
-        lines = [texts["rates_title"], "", header_line]
-        for icon, code, buy, sell in rates:
-            lines.append(f"{icon} {code:<3} {buy:>8} | {sell:<8}")
-        lines.append("")
-        lines.append(texts["rates_ref"])
+        from app.utils.cbu_rates import fetch_cbu_rates
 
-        rates_text = "<pre>" + "\n".join(lines) + "</pre>"
-        await message.answer(rates_text, reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
+        cbu_data = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
+        if not cbu_data:
+            await message.answer(texts["rates_ref"], reply_markup=main_menu_keyboard(lang))
+            return
+
+        date_str = cbu_data[0].get("date", "")
+        title = {
+            "ru": f"💱 Курс ЦБ Узбекистана на {date_str}:",
+            "en": f"💱 CBU exchange rates for {date_str}:",
+            "uz": f"💱 O'zbekiston MB kursi {date_str}:",
+        }[lang]
+
+        buttons: list[list[InlineKeyboardButton]] = []
+        for r in cbu_data:
+            nominal = r["nominal"]
+            nom_str = f"{nominal} " if str(nominal) != "1" else ""
+            diff = float(r["diff"]) if r["diff"] else 0
+            arrow = "📈" if diff > 0 else ("📉" if diff < 0 else "")
+            label = f"{r['icon']} {nom_str}{r['code']}  =  {r['rate']} сум {arrow}"
+            buttons.append([InlineKeyboardButton(text=label, callback_data=f"noop:{r['code']}")])
+
+        footer = {
+            "ru": "Источник: cbu.uz (курс ЦБ)",
+            "en": "Source: cbu.uz (CBU rate)",
+            "uz": "Manba: cbu.uz (MB kursi)",
+        }[lang]
+        buttons.append([InlineKeyboardButton(text=f"ℹ️ {footer}", callback_data="noop:info")])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(title, reply_markup=kb, parse_mode="HTML")
         return
 
     reply = await _with_typing(
@@ -796,6 +808,12 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
             os.remove(reply.pdf_path)
         except OSError:
             pass
+
+
+@router.callback_query(F.data.startswith("noop:"))
+async def noop_callback(callback: CallbackQuery) -> None:
+    """Non-clickable display buttons (currency rates, etc.)."""
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("flow:"))

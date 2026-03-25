@@ -47,7 +47,21 @@ async def get_branch_info() -> str:
 async def get_currency_info() -> str:
     """Get currency exchange rates. Use when user asks about USD, EUR, or currency rates."""
     lang = _REQUEST_LANGUAGE.get()
-    return at("currency_info", lang)
+    from app.utils.cbu_rates import fetch_cbu_rates
+
+    rates = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
+    if not rates:
+        return at("currency_info", lang)
+    lines = []
+    for r in rates:
+        nominal = r["nominal"]
+        nom_str = f"{nominal} " if str(nominal) != "1" else ""
+        diff = float(r["diff"]) if r["diff"] else 0
+        arrow = "↑" if diff > 0 else ("↓" if diff < 0 else "")
+        lines.append(f"{r['icon']} {nom_str}{r['code']} = {r['rate']} UZS {arrow}")
+    header = {"ru": "Курс ЦБ Узбекистана", "en": "CBU exchange rates", "uz": "O'zbekiston MB kursi"}[lang]
+    date_str = rates[0].get("date", "")
+    return f"{header} ({date_str}):\n" + "\n".join(lines)
 
 
 @lc_tool

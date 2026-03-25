@@ -400,7 +400,7 @@ class TestToolGetBranchInfo:
 class TestToolGetCurrencyInfo:
     def test_returns_currency_text(self):
         result = _run(get_currency_info.coroutine())
-        assert "курсы валют" in result.lower() or "AsakaBank" in result
+        assert "курс" in result.lower() or "USD" in result or "AsakaBank" in result
 
 
 class TestToolShowCreditMenu:

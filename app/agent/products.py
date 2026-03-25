@@ -158,10 +158,10 @@ async def _get_products_by_category(category: str) -> list[dict]:
 def _format_product_list_text(products: list[dict], category: str, lang: str = "ru") -> str:
     label = category_label(category, lang)
     lines = [at("product_list_header", lang, label=label)]
-    for p in products:
+    for i, p in enumerate(products, 1):
         rate = p.get("rate") or ""
         pname = _html.escape(_localized_name(p, lang))
-        line = f"• {pname}"
+        line = f"{i}. {pname}"
         if rate:
             line += f" — {rate}"
         lines.append(line)
@@ -272,8 +272,13 @@ def _format_product_card(product: dict, category: str, lang: str = "ru") -> str:
 
 
 def _find_product_by_name(user_text: str, products: list[dict]) -> Optional[dict]:
-    """Find product by exact, contains, or word-overlap match."""
+    """Find product by numeric index, exact, contains, or word-overlap match."""
     lower = user_text.lower().strip()
+    # Try numeric index first (e.g. "2" → second product)
+    if lower.isdigit() and products:
+        idx = int(lower) - 1  # 1-based to 0-based
+        if 0 <= idx < len(products):
+            return products[idx]
     for p in products:
         if p["name"].lower().strip() == lower:
             return p
