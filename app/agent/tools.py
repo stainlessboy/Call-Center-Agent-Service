@@ -77,6 +77,7 @@ async def get_products(category: str) -> str:
     Get list of bank products for a category.
     Categories: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
     Use when user asks about a specific product type.
+    Returns pre-formatted text — pass it to the user AS-IS.
     """
     lang = _REQUEST_LANGUAGE.get()
     products = await _get_products_by_category(category)
@@ -89,8 +90,9 @@ async def get_products(category: str) -> str:
 @lc_tool
 async def select_product(product_name: str) -> str:
     """
-    Show details for a specific product. Use when user selects a product by name.
+    Show details for a specific product. Use when user selects a product by name or number.
     The product_name should match one of the products currently displayed.
+    Returns pre-formatted HTML text — pass it to the user AS-IS, do not reformat.
     """
     lang = _REQUEST_LANGUAGE.get()
     dialog = _CURRENT_DIALOG.get()
