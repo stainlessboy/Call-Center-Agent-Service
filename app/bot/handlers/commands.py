@@ -134,6 +134,18 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip().lower()
 
 
+def _md_to_html(text: str) -> str:
+    """Convert common Markdown formatting to Telegram-compatible HTML."""
+    # Bold: **text** or __text__
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
+    # Italic: *text* or _text_ (but not inside HTML tags or words with underscores)
+    text = re.sub(r"(?<!\w)\*(?!\*)(.+?)(?<!\*)\*(?!\w)", r"<i>\1</i>", text)
+    # Inline code: `text`
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    return text
+
+
 def _format_source_reply(text: str, source: str, name: str | None = None) -> str:
     if not text:
         return text
@@ -144,7 +156,7 @@ def _format_source_reply(text: str, source: str, name: str | None = None) -> str
         if name:
             label = f"{label} ({name})"
         return f"{label}: {text}"
-    return text
+    return _md_to_html(text)
 
 
 def _display_user_alias(username: str | None, first_name: str | None, telegram_user_id: int) -> str:
