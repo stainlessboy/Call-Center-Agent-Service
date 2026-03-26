@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import wtforms
 from sqladmin import ModelView, action
-from sqladmin.filters import BooleanFilter, AllUniqueStringValuesFilter
+from sqladmin.filters import BooleanFilter, AllUniqueStringValuesFilter, StaticValuesFilter
 from sqlalchemy import func as sa_func, select
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -30,6 +30,30 @@ from app.db.session import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 _DATETIME_FORMAT = "%d.%m.%Y %H:%M"
+
+
+class _RuBooleanFilter(BooleanFilter):
+    """BooleanFilter with Russian labels."""
+
+    async def lookups(self, request, model, run_query):
+        return [("all", "Все"), ("true", "Да"), ("false", "Нет")]
+
+
+class _RuAllUniqueFilter(AllUniqueStringValuesFilter):
+    """AllUniqueStringValuesFilter with Russian 'Все' instead of 'All'."""
+
+    async def lookups(self, request, model, run_query):
+        result = await super().lookups(request, model, run_query)
+        if result and result[0] == ("", "All"):
+            result[0] = ("", "Все")
+        return result
+
+
+class _RuStaticValuesFilter(StaticValuesFilter):
+    """StaticValuesFilter with Russian 'Все' instead of 'All'."""
+
+    async def lookups(self, request, model, run_query):
+        return [("", "Все")] + self.values
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +149,8 @@ class UserAdmin(ModelView, model=User):
     column_list = [User.id, User.telegram_user_id, User.username, User.language, User.created_at, User.is_active]
     column_searchable_list = [User.telegram_user_id, User.username, User.first_name, User.last_name, User.phone]
     column_filters = [
-        AllUniqueStringValuesFilter(User.language, title="Язык"),
-        BooleanFilter(User.is_active, title="Активен"),
+        _RuAllUniqueFilter(User.language, title="Язык"),
+        _RuBooleanFilter(User.is_active, title="Активен"),
     ]
     column_sortable_list = [User.id, User.telegram_user_id, User.created_at]
     column_default_sort = ("id", True)
@@ -185,9 +209,15 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.closed_reason,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(ChatSession.status, title="Статус"),
-        AllUniqueStringValuesFilter(ChatSession.closed_reason, title="Причина закрытия"),
-        BooleanFilter(ChatSession.human_mode, title="Режим оператора"),
+        _RuStaticValuesFilter(
+            ChatSession.status, title="Статус",
+            values=[("active", "Активна"), ("ended", "Завершена")],
+        ),
+        _RuStaticValuesFilter(
+            ChatSession.closed_reason, title="Причина закрытия",
+            values=[("manual_end", "Закрыта вручную"), ("timeout", "Тайм-аут")],
+        ),
+        _RuBooleanFilter(ChatSession.human_mode, title="Режим оператора"),
     ]
     column_searchable_list = [ChatSession.id]
     column_sortable_list = [ChatSession.id, ChatSession.started_at, ChatSession.last_activity_at]
@@ -321,8 +351,11 @@ class MessageAdmin(ModelView, model=Message):
     column_list = [Message.id, Message.session, Message.role, Message.created_at, Message.latency_ms, Message.error_code]
     column_searchable_list = [Message.session_id, Message.text, Message.role]
     column_filters = [
-        AllUniqueStringValuesFilter(Message.role, title="Роль"),
-        AllUniqueStringValuesFilter(Message.error_code, title="Код ошибки"),
+        _RuStaticValuesFilter(
+            Message.role, title="Роль",
+            values=[("user", "Пользователь"), ("assistant", "Ассистент"), ("operator", "Оператор"), ("system", "Система")],
+        ),
+        _RuAllUniqueFilter(Message.error_code, title="Код ошибки"),
     ]
     column_sortable_list = [Message.id, Message.created_at]
     column_default_sort = ("created_at", True)
@@ -363,8 +396,8 @@ class BranchAdmin(ModelView, model=Branch):
     column_details_exclude_list = []
     column_searchable_list = [Branch.name, Branch.region, Branch.district, Branch.address, Branch.phone]
     column_filters = [
-        AllUniqueStringValuesFilter(Branch.region, title="Регион"),
-        AllUniqueStringValuesFilter(Branch.district, title="Район"),
+        _RuAllUniqueFilter(Branch.region, title="Регион"),
+        _RuAllUniqueFilter(Branch.district, title="Район"),
     ]
     column_sortable_list = [Branch.id, Branch.name, Branch.region]
     column_default_sort = ("id", True)
@@ -478,9 +511,12 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         CreditProductOffer.rate_condition_text, CreditProductOffer.collateral_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(CreditProductOffer.section_name, title="Раздел"),
-        AllUniqueStringValuesFilter(CreditProductOffer.income_type, title="Тип дохода"),
-        BooleanFilter(CreditProductOffer.is_active, title="Активен"),
+        _RuAllUniqueFilter(CreditProductOffer.section_name, title="Раздел"),
+        _RuStaticValuesFilter(
+            CreditProductOffer.income_type, title="Тип дохода",
+            values=[("payroll", "Зарплатный проект"), ("official", "Официальный доход"), ("no_official", "Без офиц. дохода")],
+        ),
+        _RuBooleanFilter(CreditProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         CreditProductOffer.id, CreditProductOffer.section_name,
@@ -674,11 +710,11 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         DepositProductOffer.notes_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(DepositProductOffer.currency_code, title="Валюта"),
-        BooleanFilter(DepositProductOffer.topup_allowed, title="Пополнение"),
-        BooleanFilter(DepositProductOffer.payout_monthly_available, title="Ежемесячная выплата"),
-        BooleanFilter(DepositProductOffer.payout_end_available, title="Выплата в конце"),
-        BooleanFilter(DepositProductOffer.is_active, title="Активен"),
+        _RuAllUniqueFilter(DepositProductOffer.currency_code, title="Валюта"),
+        _RuBooleanFilter(DepositProductOffer.topup_allowed, title="Пополнение"),
+        _RuBooleanFilter(DepositProductOffer.payout_monthly_available, title="Ежемесячная выплата"),
+        _RuBooleanFilter(DepositProductOffer.payout_end_available, title="Выплата в конце"),
+        _RuBooleanFilter(DepositProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         DepositProductOffer.id, DepositProductOffer.service_name,
@@ -818,8 +854,18 @@ class LeadAdmin(ModelView, model=Lead):
         Lead.contact_name, Lead.contact_phone,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(Lead.status, title="Статус"),
-        AllUniqueStringValuesFilter(Lead.product_category, title="Категория продукта"),
+        _RuStaticValuesFilter(
+            Lead.status, title="Статус",
+            values=[("new", "Новый"), ("in_progress", "В работе"), ("done", "Завершён"), ("cancelled", "Отменён")],
+        ),
+        _RuStaticValuesFilter(
+            Lead.product_category, title="Категория продукта",
+            values=[
+                ("mortgage", "Ипотека"), ("autoloan", "Автокредит"),
+                ("microloan", "Микрозайм"), ("education_credit", "Образовательный кредит"),
+                ("deposit", "Вклад"), ("debit_card", "Дебетовая карта"), ("fx_card", "Валютная карта"),
+            ],
+        ),
     ]
     column_sortable_list = [Lead.id, Lead.created_at, Lead.status]
     column_default_sort = ("created_at", True)
@@ -873,12 +919,12 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         CardProductOffer.annual_fee_text, CardProductOffer.issuance_time_text,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(CardProductOffer.card_network, title="Платёжная сеть"),
-        AllUniqueStringValuesFilter(CardProductOffer.currency_code, title="Валюта"),
-        BooleanFilter(CardProductOffer.is_fx_card, title="Валютная карта"),
-        BooleanFilter(CardProductOffer.payroll_supported, title="Зарплатная"),
-        BooleanFilter(CardProductOffer.issue_fee_free, title="Бесплатный выпуск"),
-        BooleanFilter(CardProductOffer.is_active, title="Активен"),
+        _RuAllUniqueFilter(CardProductOffer.card_network, title="Платёжная сеть"),
+        _RuAllUniqueFilter(CardProductOffer.currency_code, title="Валюта"),
+        _RuBooleanFilter(CardProductOffer.is_fx_card, title="Валютная карта"),
+        _RuBooleanFilter(CardProductOffer.payroll_supported, title="Зарплатная"),
+        _RuBooleanFilter(CardProductOffer.issue_fee_free, title="Бесплатный выпуск"),
+        _RuBooleanFilter(CardProductOffer.is_active, title="Активен"),
     ]
     column_sortable_list = [
         CardProductOffer.id, CardProductOffer.service_name, CardProductOffer.source_row_order,
