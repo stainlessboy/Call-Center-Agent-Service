@@ -239,6 +239,36 @@ class BranchAdmin(ModelView, model=Branch):
     column_sortable_list = [Branch.id, Branch.name, Branch.region]
     column_default_sort = ("id", True)
 
+    _REGION_CHOICES = [
+        ("Ташкент", "Ташкент"),
+        ("Ташкентская область", "Ташкентская область"),
+        ("Самарканд", "Самарканд"),
+        ("Бухара", "Бухара"),
+        ("Андижан", "Андижан"),
+        ("Фергана", "Фергана"),
+        ("Наманган", "Наманган"),
+        ("Хорезм", "Хорезм"),
+        ("Навои", "Навои"),
+        ("Кашкадарья", "Кашкадарья"),
+        ("Сурхандарья", "Сурхандарья"),
+        ("Сырдарья", "Сырдарья"),
+        ("Джизак", "Джизак"),
+        ("Каракалпакстан", "Каракалпакстан"),
+    ]
+
+    form_overrides = {
+        "region": wtforms.SelectField,
+    }
+
+    async def scaffold_form(self, rules=None):
+        form_class = await super().scaffold_form(rules)
+        form_class.region = wtforms.SelectField(
+            "Регион",
+            choices=self._REGION_CHOICES,
+            description="Область / город республиканского значения",
+        )
+        return form_class
+
 
 # ---------------------------------------------------------------------------
 # FaqItem
