@@ -29,6 +29,8 @@ from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
+_DATETIME_FORMAT = "%d.%m.%Y %H:%M"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,23 +60,46 @@ async def _send_telegram_message_async(token: str, chat_id: int, text: str) -> t
         return False, str(exc)
 
 
+def _fmt_dt(dt: Any) -> str:
+    """Format datetime for display in admin list columns."""
+    if isinstance(dt, datetime):
+        return dt.strftime(_DATETIME_FORMAT)
+    return str(dt) if dt else ""
+
+
 # ---------------------------------------------------------------------------
 # User
 # ---------------------------------------------------------------------------
 
 class UserAdmin(ModelView, model=User):
-    name = "User"
-    name_plural = "Users"
+    name = "Пользователь"
+    name_plural = "Пользователи"
     icon = "fa-solid fa-user"
 
     column_list = [User.id, User.telegram_user_id, User.username, User.language, User.created_at, User.is_active]
     column_searchable_list = [User.telegram_user_id, User.username, User.first_name, User.last_name, User.phone]
     column_filters = [
-        AllUniqueStringValuesFilter(User.language, title="Language"),
-        BooleanFilter(User.is_active, title="Active"),
+        AllUniqueStringValuesFilter(User.language, title="Язык"),
+        BooleanFilter(User.is_active, title="Активен"),
     ]
     column_sortable_list = [User.id, User.telegram_user_id, User.created_at]
     column_default_sort = ("id", True)
+
+    column_labels = {
+        "id": "ID",
+        "telegram_user_id": "Telegram ID",
+        "username": "Имя пользователя",
+        "first_name": "Имя",
+        "last_name": "Фамилия",
+        "phone": "Телефон",
+        "language": "Язык",
+        "created_at": "Дата регистрации",
+        "is_active": "Активен",
+    }
+
+    column_formatters = {
+        User.created_at: lambda m, _: _fmt_dt(m.created_at),
+    }
 
     @action(
         name="delete_with_related",
@@ -99,8 +124,8 @@ class UserAdmin(ModelView, model=User):
 # ---------------------------------------------------------------------------
 
 class ChatSessionAdmin(ModelView, model=ChatSession):
-    name = "Chat Session"
-    name_plural = "Chat Sessions"
+    name = "Сессия чата"
+    name_plural = "Сессии чатов"
     icon = "fa-solid fa-comments"
 
     column_list = [
@@ -111,9 +136,9 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.closed_reason,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(ChatSession.status, title="Status"),
-        AllUniqueStringValuesFilter(ChatSession.closed_reason, title="Closed Reason"),
-        BooleanFilter(ChatSession.human_mode, title="Human Mode"),
+        AllUniqueStringValuesFilter(ChatSession.status, title="Статус"),
+        AllUniqueStringValuesFilter(ChatSession.closed_reason, title="Причина закрытия"),
+        BooleanFilter(ChatSession.human_mode, title="Режим оператора"),
     ]
     column_searchable_list = [ChatSession.id]
     column_sortable_list = [ChatSession.id, ChatSession.started_at, ChatSession.last_activity_at]
@@ -128,6 +153,29 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     ]
 
     form_excluded_columns = [ChatSession.messages]
+
+    column_labels = {
+        "id": "ID сессии",
+        "user": "Пользователь",
+        "title": "Заголовок",
+        "status": "Статус",
+        "human_mode": "Режим оператора",
+        "human_mode_since": "В режиме оператора с",
+        "assigned_operator_id": "ID оператора",
+        "started_at": "Начало",
+        "ended_at": "Завершение",
+        "last_activity_at": "Последняя активность",
+        "feedback_rating": "Оценка",
+        "feedback_comment": "Комментарий",
+        "closed_reason": "Причина закрытия",
+        "messages": "Сообщения",
+    }
+
+    column_formatters = {
+        ChatSession.started_at: lambda m, _: _fmt_dt(m.started_at),
+        ChatSession.ended_at: lambda m, _: _fmt_dt(m.ended_at),
+        ChatSession.last_activity_at: lambda m, _: _fmt_dt(m.last_activity_at),
+    }
 
     async def scaffold_form(self, rules=None):
         form_class = await super().scaffold_form(rules)
@@ -207,18 +255,35 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
 # ---------------------------------------------------------------------------
 
 class MessageAdmin(ModelView, model=Message):
-    name = "Message"
-    name_plural = "Messages"
+    name = "Сообщение"
+    name_plural = "Сообщения"
     icon = "fa-solid fa-envelope"
 
     column_list = [Message.id, Message.session, Message.role, Message.created_at, Message.latency_ms, Message.error_code]
     column_searchable_list = [Message.session_id, Message.text, Message.role]
     column_filters = [
-        AllUniqueStringValuesFilter(Message.role, title="Role"),
-        AllUniqueStringValuesFilter(Message.error_code, title="Error Code"),
+        AllUniqueStringValuesFilter(Message.role, title="Роль"),
+        AllUniqueStringValuesFilter(Message.error_code, title="Код ошибки"),
     ]
     column_sortable_list = [Message.id, Message.created_at]
     column_default_sort = ("created_at", True)
+
+    column_labels = {
+        "id": "ID",
+        "session": "Сессия",
+        "session_id": "ID сессии",
+        "role": "Роль",
+        "text": "Текст",
+        "telegram_message_id": "Telegram ID сообщения",
+        "created_at": "Дата создания",
+        "latency_ms": "Задержка (мс)",
+        "agent_model": "Модель агента",
+        "error_code": "Код ошибки",
+    }
+
+    column_formatters = {
+        Message.created_at: lambda m, _: _fmt_dt(m.created_at),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +299,32 @@ class BranchAdmin(ModelView, model=Branch):
     column_details_exclude_list = []
     column_searchable_list = [Branch.name, Branch.region, Branch.district, Branch.address, Branch.phone]
     column_filters = [
-        AllUniqueStringValuesFilter(Branch.region, title="Region"),
-        AllUniqueStringValuesFilter(Branch.district, title="District"),
+        AllUniqueStringValuesFilter(Branch.region, title="Регион"),
+        AllUniqueStringValuesFilter(Branch.district, title="Район"),
     ]
     column_sortable_list = [Branch.id, Branch.name, Branch.region]
     column_default_sort = ("id", True)
+
+    column_labels = {
+        "id": "ID",
+        "name": "Название",
+        "region": "Регион",
+        "district": "Район",
+        "address": "Адрес",
+        "landmarks": "Ориентиры",
+        "metro": "Метро",
+        "phone": "Телефон",
+        "hours": "Время работы",
+        "weekend": "Выходные",
+        "inn": "ИНН",
+        "mfo": "МФО",
+        "postal_index": "Почтовый индекс",
+        "uzcard_accounts": "Счета Uzcard",
+        "humo_accounts": "Счета HUMO",
+        "latitude": "Широта",
+        "longitude": "Долгота",
+        "created_at": "Дата создания",
+    }
 
     _REGION_CHOICES = [
         ("Ташкент", "Ташкент"),
@@ -289,6 +375,21 @@ class FaqItemAdmin(ModelView, model=FaqItem):
     column_sortable_list = [FaqItem.id, FaqItem.created_at]
     column_default_sort = ("id", True)
 
+    column_labels = {
+        "id": "ID",
+        "question_ru": "Вопрос (RU)",
+        "answer_ru": "Ответ (RU)",
+        "question_en": "Вопрос (EN)",
+        "answer_en": "Ответ (EN)",
+        "question_uz": "Вопрос (UZ)",
+        "answer_uz": "Ответ (UZ)",
+        "created_at": "Дата создания",
+    }
+
+    column_formatters = {
+        FaqItem.created_at: lambda m, _: _fmt_dt(m.created_at),
+    }
+
 
 # ---------------------------------------------------------------------------
 # CreditProductOffer
@@ -334,6 +435,7 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
     ]
 
     column_labels = {
+        "id": "ID",
         "section_name": "Раздел", "service_name": "Название продукта",
         "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
         "income_type": "Тип дохода", "rate_min_pct": "Ставка мин. %",
@@ -522,6 +624,7 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
     ]
 
     column_labels = {
+        "id": "ID",
         "service_name": "Название вклада",
         "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
         "currency_code": "Валюта",
@@ -640,11 +743,30 @@ class LeadAdmin(ModelView, model=Lead):
         Lead.contact_name, Lead.contact_phone,
     ]
     column_filters = [
-        AllUniqueStringValuesFilter(Lead.status, title="Status"),
-        AllUniqueStringValuesFilter(Lead.product_category, title="Product Category"),
+        AllUniqueStringValuesFilter(Lead.status, title="Статус"),
+        AllUniqueStringValuesFilter(Lead.product_category, title="Категория продукта"),
     ]
     column_sortable_list = [Lead.id, Lead.created_at, Lead.status]
     column_default_sort = ("created_at", True)
+
+    column_labels = {
+        "id": "ID",
+        "session_id": "ID сессии",
+        "telegram_user_id": "Telegram ID",
+        "product_category": "Категория продукта",
+        "product_name": "Название продукта",
+        "amount": "Сумма",
+        "term_months": "Срок (мес.)",
+        "rate_pct": "Ставка %",
+        "contact_name": "Имя контакта",
+        "contact_phone": "Телефон контакта",
+        "status": "Статус",
+        "created_at": "Дата создания",
+    }
+
+    column_formatters = {
+        Lead.created_at: lambda m, _: _fmt_dt(m.created_at),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +813,7 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
     ]
 
     column_labels = {
+        "id": "ID",
         "service_name": "Название карты",
         "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
         "card_network": "Платёжная сеть",
