@@ -68,6 +68,52 @@ def _fmt_dt(dt: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Value translation maps
+# ---------------------------------------------------------------------------
+
+_STATUS_MAP: dict[str, str] = {
+    "active": "Активна",
+    "ended": "Завершена",
+}
+
+_CLOSED_REASON_MAP: dict[str, str] = {
+    "manual_end": "Закрыта вручную",
+    "timeout": "Тайм-аут",
+}
+
+_ROLE_MAP: dict[str, str] = {
+    "user": "Пользователь",
+    "assistant": "Ассистент",
+    "operator": "Оператор",
+    "system": "Система",
+}
+
+_INCOME_TYPE_MAP: dict[str, str] = {
+    "payroll": "Зарплатный проект",
+    "official": "Официальный доход",
+    "no_official": "Без офиц. дохода",
+    "": "Для всех",
+}
+
+_PRODUCT_CATEGORY_MAP: dict[str, str] = {
+    "mortgage": "Ипотека",
+    "autoloan": "Автокредит",
+    "microloan": "Микрозайм",
+    "education_credit": "Образовательный кредит",
+    "deposit": "Вклад",
+    "debit_card": "Дебетовая карта",
+    "fx_card": "Валютная карта",
+}
+
+_LEAD_STATUS_MAP: dict[str, str] = {
+    "new": "Новый",
+    "in_progress": "В работе",
+    "done": "Завершён",
+    "cancelled": "Отменён",
+}
+
+
+# ---------------------------------------------------------------------------
 # User
 # ---------------------------------------------------------------------------
 
@@ -98,6 +144,9 @@ class UserAdmin(ModelView, model=User):
     }
 
     column_formatters = {
+        User.created_at: lambda m, _: _fmt_dt(m.created_at),
+    }
+    column_formatters_detail = {
         User.created_at: lambda m, _: _fmt_dt(m.created_at),
     }
 
@@ -175,6 +224,16 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.started_at: lambda m, _: _fmt_dt(m.started_at),
         ChatSession.ended_at: lambda m, _: _fmt_dt(m.ended_at),
         ChatSession.last_activity_at: lambda m, _: _fmt_dt(m.last_activity_at),
+        ChatSession.status: lambda m, _: _STATUS_MAP.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
+        ChatSession.closed_reason: lambda m, _: _CLOSED_REASON_MAP.get(m.closed_reason, m.closed_reason or ""),
+    }
+    column_formatters_detail = {
+        ChatSession.started_at: lambda m, _: _fmt_dt(m.started_at),
+        ChatSession.ended_at: lambda m, _: _fmt_dt(m.ended_at),
+        ChatSession.last_activity_at: lambda m, _: _fmt_dt(m.last_activity_at),
+        ChatSession.human_mode_since: lambda m, _: _fmt_dt(m.human_mode_since),
+        ChatSession.status: lambda m, _: _STATUS_MAP.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
+        ChatSession.closed_reason: lambda m, _: _CLOSED_REASON_MAP.get(m.closed_reason, m.closed_reason or ""),
     }
 
     async def scaffold_form(self, rules=None):
@@ -283,6 +342,11 @@ class MessageAdmin(ModelView, model=Message):
 
     column_formatters = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),
+        Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
+    }
+    column_formatters_detail = {
+        Message.created_at: lambda m, _: _fmt_dt(m.created_at),
+        Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
     }
 
 
@@ -427,6 +491,15 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         (CreditProductOffer.source_row_order, False),
         (CreditProductOffer.rate_order, False),
     ]
+
+    column_details_exclude_list = [CreditProductOffer.source_path]
+
+    column_formatters = {
+        CreditProductOffer.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
+    }
+    column_formatters_detail = {
+        CreditProductOffer.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
+    }
 
     form_excluded_columns = [
         CreditProductOffer.source_path,
@@ -617,6 +690,8 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         (DepositProductOffer.source_row_order, False),
     ]
 
+    column_details_exclude_list = [DepositProductOffer.source_path]
+
     form_excluded_columns = [
         DepositProductOffer.source_path,
         DepositProductOffer.created_at,
@@ -766,6 +841,13 @@ class LeadAdmin(ModelView, model=Lead):
 
     column_formatters = {
         Lead.created_at: lambda m, _: _fmt_dt(m.created_at),
+        Lead.status: lambda m, _: _LEAD_STATUS_MAP.get(m.status, m.status),
+        Lead.product_category: lambda m, _: _PRODUCT_CATEGORY_MAP.get(m.product_category or "", m.product_category or ""),
+    }
+    column_formatters_detail = {
+        Lead.created_at: lambda m, _: _fmt_dt(m.created_at),
+        Lead.status: lambda m, _: _LEAD_STATUS_MAP.get(m.status, m.status),
+        Lead.product_category: lambda m, _: _PRODUCT_CATEGORY_MAP.get(m.product_category or "", m.product_category or ""),
     }
 
 
@@ -805,6 +887,8 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         (CardProductOffer.source_row_order, False),
         (CardProductOffer.service_name, False),
     ]
+
+    column_details_exclude_list = [CardProductOffer.source_path]
 
     form_excluded_columns = [
         CardProductOffer.source_path,
