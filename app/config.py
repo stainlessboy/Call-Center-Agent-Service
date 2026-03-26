@@ -27,6 +27,10 @@ class Settings:
     admin_username: str
     admin_password: str
     admin_secret_key: str
+    agent_timeout_seconds: float
+    max_message_length: int
+    db_pool_size: int
+    db_pool_max_overflow: int
 
 
 def _parse_operator_ids(raw: str | None) -> list[int]:
@@ -89,4 +93,8 @@ def get_settings() -> Settings:
         admin_username=os.getenv("ADMIN_USERNAME", "admin").strip(),
         admin_password=os.getenv("ADMIN_PASSWORD", "admin").strip(),
         admin_secret_key=os.getenv("ADMIN_SECRET_KEY", "change-me-in-production").strip(),
+        agent_timeout_seconds=float(os.getenv("AGENT_TIMEOUT_SECONDS", "25").strip()),
+        max_message_length=_parse_positive_int(os.getenv("MAX_MESSAGE_LENGTH"), default=4000),
+        db_pool_size=_parse_positive_int(os.getenv("DB_POOL_SIZE"), default=10),
+        db_pool_max_overflow=_parse_positive_int(os.getenv("DB_POOL_MAX_OVERFLOW"), default=20),
     )

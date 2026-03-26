@@ -26,13 +26,15 @@ def generate_amortization_pdf(
     annual_rate_pct: float,
     term_months: int,
     borrower_name: str = "",
-    output_dir: str = "/tmp",
+    output_dir: str | None = None,
 ) -> str:
     """
     Generate an amortization schedule PDF and return the file path.
     Returns a path like /tmp/schedule_XXXX.pdf.
     If fpdf2 is not installed, returns a .txt fallback.
     """
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp(prefix="bankbot_pdf_")
     if not _FPDF_AVAILABLE:
         return _generate_text_fallback(product_name, principal, annual_rate_pct, term_months, output_dir)
 

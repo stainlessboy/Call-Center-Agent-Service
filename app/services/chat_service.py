@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.i18n import normalize_lang, t
+from app.config import get_settings
 from app.db.models import Branch, ChatSession, Message, SessionStatus, User
 from app.services.agent_client import AgentClient
 from app.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
@@ -242,7 +243,7 @@ class ChatService:
                     text=text,
                     language=normalize_lang(user.language),
                 ),
-                timeout=25.0,
+                timeout=get_settings().agent_timeout_seconds,
             )
             agent_text = turn_result.text
             agent_keyboard = turn_result.keyboard_options

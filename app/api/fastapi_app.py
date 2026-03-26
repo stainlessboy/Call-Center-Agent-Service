@@ -12,7 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.bot.i18n import normalize_lang, t
 from app.bot.handlers import commands as command_handlers
@@ -156,8 +156,18 @@ WEBHOOK_PATH = get_settings().webhook_path
 
 
 @app.get("/health")
-async def healthcheck() -> dict[str, bool]:
-    return {"ok": True}
+async def healthcheck() -> dict:
+    status: dict = {"ok": True}
+    # Check database connectivity
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        status["db"] = True
+    except Exception as exc:
+        status["ok"] = False
+        status["db"] = False
+        status["db_error"] = str(exc)
+    return status
 
 
 @app.post(WEBHOOK_PATH)

@@ -13,6 +13,7 @@ from sqlalchemy import func as sa_func, select
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
+from app.config import get_settings
 from app.db.models import (
     Branch,
     CardProductOffer,
@@ -47,7 +48,7 @@ async def _next_row_order(model_class: Any, **filters: Any) -> int:
 async def _send_telegram_message_async(token: str, chat_id: int, text: str) -> tuple[bool, str | None]:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        async with httpx.AsyncClient(verify=False, timeout=10) as client:
+        async with httpx.AsyncClient(timeout=get_settings().agent_timeout_seconds) as client:
             resp = await client.post(url, json={"chat_id": chat_id, "text": text})
             data = resp.json()
         if not data.get("ok"):

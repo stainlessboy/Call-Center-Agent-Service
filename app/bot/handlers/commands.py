@@ -588,6 +588,9 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         return
 
     raw_text = message.text
+    max_len = get_settings().max_message_length
+    if len(raw_text) > max_len:
+        raw_text = raw_text[:max_len]
     lower_norm = _normalize_for_match(raw_text)
     user = await chat_service.get_or_create_user(
         telegram_user_id=tg_user.id,
