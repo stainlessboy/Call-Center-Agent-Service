@@ -197,14 +197,14 @@ async def get_language_distribution(session: AsyncSession) -> list[dict]:
     """User language distribution."""
     stmt = (
         select(
-            func.coalesce(User.language, "unknown").label("language"),
+            User.language,
             func.count().label("count"),
         )
-        .group_by(func.coalesce(User.language, "unknown"))
+        .group_by(User.language)
         .order_by(func.count().desc())
     )
     rows = (await session.execute(stmt)).all()
-    return [{"language": r.language, "count": r.count} for r in rows]
+    return [{"language": r.language or "unknown", "count": r.count} for r in rows]
 
 
 async def get_session_stats(session: AsyncSession) -> dict:
