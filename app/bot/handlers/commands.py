@@ -1123,13 +1123,20 @@ async def feedback(callback: CallbackQuery, chat_service: ChatService) -> None:
 
     ok = await chat_service.record_feedback(session_id=session_id, rating=rating)
     texts = _user_language_text(lang)
+    stars = "⭐" * rating
     if ok:
         if callback.message is not None:
-            await callback.message.answer(texts["feedback_saved"])
+            await callback.message.edit_text(
+                f"{texts['feedback_saved']} {stars}",
+                reply_markup=None,
+            )
         await callback.answer({"ru": "Спасибо!", "en": "Thank you!", "uz": "Rahmat!"}[lang])
     else:
         if callback.message is not None:
-            await callback.message.answer(texts["feedback_failed"])
+            await callback.message.edit_text(
+                texts["feedback_failed"],
+                reply_markup=None,
+            )
         await callback.answer({"ru": "Ошибка.", "en": "Error.", "uz": "Xatolik."}[lang])
 
 

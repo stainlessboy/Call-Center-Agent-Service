@@ -253,7 +253,6 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         _RuBooleanFilter(ChatSession.human_mode, title="Режим оператора"),
     ]
     column_searchable_list = [ChatSession.id]
-    search_placeholder = "Поиск по ID сессии или тексту сообщений..."
     column_sortable_list = [ChatSession.id, ChatSession.started_at, ChatSession.last_activity_at]
     column_default_sort = ("started_at", True)
 
@@ -304,6 +303,9 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
 
     def list_query(self, request):
         return super().list_query(request).options(selectinload(ChatSession.messages))
+
+    def search_placeholder(self):
+        return "ID сессии или текст сообщений..."
 
     def search_query(self, stmt, term):
         return stmt.outerjoin(Message, Message.session_id == ChatSession.id).filter(
