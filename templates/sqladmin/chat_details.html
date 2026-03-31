@@ -54,7 +54,7 @@
         .chat-msg--user      { align-self: flex-end; }
         .chat-msg--assistant  { align-self: flex-start; }
         .chat-msg--operator   { align-self: flex-start; }
-        .chat-msg--system     { align-self: center; max-width: 90%; }
+        .chat-msg--system     { align-self: flex-start; }
 
         .chat-bubble {
           padding: .6rem .9rem;
@@ -73,22 +73,26 @@
         .chat-msg--assistant .chat-bubble {
           background: #fff;
           color: #1e293b;
-          border: 1px solid #e2e8f0;
+          border: 1px solid #cbd5e1;
           border-bottom-left-radius: .2rem;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08);
         }
         .chat-msg--operator .chat-bubble {
-          background: #fff3cd;
-          color: #664d03;
-          border: 1px solid #ffecb5;
+          background: #fffbeb;
+          color: #78350f;
+          border: 1px solid #fbbf24;
           border-bottom-left-radius: .2rem;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08);
         }
         .chat-msg--system .chat-bubble {
-          background: #e2e8f0;
-          color: #64748b;
-          font-size: .8rem;
-          text-align: center;
-          border-radius: .5rem;
+          background: #f1f5f9;
+          color: #475569;
+          border: 1px solid #cbd5e1;
+          border-radius: .75rem;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08);
         }
+        .chat-bubble strong, .chat-bubble b { font-weight: 600; }
+        .chat-bubble em, .chat-bubble i { font-style: italic; }
 
         .chat-meta {
           display: flex;
@@ -101,7 +105,7 @@
         .chat-msg--user .chat-meta      { justify-content: flex-end; color: #206bc4; }
         .chat-msg--assistant .chat-meta  { color: #475569; }
         .chat-msg--operator .chat-meta   { color: #b45309; }
-        .chat-msg--system .chat-meta     { justify-content: center; color: #94a3b8; }
+        .chat-msg--system .chat-meta     { color: #64748b; }
 
         .chat-time {
           font-weight: 400;
@@ -310,7 +314,7 @@
                     <span class="chat-time">{{ msg.created_at.strftime('%H:%M') }}</span>
                     {% endif %}
                   </div>
-                  <div class="chat-bubble">{{ msg.text or '' }}</div>
+                  <div class="chat-bubble">{{ msg.text|default('',true)|e|replace('&lt;b&gt;','<strong>')|replace('&lt;/b&gt;','</strong>')|replace('&lt;i&gt;','<em>')|replace('&lt;/i&gt;','</em>')|safe }}</div>
                 </div>
               {% endfor %}
             {% endif %}
@@ -393,6 +397,16 @@ url=model_view._url_for_action(request, custom_action) + '?pks=' + (get_object_i
 {% endfor %}
 
 <script>
+  // Format markdown-like text in chat bubbles
+  document.querySelectorAll('.chat-bubble').forEach(function(el) {
+    let html = el.innerHTML;
+    // **bold** → <strong>bold</strong>
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // *italic* → <em>italic</em> (but not inside **)
+    html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    el.innerHTML = html;
+  });
+
   const chat = document.getElementById('chatHistory');
   if (chat) chat.scrollTop = chat.scrollHeight;
 
