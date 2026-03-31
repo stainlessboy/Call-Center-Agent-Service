@@ -1,6 +1,7 @@
 {% extends "sqladmin/layout.html" %}
 {% block content %}
 <div class="col-12">
+
   {# ── Session info card ── #}
   <div class="card mb-3">
     <div class="card-header">
@@ -42,7 +43,7 @@
     </div>
   </div>
 
-  {# ── Chat history card ── #}
+  {# ── Chat history + reply form (single card) ── #}
   <div class="card mb-3">
     <div class="card-header">
       <h3 class="card-title">
@@ -56,6 +57,7 @@
         <span class="text-muted ms-2" style="font-size:.85rem">({{ model.messages | length }} сообщений)</span>
       </h3>
     </div>
+
     <div class="card-body p-0">
       <style>
         .chat-history {
@@ -173,64 +175,8 @@
           right: 10%;
           border-top: 1px solid #e2e8f0;
         }
-      </style>
 
-      <div class="chat-history" id="chatHistory">
-        {% if not model.messages %}
-        <div class="chat-empty">
-          <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-message-off mb-2" width="40" height="40"
-               viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
-            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
-            <path d="M3 3l18 18"/>
-            <path d="M17 17h-9l-4 4v-14c0-.554 .225-1.056 .588-1.418"/>
-          </svg>
-          <div>Нет сообщений</div>
-        </div>
-        {% else %}
-          {% set ns = namespace(prev_date='') %}
-          {% for msg in model.messages %}
-            {# ── Date divider ── #}
-            {% if msg.created_at %}
-              {% set msg_date = msg.created_at.strftime('%d.%m.%Y') %}
-              {% if msg_date != ns.prev_date %}
-                {% set ns.prev_date = msg_date %}
-                <div class="chat-date-divider"><span>{{ msg_date }}</span></div>
-              {% endif %}
-            {% endif %}
-
-            {% set role = msg.role or 'system' %}
-            <div class="chat-msg chat-msg--{{ role }}">
-              <div class="chat-meta">
-                <span class="chat-role-badge">
-                  {% if role == 'user' %}
-                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2"/></svg>
-                    Пользователь
-                  {% elif role == 'assistant' %}
-                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 8l0 4"/><path d="M12 16l.01 0"/></svg>
-                    Ассистент
-                  {% elif role == 'operator' %}
-                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 14v-3a8 8 0 1 1 16 0v3"/><path d="M18 19c0 1.657 -2.686 3 -6 3"/><path d="M4 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/><path d="M15 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/></svg>
-                    Оператор
-                  {% else %}
-                    Система
-                  {% endif %}
-                </span>
-                {% if msg.created_at %}
-                <span class="chat-time">{{ msg.created_at.strftime('%H:%M') }}</span>
-                {% endif %}
-              </div>
-              <div class="chat-bubble">{{ msg.text or '' }}</div>
-            </div>
-          {% endfor %}
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-  {# ── Operator reply form ── #}
-  <div class="card mb-3">
-    <div class="card-body p-0">
-      <style>
+        /* ── Operator reply (bottom of chat card) ── */
         .operator-reply-form {
           display: flex;
           gap: .5rem;
@@ -286,6 +232,57 @@
         .operator-reply-status.error   { color: #dc2626; display: block; }
       </style>
 
+      {# ── Messages ── #}
+      <div class="chat-history" id="chatHistory">
+        {% if not model.messages %}
+        <div class="chat-empty">
+          <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-message-off mb-2" width="40" height="40"
+               viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M3 3l18 18"/>
+            <path d="M17 17h-9l-4 4v-14c0-.554 .225-1.056 .588-1.418"/>
+          </svg>
+          <div>Нет сообщений</div>
+        </div>
+        {% else %}
+          {% set ns = namespace(prev_date='') %}
+          {% for msg in model.messages %}
+            {% if msg.created_at %}
+              {% set msg_date = msg.created_at.strftime('%d.%m.%Y') %}
+              {% if msg_date != ns.prev_date %}
+                {% set ns.prev_date = msg_date %}
+                <div class="chat-date-divider"><span>{{ msg_date }}</span></div>
+              {% endif %}
+            {% endif %}
+
+            {% set role = msg.role or 'system' %}
+            <div class="chat-msg chat-msg--{{ role }}">
+              <div class="chat-meta">
+                <span class="chat-role-badge">
+                  {% if role == 'user' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2"/></svg>
+                    Пользователь
+                  {% elif role == 'assistant' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 8l0 4"/><path d="M12 16l.01 0"/></svg>
+                    Ассистент
+                  {% elif role == 'operator' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 14v-3a8 8 0 1 1 16 0v3"/><path d="M18 19c0 1.657 -2.686 3 -6 3"/><path d="M4 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/><path d="M15 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/></svg>
+                    Оператор
+                  {% else %}
+                    Система
+                  {% endif %}
+                </span>
+                {% if msg.created_at %}
+                <span class="chat-time">{{ msg.created_at.strftime('%H:%M') }}</span>
+                {% endif %}
+              </div>
+              <div class="chat-bubble">{{ msg.text or '' }}</div>
+            </div>
+          {% endfor %}
+        {% endif %}
+      </div>
+
+      {# ── Reply form (inside chat card, at the bottom) ── #}
       <div class="operator-reply-form" id="replyForm">
         <textarea id="replyText" placeholder="Написать ответ клиенту..." rows="1"
                   oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
@@ -362,11 +359,9 @@ url=model_view._url_for_action(request, custom_action) + '?pks=' + (get_object_i
 {% endfor %}
 
 <script>
-  // Auto-scroll to the bottom of chat
   const chat = document.getElementById('chatHistory');
   if (chat) chat.scrollTop = chat.scrollHeight;
 
-  // Ctrl+Enter to send
   const replyText = document.getElementById('replyText');
   if (replyText) {
     replyText.addEventListener('keydown', function(e) {
@@ -380,7 +375,6 @@ url=model_view._url_for_action(request, custom_action) + '?pks=' + (get_object_i
   function appendMessage(role, text, time) {
     const chat = document.getElementById('chatHistory');
     if (!chat) return;
-    // Remove empty placeholder if present
     const empty = chat.querySelector('.chat-empty');
     if (empty) empty.remove();
 
