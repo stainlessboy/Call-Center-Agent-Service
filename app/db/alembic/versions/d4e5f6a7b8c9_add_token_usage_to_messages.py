@@ -1,7 +1,7 @@
 """add token usage fields to messages"""
 
 revision = 'd4e5f6a7b8c9'
-down_revision = '913edc1a4151'
+down_revision = '09ab214796ff'
 branch_labels = None
 depends_on = None
 
