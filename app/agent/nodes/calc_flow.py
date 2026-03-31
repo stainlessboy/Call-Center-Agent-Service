@@ -6,6 +6,7 @@ import logging as _logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.calc_extractor import extract_calc_value, regex_fallback
 from app.agent.constants import _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_yes, _looks_like_question
@@ -215,44 +216,74 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     selected_product = dialog.get("selected_product") or {}
     lang = _REQUEST_LANGUAGE.get()
 
-    # Parse answer for current step
+    # Parse answer for current step via LLM extractor, regex as fallback
     parsed_value = False
     adjustment_note = ""
-    if calc_step == "amount":
-        val = _parse_amount(user_text)
-        if val is not None:
-            calc_slots["amount"] = val
-            parsed_value = True
-    elif calc_step == "term":
-        val = _parse_term_months(user_text)
-        if val is not None:
-            clamped, adjusted = _clamp_term(val, selected_product, category)
-            if adjusted:
-                t_min, t_max = _get_product_term_range(selected_product, category)
-                if category == "deposit":
-                    schedule = selected_product.get("rate_schedule") or []
-                    available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
-                    avail_str = ", ".join(str(t) for t in available)
-                    adjustment_note = at("term_adjusted_deposit", lang, user_val=val, new_val=clamped, available=avail_str)
-                else:
-                    adjustment_note = at("term_adjusted", lang, user_val=val, new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
-            calc_slots["term_months"] = clamped
-            parsed_value = True
-    elif calc_step == "downpayment":
-        val = _parse_downpayment(user_text)
-        if val is not None:
-            clamped, adjusted = _clamp_downpayment(val, selected_product)
-            if adjusted:
-                d_min, d_max = _get_product_downpayment_range(selected_product)
-                adjustment_note = at("dp_adjusted", lang, user_val=f"{val:.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
-            calc_slots["downpayment"] = clamped
-            parsed_value = True
-
-    # Off-topic or unrecognised input during calc
+    is_question = False
     calc_qs = get_calc_questions(category, lang)
-    if calc_step and not parsed_value:
-        if _looks_like_question(user_text):
-            # Answer the side question, then re-ask current step
+
+    if calc_step:
+        product_name = _localized_name(selected_product, lang) or selected_product.get("name") or ""
+        extraction = await extract_calc_value(user_text, calc_step, product_name, lang)
+
+        if extraction["type"] == "question":
+            is_question = True
+        elif extraction["type"] == "value":
+            val = extraction["value"]
+            if calc_step == "amount":
+                calc_slots["amount"] = int(val)
+                parsed_value = True
+            elif calc_step == "term":
+                clamped, adjusted = _clamp_term(int(val), selected_product, category)
+                if adjusted:
+                    t_min, t_max = _get_product_term_range(selected_product, category)
+                    if category == "deposit":
+                        schedule = selected_product.get("rate_schedule") or []
+                        available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
+                        avail_str = ", ".join(str(t) for t in available)
+                        adjustment_note = at("term_adjusted_deposit", lang, user_val=int(val), new_val=clamped, available=avail_str)
+                    else:
+                        adjustment_note = at("term_adjusted", lang, user_val=int(val), new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
+                calc_slots["term_months"] = clamped
+                parsed_value = True
+            elif calc_step == "downpayment":
+                clamped, adjusted = _clamp_downpayment(float(val), selected_product)
+                if adjusted:
+                    d_min, d_max = _get_product_downpayment_range(selected_product)
+                    adjustment_note = at("dp_adjusted", lang, user_val=f"{float(val):.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
+                calc_slots["downpayment"] = clamped
+                parsed_value = True
+        else:
+            # LLM unavailable — regex fallback
+            val = regex_fallback(user_text, calc_step)
+            if val is not None:
+                if calc_step == "amount":
+                    calc_slots["amount"] = val
+                    parsed_value = True
+                elif calc_step == "term":
+                    clamped, adjusted = _clamp_term(val, selected_product, category)
+                    if adjusted:
+                        t_min, t_max = _get_product_term_range(selected_product, category)
+                        if category == "deposit":
+                            schedule = selected_product.get("rate_schedule") or []
+                            available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
+                            avail_str = ", ".join(str(t) for t in available)
+                            adjustment_note = at("term_adjusted_deposit", lang, user_val=val, new_val=clamped, available=avail_str)
+                        else:
+                            adjustment_note = at("term_adjusted", lang, user_val=val, new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
+                    calc_slots["term_months"] = clamped
+                    parsed_value = True
+                elif calc_step == "downpayment":
+                    clamped, adjusted = _clamp_downpayment(val, selected_product)
+                    if adjusted:
+                        d_min, d_max = _get_product_downpayment_range(selected_product)
+                        adjustment_note = at("dp_adjusted", lang, user_val=f"{val:.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
+                    calc_slots["downpayment"] = clamped
+                    parsed_value = True
+
+    # User asked a question or gave ambiguous input — answer and re-ask
+    if calc_step and (is_question or not parsed_value):
+        if is_question or _looks_like_question(user_text):
             faq_ans = await _faq_lookup(user_text, lang) or ""
             if not faq_ans:
                 llm = _get_chat_openai()
