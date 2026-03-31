@@ -9,7 +9,7 @@ import httpx
 import wtforms
 from sqladmin import ModelView, action
 from sqladmin.filters import BooleanFilter, AllUniqueStringValuesFilter, StaticValuesFilter
-from sqlalchemy import func as sa_func, select
+from sqlalchemy import String as SAString, cast, func as sa_func, or_, select
 from sqlalchemy.orm import selectinload
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -252,7 +252,8 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ),
         _RuBooleanFilter(ChatSession.human_mode, title="Режим оператора"),
     ]
-    column_searchable_list = [ChatSession.id, ChatSession.user_id]
+    column_searchable_list = [ChatSession.id]
+    search_placeholder = "Поиск по ID сессии или тексту сообщений..."
     column_sortable_list = [ChatSession.id, ChatSession.started_at, ChatSession.last_activity_at]
     column_default_sort = ("started_at", True)
 
@@ -303,6 +304,14 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
 
     def list_query(self, request):
         return super().list_query(request).options(selectinload(ChatSession.messages))
+
+    def search_query(self, stmt, term):
+        return stmt.outerjoin(Message, Message.session_id == ChatSession.id).filter(
+            or_(
+                cast(ChatSession.id, SAString).ilike(f"%{term}%"),
+                Message.text.ilike(f"%{term}%"),
+            )
+        ).distinct()
 
     def details_query(self, request):
         return super().details_query(request).options(selectinload(ChatSession.messages))
