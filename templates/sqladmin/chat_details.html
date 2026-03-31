@@ -1,0 +1,452 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="col-12">
+  {# ── Session info card ── #}
+  <div class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">{{ model_view.name }} #{{ get_object_identifier(model) }}</h3>
+    </div>
+    <div class="card-body border-bottom py-3">
+      <div class="table-responsive">
+        <table class="table card-table table-vcenter text-nowrap table-hover table-bordered">
+          <thead>
+            <tr>
+              <th class="w-1">Поле</th>
+              <th class="w-1">Значение</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for name in model_view._details_prop_names %}
+            {% if name != "messages" %}
+            {% set label = model_view._column_labels.get(name, name) %}
+            <tr>
+              <td>{{ label }}</td>
+              {% set value, formatted_value = model_view.get_detail_value(model, name) %}
+              {% if name in model_view._relation_names %}
+              {% if is_list(value) %}
+              <td>
+                {% for elem, formatted_elem in zip(value, formatted_value) %}
+                  <a href="{{ model_view._build_url_for('admin:details', request, elem) }}">{{ formatted_elem }}</a><br/>
+                {% endfor %}
+              </td>
+              {% else %}
+              <td><a href="{{ model_view._url_for_details_with_prop(request, model, name) }}">{{ formatted_value }}</a></td>
+              {% endif %}
+              {% else %}
+              <td>{{ formatted_value }}</td>
+              {% endif %}
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ── Chat history card ── #}
+  <div class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-messages" width="24" height="24"
+             viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+          <path d="M21 14l-3 -3h-7a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1h9a1 1 0 0 1 1 1v10"/>
+          <path d="M14 15v2a1 1 0 0 1 -1 1h-7l-3 3v-10a1 1 0 0 1 1 -1h2"/>
+        </svg>
+        История чата
+        <span class="text-muted ms-2" style="font-size:.85rem">({{ model.messages | length }} сообщений)</span>
+      </h3>
+    </div>
+    <div class="card-body p-0">
+      <style>
+        .chat-history {
+          max-height: 70vh;
+          overflow-y: auto;
+          padding: 1.25rem;
+          background: #f4f6fa;
+          display: flex;
+          flex-direction: column;
+          gap: .5rem;
+        }
+        .chat-msg {
+          display: flex;
+          flex-direction: column;
+          max-width: 75%;
+          animation: chatFadeIn .2s ease;
+        }
+        @keyframes chatFadeIn {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        .chat-msg--user      { align-self: flex-end; }
+        .chat-msg--assistant  { align-self: flex-start; }
+        .chat-msg--operator   { align-self: flex-start; }
+        .chat-msg--system     { align-self: center; max-width: 90%; }
+
+        .chat-bubble {
+          padding: .6rem .9rem;
+          border-radius: .75rem;
+          font-size: .875rem;
+          line-height: 1.45;
+          word-break: break-word;
+          white-space: pre-wrap;
+          box-shadow: 0 1px 2px rgba(0,0,0,.06);
+        }
+        .chat-msg--user .chat-bubble {
+          background: #206bc4;
+          color: #fff;
+          border-bottom-right-radius: .2rem;
+        }
+        .chat-msg--assistant .chat-bubble {
+          background: #fff;
+          color: #1e293b;
+          border: 1px solid #e2e8f0;
+          border-bottom-left-radius: .2rem;
+        }
+        .chat-msg--operator .chat-bubble {
+          background: #fff3cd;
+          color: #664d03;
+          border: 1px solid #ffecb5;
+          border-bottom-left-radius: .2rem;
+        }
+        .chat-msg--system .chat-bubble {
+          background: #e2e8f0;
+          color: #64748b;
+          font-size: .8rem;
+          text-align: center;
+          border-radius: .5rem;
+        }
+
+        .chat-meta {
+          display: flex;
+          align-items: center;
+          gap: .4rem;
+          margin-bottom: .15rem;
+          font-size: .75rem;
+          font-weight: 600;
+        }
+        .chat-msg--user .chat-meta      { justify-content: flex-end; color: #206bc4; }
+        .chat-msg--assistant .chat-meta  { color: #475569; }
+        .chat-msg--operator .chat-meta   { color: #b45309; }
+        .chat-msg--system .chat-meta     { justify-content: center; color: #94a3b8; }
+
+        .chat-time {
+          font-weight: 400;
+          color: #94a3b8;
+          font-size: .7rem;
+        }
+        .chat-msg--user .chat-time { color: rgba(255,255,255,.65); }
+
+        .chat-role-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: .25rem;
+        }
+        .chat-role-icon {
+          width: 14px;
+          height: 14px;
+        }
+
+        .chat-empty {
+          text-align: center;
+          padding: 3rem 1rem;
+          color: #94a3b8;
+        }
+
+        .chat-date-divider {
+          text-align: center;
+          margin: .75rem 0 .25rem;
+          font-size: .7rem;
+          color: #94a3b8;
+          position: relative;
+        }
+        .chat-date-divider span {
+          background: #f4f6fa;
+          padding: 0 .75rem;
+          position: relative;
+          z-index: 1;
+        }
+        .chat-date-divider::before {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 10%;
+          right: 10%;
+          border-top: 1px solid #e2e8f0;
+        }
+      </style>
+
+      <div class="chat-history" id="chatHistory">
+        {% if not model.messages %}
+        <div class="chat-empty">
+          <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-message-off mb-2" width="40" height="40"
+               viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M3 3l18 18"/>
+            <path d="M17 17h-9l-4 4v-14c0-.554 .225-1.056 .588-1.418"/>
+          </svg>
+          <div>Нет сообщений</div>
+        </div>
+        {% else %}
+          {% set ns = namespace(prev_date='') %}
+          {% for msg in model.messages %}
+            {# ── Date divider ── #}
+            {% if msg.created_at %}
+              {% set msg_date = msg.created_at.strftime('%d.%m.%Y') %}
+              {% if msg_date != ns.prev_date %}
+                {% set ns.prev_date = msg_date %}
+                <div class="chat-date-divider"><span>{{ msg_date }}</span></div>
+              {% endif %}
+            {% endif %}
+
+            {% set role = msg.role or 'system' %}
+            <div class="chat-msg chat-msg--{{ role }}">
+              <div class="chat-meta">
+                <span class="chat-role-badge">
+                  {% if role == 'user' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2"/></svg>
+                    Пользователь
+                  {% elif role == 'assistant' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 8l0 4"/><path d="M12 16l.01 0"/></svg>
+                    Ассистент
+                  {% elif role == 'operator' %}
+                    <svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 14v-3a8 8 0 1 1 16 0v3"/><path d="M18 19c0 1.657 -2.686 3 -6 3"/><path d="M4 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/><path d="M15 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/></svg>
+                    Оператор
+                  {% else %}
+                    Система
+                  {% endif %}
+                </span>
+                {% if msg.created_at %}
+                <span class="chat-time">{{ msg.created_at.strftime('%H:%M') }}</span>
+                {% endif %}
+              </div>
+              <div class="chat-bubble">{{ msg.text or '' }}</div>
+            </div>
+          {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Operator reply form ── #}
+  <div class="card mb-3">
+    <div class="card-body p-0">
+      <style>
+        .operator-reply-form {
+          display: flex;
+          gap: .5rem;
+          padding: .75rem 1.25rem;
+          background: #fff;
+          border-top: 1px solid #e2e8f0;
+          align-items: flex-end;
+        }
+        .operator-reply-form textarea {
+          flex: 1;
+          resize: none;
+          border: 1px solid #d1d5db;
+          border-radius: .5rem;
+          padding: .5rem .75rem;
+          font-size: .875rem;
+          line-height: 1.4;
+          min-height: 42px;
+          max-height: 120px;
+          outline: none;
+          transition: border-color .15s;
+        }
+        .operator-reply-form textarea:focus {
+          border-color: #206bc4;
+          box-shadow: 0 0 0 2px rgba(32,107,196,.15);
+        }
+        .operator-reply-form .btn-send {
+          display: inline-flex;
+          align-items: center;
+          gap: .35rem;
+          padding: .5rem 1rem;
+          background: #206bc4;
+          color: #fff;
+          border: none;
+          border-radius: .5rem;
+          font-size: .875rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background .15s;
+          white-space: nowrap;
+          height: 42px;
+        }
+        .operator-reply-form .btn-send:hover { background: #1a56a0; }
+        .operator-reply-form .btn-send:disabled {
+          background: #94a3b8;
+          cursor: not-allowed;
+        }
+        .operator-reply-status {
+          padding: .25rem 1.25rem .5rem;
+          font-size: .8rem;
+          display: none;
+        }
+        .operator-reply-status.success { color: #16a34a; display: block; }
+        .operator-reply-status.error   { color: #dc2626; display: block; }
+      </style>
+
+      <div class="operator-reply-form" id="replyForm">
+        <textarea id="replyText" placeholder="Написать ответ клиенту..." rows="1"
+                  oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+        <button class="btn-send" id="replyBtn" onclick="sendOperatorReply()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" stroke-width="2"
+               stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+            <path d="M10 14l11 -11"/>
+            <path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5"/>
+          </svg>
+          Отправить
+        </button>
+      </div>
+      <div class="operator-reply-status" id="replyStatus"></div>
+    </div>
+  </div>
+
+  {# ── Action buttons ── #}
+  <div class="card">
+    <div class="card-footer container">
+      <div class="row row-gap-2">
+        <div class="col-auto">
+          <a href="{{ url_for('admin:list', identity=model_view.identity) }}" class="btn">
+            Назад
+          </a>
+        </div>
+        {% if model_view.can_delete %}
+        <div class="col-auto">
+          <a href="#" data-name="{{ model_view.name }}" data-pk="{{ get_object_identifier(model) }}"
+            data-url="{{ model_view._url_for_delete(request, model) }}" data-bs-toggle="modal"
+            data-bs-target="#modal-delete" class="btn btn-danger">
+            Удалить
+          </a>
+        </div>
+        {% endif %}
+        {% if model_view.can_edit %}
+        <div class="col-auto">
+          <a href="{{ model_view._build_url_for('admin:edit', request, model) }}" class="btn btn-primary">
+            Редактировать
+          </a>
+        </div>
+        {% endif %}
+        {% for custom_action,label in model_view._custom_actions_in_detail.items() %}
+        <div class="col-auto">
+          {% if custom_action in model_view._custom_actions_confirmation %}
+          <a href="#" class="btn btn-secondary" data-bs-toggle="modal"
+            data-bs-target="#modal-confirmation-{{ custom_action }}">
+            {{ label }}
+          </a>
+          {% else %}
+          <a href="{{ model_view._url_for_action(request, custom_action) }}?pks={{ get_object_identifier(model) }}"
+            class="btn btn-secondary">
+            {{ label }}
+          </a>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if model_view.can_delete %}
+{% include 'sqladmin/modals/delete.html' %}
+{% endif %}
+
+{% for custom_action in model_view._custom_actions_in_detail %}
+{% if custom_action in model_view._custom_actions_confirmation %}
+{% with confirmation_message = model_view._custom_actions_confirmation[custom_action], custom_action=custom_action,
+url=model_view._url_for_action(request, custom_action) + '?pks=' + (get_object_identifier(model) | string) %}
+{% include 'sqladmin/modals/details_action_confirmation.html' %}
+{% endwith %}
+{% endif %}
+{% endfor %}
+
+<script>
+  // Auto-scroll to the bottom of chat
+  const chat = document.getElementById('chatHistory');
+  if (chat) chat.scrollTop = chat.scrollHeight;
+
+  // Ctrl+Enter to send
+  const replyText = document.getElementById('replyText');
+  if (replyText) {
+    replyText.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        sendOperatorReply();
+      }
+    });
+  }
+
+  function appendMessage(role, text, time) {
+    const chat = document.getElementById('chatHistory');
+    if (!chat) return;
+    // Remove empty placeholder if present
+    const empty = chat.querySelector('.chat-empty');
+    if (empty) empty.remove();
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-msg chat-msg--' + role;
+
+    const meta = document.createElement('div');
+    meta.className = 'chat-meta';
+    meta.innerHTML =
+      '<span class="chat-role-badge">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" class="chat-role-icon" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 14v-3a8 8 0 1 1 16 0v3"/><path d="M18 19c0 1.657 -2.686 3 -6 3"/><path d="M4 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/><path d="M15 14a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2v-3z"/></svg>' +
+        ' Оператор' +
+      '</span>' +
+      '<span class="chat-time">' + time + '</span>';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+    bubble.textContent = text;
+
+    wrapper.appendChild(meta);
+    wrapper.appendChild(bubble);
+    chat.appendChild(wrapper);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  async function sendOperatorReply() {
+    const textarea = document.getElementById('replyText');
+    const btn = document.getElementById('replyBtn');
+    const status = document.getElementById('replyStatus');
+    const text = (textarea.value || '').trim();
+    if (!text) return;
+
+    btn.disabled = true;
+    status.className = 'operator-reply-status';
+    status.textContent = '';
+
+    try {
+      const resp = await fetch('/admin/api/operator-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: '{{ get_object_identifier(model) }}',
+          text: text,
+        }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.ok) {
+        appendMessage('operator', text, data.message.created_at);
+        textarea.value = '';
+        textarea.style.height = 'auto';
+        status.className = 'operator-reply-status success';
+        status.textContent = 'Сообщение отправлено';
+        setTimeout(() => { status.className = 'operator-reply-status'; }, 3000);
+      } else {
+        status.className = 'operator-reply-status error';
+        status.textContent = 'Ошибка: ' + (data.detail || 'неизвестная ошибка');
+      }
+    } catch (e) {
+      status.className = 'operator-reply-status error';
+      status.textContent = 'Ошибка сети: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      textarea.focus();
+    }
+  }
+</script>
+{% endblock %}

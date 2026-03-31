@@ -200,6 +200,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     name = "Сессия чата"
     name_plural = "Сессии чатов"
     icon = "fa-solid fa-comments"
+    details_template = "sqladmin/chat_details.html"
 
     column_list = [
         ChatSession.id, ChatSession.user, ChatSession.status,

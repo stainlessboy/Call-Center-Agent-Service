@@ -262,3 +262,80 @@ async def send_operator(
         session_id=payload.session_id,
         user_telegram_id=user_telegram_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin panel: operator reply (AJAX from chat detail page)
+# ---------------------------------------------------------------------------
+
+class _AdminReplyRequest(BaseModel):
+    session_id: str
+    text: str
+
+
+@app.post("/admin/api/operator-reply")
+async def admin_operator_reply(payload: _AdminReplyRequest, request: Request) -> dict:
+    """Send operator reply from admin chat detail page."""
+    # Check admin session auth
+    if not request.session.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    settings = get_settings()
+    if not settings.bot_token:
+        raise HTTPException(status_code=500, detail="BOT_TOKEN is not set")
+
+    text_msg = payload.text.strip()
+    if not text_msg:
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(ChatSession, User)
+                .join(User, ChatSession.user_id == User.id)
+                .where(ChatSession.id == payload.session_id)
+            )
+            row = result.one_or_none()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            chat_session, user = row
+
+            chat_session.human_mode = True
+            chat_session.human_mode_since = chat_session.human_mode_since or datetime.now(timezone.utc)
+            chat_session.last_activity_at = datetime.now(timezone.utc)
+            user_telegram_id = user.telegram_user_id
+
+    label = "\U0001f464 Оператор"
+    text_for_user = f"{label}: {text_msg}"
+
+    bot: Optional[Bot] = getattr(request.app.state, "bot", None)
+    if bot is not None:
+        try:
+            await bot.send_message(chat_id=user_telegram_id, text=text_for_user)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Telegram send failed: {exc}") from exc
+    else:
+        ok, error = send_telegram_message(settings.bot_token, user_telegram_id, text_for_user)
+        if not ok:
+            raise HTTPException(status_code=502, detail=f"Telegram send failed: {error}")
+
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Message(
+                    session_id=payload.session_id,
+                    role="operator",
+                    text=text_msg,
+                    created_at=now,
+                )
+            )
+
+    return {
+        "ok": True,
+        "message": {
+            "role": "operator",
+            "text": text_msg,
+            "created_at": now.strftime("%H:%M"),
+        },
+    }

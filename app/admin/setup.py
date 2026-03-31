@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from sqladmin import Admin
 
@@ -23,12 +25,16 @@ def setup_admin(app: FastAPI) -> Admin:
     settings = get_settings()
     authentication_backend = AdminAuth(secret_key=settings.admin_secret_key)
 
+    _base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    _templates_dir = os.path.join(_base_dir, "templates")
+
     admin = Admin(
         app,
         engine,
         authentication_backend=authentication_backend,
         title="Bank Bot CRM",
         base_url="/admin",
+        templates_dir=_templates_dir,
     )
 
     admin.add_view(UserAdmin)
