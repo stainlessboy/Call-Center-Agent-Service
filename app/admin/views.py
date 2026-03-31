@@ -230,7 +230,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.status, ChatSession.human_mode, ChatSession.human_mode_since,
         ChatSession.assigned_operator_id, ChatSession.started_at, ChatSession.ended_at,
         ChatSession.last_activity_at, ChatSession.feedback_rating, ChatSession.feedback_comment,
-        ChatSession.closed_reason, ChatSession.messages,
+        ChatSession.closed_reason,
     ]
 
     form_excluded_columns = [ChatSession.messages]
@@ -269,7 +269,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     }
 
     def details_query(self, request):
-        return select(ChatSession).options(selectinload(ChatSession.messages))
+        return super().details_query(request).options(selectinload(ChatSession.messages))
 
     async def scaffold_form(self, rules=None):
         form_class = await super().scaffold_form(rules)

@@ -17,7 +17,6 @@
           </thead>
           <tbody>
             {% for name in model_view._details_prop_names %}
-            {% if name != "messages" %}
             {% set label = model_view._column_labels.get(name, name) %}
             <tr>
               <td>{{ label }}</td>
@@ -36,7 +35,6 @@
               <td>{{ formatted_value }}</td>
               {% endif %}
             </tr>
-            {% endif %}
             {% endfor %}
           </tbody>
         </table>
