@@ -12,7 +12,7 @@ from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.llm import _get_chat_openai
+from app.agent.llm import _get_chat_openai, extract_token_usage
 from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
 
 _log = logging.getLogger(__name__)
@@ -104,16 +104,17 @@ async def extract_calc_value(
             SystemMessage(content=system_text),
             HumanMessage(content=user_text),
         ])
+        usage = extract_token_usage(ai_msg)
         raw = str(ai_msg.content or "").strip()
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         result = json.loads(raw)
         if result.get("type") == "value" and result.get("value") is not None:
-            return {"type": "value", "value": result["value"]}
+            return {"type": "value", "value": result["value"], "_usage": usage}
         if result.get("type") == "question":
-            return {"type": "question", "text": result.get("text", user_text)}
-        return {"type": "unparsed"}
+            return {"type": "question", "text": result.get("text", user_text), "_usage": usage}
+        return {"type": "unparsed", "_usage": usage}
     except Exception as exc:
         _log.debug("LLM extraction failed: %s", exc)
         return {"type": "unparsed"}

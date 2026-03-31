@@ -1,0 +1,452 @@
+{% extends "sqladmin/layout.html" %}
+
+{% block content %}
+<div class="container-xl">
+
+  <!-- ============================================================ -->
+  <!-- Section 1: Overview Cards                                     -->
+  <!-- ============================================================ -->
+  <div class="page-header mb-3">
+    <div class="row align-items-center">
+      <div class="col-auto">
+        <h2 class="page-title">Дашборд</h2>
+      </div>
+    </div>
+  </div>
+
+  <div class="row row-deck row-cards mb-4">
+    <!-- Sessions -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex align-items-center">
+            <div class="subheader">Сессии сегодня</div>
+          </div>
+          <div class="h1 mb-0">{{ data.overview.sessions_today }}</div>
+          <div class="text-muted small">
+            Неделя: {{ data.overview.sessions_week }} &middot;
+            Месяц: {{ data.overview.sessions_month }}
+          </div>
+          <div class="text-muted small mt-1">
+            <span class="badge bg-green-lt">{{ data.overview.active_sessions }} активных</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Users -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex align-items-center">
+            <div class="subheader">Пользователи сегодня</div>
+          </div>
+          <div class="h1 mb-0">{{ data.overview.users_today }}</div>
+          <div class="text-muted small">
+            Всего: {{ data.overview.total_users }}
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Messages -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Сообщений сегодня</div>
+          <div class="h1 mb-0">{{ data.overview.messages_today }}</div>
+          <div class="text-muted small">
+            {{ data.session_stats.avg_messages_per_session }} сообщ/сессию (30д)
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Leads -->
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Лиды сегодня</div>
+          <div class="h1 mb-0">{{ data.overview.leads_today }}</div>
+          <div class="text-muted small">
+            Месяц: {{ data.overview.leads_month }} &middot;
+            Конверсия: {{ data.conversion.conversion_pct }}%
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM Cost Cards -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Расход LLM сегодня</div>
+          <div class="h1 mb-0">${{ data.overview.cost_today }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Расход LLM за неделю</div>
+          <div class="h1 mb-0">${{ data.overview.cost_week }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Расход LLM за месяц</div>
+          <div class="h1 mb-0">${{ data.overview.cost_month }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Section 2: LLM Analytics                                      -->
+  <!-- ============================================================ -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Токены по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartTokensDaily" height="250"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Стоимость LLM по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartCostDaily" height="250"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Latency -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Latency (мс) по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartLatencyDaily" height="180"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Section 3: User Analytics                                     -->
+  <!-- ============================================================ -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Пользователи по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartUsersDaily" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Языки</h3></div>
+        <div class="card-body">
+          <canvas id="chartLanguages" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Stats -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Сред. сообщений/сессию (30д)</div>
+          <div class="h1 mb-0">{{ data.session_stats.avg_messages_per_session }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Сред. длительность сессии</div>
+          <div class="h1 mb-0">{{ data.session_stats.avg_session_duration_minutes }} мин</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Всего сессий (30д)</div>
+          <div class="h1 mb-0">{{ data.session_stats.total_sessions_30d }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Section 4: Product / Leads Analytics                          -->
+  <!-- ============================================================ -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Лиды по категориям</h3></div>
+        <div class="card-body">
+          <canvas id="chartLeadsCategory" height="250"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Лиды по статусу</h3></div>
+        <div class="card-body">
+          <canvas id="chartLeadsStatus" height="250"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Лиды по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartLeadsDaily" height="250"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Conversion card -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Конверсия сессия &rarr; лид (30д)</div>
+          <div class="h1 mb-0">{{ data.conversion.conversion_pct }}%</div>
+          <div class="text-muted small">
+            {{ data.conversion.total_leads }} лидов / {{ data.conversion.total_sessions }} сессий
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Section 5: Operator Stats                                     -->
+  <!-- ============================================================ -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Переключения на оператора по дням</h3></div>
+        <div class="card-body">
+          <canvas id="chartOperatorDaily" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Причины закрытия сессий</h3></div>
+        <div class="card-body">
+          <canvas id="chartClosedReasons" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="subheader">Сессий с оператором (30д)</div>
+          <div class="h1 mb-0">{{ data.operator.total_human_sessions }}</div>
+          <div class="text-muted small">{{ data.operator.human_rate_pct }}% от всех сессий</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Section 6: Bot Quality                                        -->
+  <!-- ============================================================ -->
+  <div class="row row-deck row-cards mb-4">
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">Распределение оценок</h3></div>
+        <div class="card-body">
+          <canvas id="chartFeedback" height="200"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="row row-deck row-cards h-100">
+        <div class="col-sm-6">
+          <div class="card">
+            <div class="card-body">
+              <div class="subheader">Средняя оценка</div>
+              <div class="h1 mb-0">
+                {% if data.quality.avg_rating %}
+                  {{ data.quality.avg_rating }} / 5
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </div>
+              <div class="text-muted small">
+                {{ data.quality.sessions_with_feedback }} отзывов
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <div class="card">
+            <div class="card-body">
+              <div class="subheader">Ошибки агента (30д)</div>
+              <div class="h1 mb-0">{{ data.quality.error_rate_pct }}%</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <div class="card">
+            <div class="card-body">
+              <div class="subheader">Переход на оператора (30д)</div>
+              <div class="h1 mb-0">{{ data.quality.human_mode_rate_pct }}%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+const D = {{ data_json | safe }};
+const COLORS = ['#206bc4','#79a6dc','#bfe399','#f7c948','#e25563','#45aaf2','#a55eea','#fc5c65','#fd9644','#26de81','#2bcbba','#778ca3'];
+
+function shortDate(d) { return d.slice(5); }  // "2026-03-15" -> "03-15"
+
+// ---- Tokens Daily ----
+new Chart(document.getElementById('chartTokensDaily'), {
+  type: 'bar',
+  data: {
+    labels: D.llm_daily.map(r => shortDate(r.day)),
+    datasets: [
+      { label: 'Prompt', data: D.llm_daily.map(r => r.prompt_tokens), backgroundColor: '#206bc4' },
+      { label: 'Completion', data: D.llm_daily.map(r => r.completion_tokens), backgroundColor: '#79a6dc' },
+    ]
+  },
+  options: { responsive: true, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } }, plugins: { legend: { position: 'top' } } }
+});
+
+// ---- Cost Daily ----
+new Chart(document.getElementById('chartCostDaily'), {
+  type: 'line',
+  data: {
+    labels: D.llm_daily.map(r => shortDate(r.day)),
+    datasets: [{ label: 'USD', data: D.llm_daily.map(r => r.cost), borderColor: '#e25563', backgroundColor: 'rgba(226,85,99,0.1)', fill: true, tension: 0.3 }]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } } }
+});
+
+// ---- Latency Daily ----
+new Chart(document.getElementById('chartLatencyDaily'), {
+  type: 'line',
+  data: {
+    labels: D.latency_daily.map(r => shortDate(r.day)),
+    datasets: [
+      { label: 'Avg (ms)', data: D.latency_daily.map(r => r.avg_latency), borderColor: '#206bc4', tension: 0.3 },
+      { label: 'Max (ms)', data: D.latency_daily.map(r => r.max_latency), borderColor: '#e25563', borderDash: [5,5], tension: 0.3 },
+    ]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'top' } } }
+});
+
+// ---- Users Daily ----
+new Chart(document.getElementById('chartUsersDaily'), {
+  type: 'bar',
+  data: {
+    labels: D.users_daily.map(r => shortDate(r.day)),
+    datasets: [
+      { label: 'Новые', data: D.users_daily.map(r => r.new_users), backgroundColor: '#bfe399' },
+      { label: 'Активные', data: D.users_daily.map(r => r.active_users), backgroundColor: '#206bc4' },
+    ]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'top' } } }
+});
+
+// ---- Languages Pie ----
+new Chart(document.getElementById('chartLanguages'), {
+  type: 'doughnut',
+  data: {
+    labels: D.language_distribution.map(r => r.language || 'N/A'),
+    datasets: [{ data: D.language_distribution.map(r => r.count), backgroundColor: COLORS }]
+  },
+  options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+});
+
+// ---- Leads by Category ----
+new Chart(document.getElementById('chartLeadsCategory'), {
+  type: 'doughnut',
+  data: {
+    labels: D.leads_by_category.map(r => r.category),
+    datasets: [{ data: D.leads_by_category.map(r => r.count), backgroundColor: COLORS }]
+  },
+  options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+});
+
+// ---- Leads by Status ----
+new Chart(document.getElementById('chartLeadsStatus'), {
+  type: 'pie',
+  data: {
+    labels: D.leads_by_status.map(r => r.status),
+    datasets: [{ data: D.leads_by_status.map(r => r.count), backgroundColor: COLORS }]
+  },
+  options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+});
+
+// ---- Leads Daily ----
+new Chart(document.getElementById('chartLeadsDaily'), {
+  type: 'bar',
+  data: {
+    labels: D.leads_daily.map(r => shortDate(r.day)),
+    datasets: [{ label: 'Лиды', data: D.leads_daily.map(r => r.count), backgroundColor: '#f7c948' }]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } } }
+});
+
+// ---- Operator Daily ----
+new Chart(document.getElementById('chartOperatorDaily'), {
+  type: 'bar',
+  data: {
+    labels: D.operator.human_daily.map(r => shortDate(r.day)),
+    datasets: [{ label: 'Переключения', data: D.operator.human_daily.map(r => r.count), backgroundColor: '#a55eea' }]
+  },
+  options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } } }
+});
+
+// ---- Closed Reasons ----
+new Chart(document.getElementById('chartClosedReasons'), {
+  type: 'doughnut',
+  data: {
+    labels: D.operator.closed_reasons.map(r => r.reason),
+    datasets: [{ data: D.operator.closed_reasons.map(r => r.count), backgroundColor: COLORS }]
+  },
+  options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+});
+
+// ---- Feedback Distribution ----
+if (D.quality.feedback_distribution.length > 0) {
+  new Chart(document.getElementById('chartFeedback'), {
+    type: 'bar',
+    data: {
+      labels: D.quality.feedback_distribution.map(r => r.rating + ' \u2b50'),
+      datasets: [{ label: 'Количество', data: D.quality.feedback_distribution.map(r => r.count), backgroundColor: ['#e25563','#fd9644','#f7c948','#bfe399','#26de81'] }]
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { display: false } }, indexAxis: 'y' }
+  });
+} else {
+  document.getElementById('chartFeedback').parentElement.innerHTML = '<div class="text-muted text-center py-4">Нет данных по оценкам</div>';
+}
+</script>
+{% endblock %}

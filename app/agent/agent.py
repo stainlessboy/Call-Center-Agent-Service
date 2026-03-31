@@ -84,6 +84,7 @@ class Agent:
                 text=str(out.get("answer") or at("faq_fallback", _REQUEST_LANGUAGE.get())),
                 keyboard_options=out.get("keyboard_options") or None,
                 show_operator_button=bool(out.get("show_operator_button")),
+                token_usage=out.get("token_usage") or None,
             )
         finally:
             _REQUEST_LANGUAGE.reset(lang_token)

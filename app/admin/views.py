@@ -400,7 +400,7 @@ class MessageAdmin(ModelView, model=Message):
     name_plural = "Сообщения"
     icon = "fa-solid fa-envelope"
 
-    column_list = [Message.id, Message.session, Message.role, "text_preview", Message.created_at, Message.latency_ms, Message.error_code]
+    column_list = [Message.id, Message.session, Message.role, "text_preview", Message.created_at, Message.latency_ms, Message.total_tokens, Message.llm_cost, Message.error_code]
     column_searchable_list = [Message.session_id, Message.text, Message.role]
     column_filters = [
         _RuStaticValuesFilter(
@@ -424,12 +424,17 @@ class MessageAdmin(ModelView, model=Message):
         "latency_ms": "Задержка (мс)",
         "agent_model": "Модель агента",
         "error_code": "Код ошибки",
+        "prompt_tokens": "Prompt токены",
+        "completion_tokens": "Completion токены",
+        "total_tokens": "Всего токенов",
+        "llm_cost": "Стоимость ($)",
     }
 
     column_formatters = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),
         Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
         "text_preview": lambda m, _: (m.text[:100] + "…") if m.text and len(m.text) > 100 else (m.text or ""),
+        Message.llm_cost: lambda m, _: f"${m.llm_cost:.6f}" if m.llm_cost else "",
     }
     column_formatters_detail = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),

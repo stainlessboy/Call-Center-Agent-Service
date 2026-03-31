@@ -10,7 +10,7 @@ from app.agent.calc_extractor import extract_calc_value, regex_fallback
 from app.agent.constants import _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_yes, _looks_like_question
-from app.agent.llm import _get_chat_openai
+from app.agent.llm import _get_chat_openai, accumulate_usage, calculate_cost, extract_token_usage
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
 from app.agent.state import BotState, _default_dialog
@@ -221,10 +221,12 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     adjustment_note = ""
     is_question = False
     calc_qs = get_calc_questions(category, lang)
+    turn_usage: dict = {}
 
     if calc_step:
         product_name = _localized_name(selected_product, lang) or selected_product.get("name") or ""
         extraction = await extract_calc_value(user_text, calc_step, product_name, lang)
+        accumulate_usage(turn_usage, extraction.get("_usage") or {})
 
         if extraction["type"] == "question":
             is_question = True
@@ -294,22 +296,37 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                             HumanMessage(content=user_text),
                         ])
                         faq_ans = str(ai_msg.content or "").strip()
+                        accumulate_usage(turn_usage, extract_token_usage(ai_msg))
                     except Exception:
                         pass
             current_q = next((q for k, q in calc_qs if k == calc_step), "")
             prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
-            return _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
+            if turn_usage:
+                turn_usage["llm_cost"] = calculate_cost(turn_usage)
+            result = _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
+            if turn_usage:
+                result["token_usage"] = turn_usage
+            return result
         else:
             _hints = {
                 "amount": at("hint_amount", lang),
                 "term": at("hint_term", lang),
                 "downpayment": at("hint_downpayment", lang),
             }
-            return _finalize_turn(
+            if turn_usage:
+                turn_usage["llm_cost"] = calculate_cost(turn_usage)
+            result = _finalize_turn(
                 state,
                 _hints.get(calc_step, at("hint_generic", lang)),
                 {**dialog, "calc_slots": calc_slots},
             )
+            if turn_usage:
+                result["token_usage"] = turn_usage
+            return result
+
+    # Finalize cost before returning
+    if turn_usage:
+        turn_usage["llm_cost"] = calculate_cost(turn_usage)
 
     # Find next unanswered question
     for step_key, step_q in calc_qs:
@@ -317,7 +334,10 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         if slot_key not in calc_slots:
             new_dialog = {**dialog, "calc_step": step_key, "calc_slots": calc_slots}
             msg = f"{adjustment_note}\n\n{step_q}" if adjustment_note else step_q
-            return _finalize_turn(state, msg, new_dialog)
+            result = _finalize_turn(state, msg, new_dialog)
+            if turn_usage:
+                result["token_usage"] = turn_usage
+            return result
 
     # All slots collected → generate result
     product_name = _localized_name(selected_product, lang) or selected_product.get("name") or "—"
@@ -350,7 +370,10 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             "calc_slots": calc_slots,
             "lead_step": "offer",
         }
-        return _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+        result = _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+        if turn_usage:
+            result["token_usage"] = turn_usage
+        return result
 
     # Credit → PDF amortization schedule
     rate_pct = _lookup_credit_rate(selected_product, calc_slots)
@@ -390,4 +413,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         "calc_slots": calc_slots,
         "lead_step": "offer",
     }
-    return _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+    result = _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+    if turn_usage:
+        result["token_usage"] = turn_usage
+    return result

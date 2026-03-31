@@ -18,7 +18,7 @@ from app.agent.i18n import (
     get_credit_menu_buttons,
     get_main_menu_buttons,
 )
-from app.agent.llm import _get_chat_openai
+from app.agent.llm import _get_chat_openai, accumulate_usage, calculate_cost, extract_token_usage
 from app.agent.nodes.helpers import _finalize_turn
 from app.agent.products import _find_product_by_name, _get_products_by_category
 from app.agent.state import BotState, _default_dialog
@@ -177,6 +177,7 @@ async def node_faq(state: BotState) -> dict:
         answer = fallback_reply
         is_fallback = True
         tool_calls_made: list[dict] = []
+        turn_usage: dict = {}
 
         llm_with_tools = llm.bind_tools(_FAQ_TOOLS)
         try:
@@ -184,6 +185,7 @@ async def node_faq(state: BotState) -> dict:
             for _ in range(3):  # max 3 tool call rounds
                 ai_msg = await llm_with_tools.ainvoke(loop_msgs)
                 loop_msgs.append(ai_msg)
+                accumulate_usage(turn_usage, extract_token_usage(ai_msg))
 
                 tool_calls = getattr(ai_msg, "tool_calls", None) or []
                 if not tool_calls:
@@ -207,9 +209,15 @@ async def node_faq(state: BotState) -> dict:
                 answer = faq_ans
                 is_fallback = False
 
+        if turn_usage:
+            turn_usage["llm_cost"] = calculate_cost(turn_usage)
+
         new_dialog, keyboard = await _update_dialog_from_tools(
             dialog, tool_calls_made, user_text, lang,
         )
-        return _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
+        result = _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
+        if turn_usage:
+            result["token_usage"] = turn_usage
+        return result
     finally:
         _CURRENT_DIALOG.reset(dialog_token)

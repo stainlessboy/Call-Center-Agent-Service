@@ -101,6 +101,10 @@ class Message(Base):
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
     agent_model: Mapped[Optional[str]] = mapped_column(String(128))
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    total_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    llm_cost: Mapped[Optional[float]] = mapped_column(Float)
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 

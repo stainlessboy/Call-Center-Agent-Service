@@ -179,6 +179,10 @@ class ChatService:
         latency_ms: Optional[int] = None,
         agent_model: Optional[str] = None,
         error_code: Optional[str] = None,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        llm_cost: Optional[float] = None,
     ) -> None:
         async with self.session_factory() as session:
             async with session.begin():
@@ -190,6 +194,10 @@ class ChatService:
                     latency_ms=latency_ms,
                     agent_model=agent_model,
                     error_code=error_code,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    llm_cost=llm_cost,
                 )
                 session.add(message)
             await session.commit()
@@ -282,11 +290,16 @@ class ChatService:
             except Exception:  # pragma: no cover - translation fallback
                 logger.exception("Agent reply language normalization failed")
 
+        token_usage = getattr(turn_result, "token_usage", None) or {}
         await self._save_message(
             session_id=chat_session.id,
             role="agent",
             text=agent_text,
             latency_ms=latency_ms,
+            prompt_tokens=token_usage.get("prompt_tokens"),
+            completion_tokens=token_usage.get("completion_tokens"),
+            total_tokens=token_usage.get("total_tokens"),
+            llm_cost=token_usage.get("llm_cost"),
         )
         return AgentReply(
             text=agent_text,

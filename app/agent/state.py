@@ -14,6 +14,7 @@ class BotState(TypedDict):
     _route: str
     session_id: Optional[str]
     user_id: Optional[int]
+    token_usage: Optional[dict]  # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int, "llm_cost": float}
 
 
 @dataclass
@@ -22,6 +23,7 @@ class AgentTurnResult:
     text: str
     keyboard_options: Optional[List[str]] = None
     show_operator_button: bool = False
+    token_usage: Optional[dict] = None
 
 
 def _default_dialog() -> dict:
