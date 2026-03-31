@@ -251,14 +251,14 @@ async def get_leads_by_category(session: AsyncSession) -> list[dict]:
     """Leads grouped by product category."""
     stmt = (
         select(
-            func.coalesce(Lead.product_category, "unknown").label("category"),
+            Lead.product_category,
             func.count().label("count"),
         )
-        .group_by(func.coalesce(Lead.product_category, "unknown"))
+        .group_by(Lead.product_category)
         .order_by(func.count().desc())
     )
     rows = (await session.execute(stmt)).all()
-    return [{"category": r.category, "count": r.count} for r in rows]
+    return [{"category": r.product_category or "unknown", "count": r.count} for r in rows]
 
 
 async def get_leads_by_status(session: AsyncSession) -> list[dict]:
@@ -310,11 +310,11 @@ async def get_operator_stats(session: AsyncSession, days: int = 30) -> dict:
     # Closed reasons
     closed_stmt = (
         select(
-            func.coalesce(ChatSession.closed_reason, "active").label("reason"),
+            ChatSession.closed_reason,
             func.count().label("count"),
         )
         .where(ChatSession.started_at >= since)
-        .group_by(func.coalesce(ChatSession.closed_reason, "active"))
+        .group_by(ChatSession.closed_reason)
         .order_by(func.count().desc())
     )
     closed_rows = (await session.execute(closed_stmt)).all()
@@ -333,7 +333,7 @@ async def get_operator_stats(session: AsyncSession, days: int = 30) -> dict:
 
     return {
         "human_daily": [{"day": str(r.day), "count": r.count} for r in daily_rows],
-        "closed_reasons": [{"reason": r.reason, "count": r.count} for r in closed_rows],
+        "closed_reasons": [{"reason": r.closed_reason or "active", "count": r.count} for r in closed_rows],
         "total_human_sessions": total_human,
         "human_rate_pct": round(total_human / max(total_sessions, 1) * 100, 1),
     }
