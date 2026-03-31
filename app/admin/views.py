@@ -10,6 +10,7 @@ import wtforms
 from sqladmin import ModelView, action
 from sqladmin.filters import BooleanFilter, AllUniqueStringValuesFilter, StaticValuesFilter
 from sqlalchemy import func as sa_func, select
+from sqlalchemy.orm import selectinload
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
@@ -266,6 +267,9 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.status: lambda m, _: _STATUS_MAP.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
         ChatSession.closed_reason: lambda m, _: _CLOSED_REASON_MAP.get(m.closed_reason, m.closed_reason or ""),
     }
+
+    def details_query(self, request):
+        return select(ChatSession).options(selectinload(ChatSession.messages))
 
     async def scaffold_form(self, rules=None):
         form_class = await super().scaffold_form(rules)
