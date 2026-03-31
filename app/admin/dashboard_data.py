@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Float, Integer, and_, case, cast, distinct, func, select, text
+from sqlalchemy import Float, Integer, Numeric, and_, case, cast, distinct, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ChatSession, Lead, Message, SessionStatus, User
@@ -130,7 +130,7 @@ async def get_latency_daily_stats(session: AsyncSession, days: int = 30) -> list
     stmt = (
         select(
             func.date(Message.created_at).label("day"),
-            func.round(cast(func.avg(Message.latency_ms), Float), 0).label("avg_latency"),
+            func.round(cast(func.avg(Message.latency_ms), Numeric), 0).label("avg_latency"),
             func.max(Message.latency_ms).label("max_latency"),
             func.min(Message.latency_ms).label("min_latency"),
         )
