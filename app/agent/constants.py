@@ -16,7 +16,7 @@ _LANG_INSTRUCTION = {"en": " Reply in English.", "uz": " Javobni o'zbek tilida y
 # Dialog context passed to tools via contextvar
 _CURRENT_DIALOG: contextvars.ContextVar[dict] = contextvars.ContextVar("_CURRENT_DIALOG", default={})
 
-FALLBACK_STREAK_THRESHOLD = 3  # show operator button after this many consecutive fallbacks
+FALLBACK_STREAK_THRESHOLD = 2  # show operator button after this many consecutive fallbacks (re-ask once, then escalate)
 
 
 def _greeting_with_menu(lang: str = "ru") -> str:

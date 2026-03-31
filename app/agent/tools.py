@@ -175,10 +175,21 @@ async def faq_lookup(query: str) -> str:
 
 
 @lc_tool
-async def request_operator() -> str:
-    """Transfer the user to a live operator. Use when the user explicitly asks
-    to speak with a human operator, support agent, or live person."""
+async def request_operator(reason: str = "") -> str:
+    """Transfer the user to a live operator. Call this tool when:
+    1. The user explicitly asks to speak with a human operator, support agent, or live person.
+    2. The user requests an operation that requires identity verification: enabling/disabling SMS,
+       card unblocking/blocking, changing personal data, checking loan/deposit/card account status,
+       money transfers, or any active account operations you cannot perform.
+    3. You asked the user to rephrase their message but still cannot understand their request.
+    The 'reason' parameter should briefly describe why the operator is needed
+    (e.g. 'identity_required', 'unclear_message', 'user_request')."""
     lang = _REQUEST_LANGUAGE.get()
+    reason_lower = (reason or "").lower()
+    if "identity" in reason_lower or "верификац" in reason_lower or "операци" in reason_lower:
+        return at("operator_identity_required", lang)
+    if "unclear" in reason_lower or "непонятн" in reason_lower or "не понял" in reason_lower:
+        return at("operator_unclear_message", lang)
     return at("operator_connecting", lang)
 
 

@@ -64,6 +64,40 @@ def _is_operator_request(text: str) -> bool:
     ))
 
 
+def _is_identity_operation(text: str) -> bool:
+    """Detect requests that require identity verification and cannot be handled by the bot."""
+    return _contains_any(text, (
+        # Card operations
+        "разблокир", "заблокир", "блокировк", "блокировать карт",
+        "unblock", "block card", "block my card",
+        "kartani blokla", "blokdan chiqar",
+        # SMS services
+        "подключи смс", "отключи смс", "смс-оповещ", "смс уведомл", "sms-информ",
+        "enable sms", "disable sms", "sms notification", "sms alert",
+        "sms ulash", "sms o'chir", "sms xabarnoma",
+        # Account status / personal data
+        "состояние кредита", "остаток по кредит", "остаток по вклад", "баланс карт",
+        "мой кредит", "мой вклад", "мой баланс", "мой счёт", "мой счет",
+        "loan status", "my loan", "my deposit", "my balance", "my account", "card balance",
+        "kredit holati", "omonat holati", "karta balansi", "mening kreditim", "mening hisobim",
+        # Personal data changes / password / PIN
+        "изменить данные", "изменить телефон", "изменить адрес", "обновить паспорт",
+        "сменить пароль", "сменить пин", "поменять пин", "сбрось пароль", "сброс пароля",
+        "забыл пароль", "забыл пин", "восстановить пароль", "восстановить пин",
+        "новый пароль", "новый пин",
+        "change my data", "change phone", "change address", "update passport",
+        "change password", "change pin", "reset password", "reset pin",
+        "forgot password", "forgot pin", "new password", "new pin",
+        "ma'lumotlarni o'zgartir", "telefonni o'zgartir", "parolni o'zgartir", "pin kod",
+        "parolni tikla", "yangi parol", "parolni unutdim",
+        # Money transfers
+        "перевести деньги", "перевод на карт", "перевод на счёт", "перевод на счет",
+        "отправить деньги", "перечислить",
+        "transfer money", "send money", "wire transfer",
+        "pul o'tkaz", "pul yubor",
+    ))
+
+
 def _looks_like_question(text: str) -> bool:
     if "?" in text:
         return True
