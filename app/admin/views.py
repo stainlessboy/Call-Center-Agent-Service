@@ -204,13 +204,14 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     details_template = "sqladmin/chat_details.html"
 
     column_list = [
-        ChatSession.id, ChatSession.user, ChatSession.status,
+        ChatSession.id, ChatSession.user, "message_count", ChatSession.status,
         ChatSession.human_mode, ChatSession.assigned_operator_id,
         ChatSession.started_at, ChatSession.ended_at,
         ChatSession.last_activity_at, ChatSession.feedback_rating,
         ChatSession.closed_reason,
     ]
     column_filters = [
+        _RuAllUniqueFilter(ChatSession.user_id, title="Пользователь (ID)"),
         _RuStaticValuesFilter(
             ChatSession.status, title="Статус",
             values=[("active", "Активна"), ("ended", "Завершена")],
@@ -221,7 +222,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ),
         _RuBooleanFilter(ChatSession.human_mode, title="Режим оператора"),
     ]
-    column_searchable_list = [ChatSession.id]
+    column_searchable_list = [ChatSession.id, ChatSession.user_id]
     column_sortable_list = [ChatSession.id, ChatSession.started_at, ChatSession.last_activity_at]
     column_default_sort = ("started_at", True)
 
@@ -250,6 +251,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         "feedback_comment": "Комментарий",
         "closed_reason": "Причина закрытия",
         "messages": "Сообщения",
+        "message_count": "Кол-во сообщений",
     }
 
     column_formatters = {
@@ -258,6 +260,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.last_activity_at: lambda m, _: _fmt_dt(m.last_activity_at),
         ChatSession.status: lambda m, _: _STATUS_MAP.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
         ChatSession.closed_reason: lambda m, _: _CLOSED_REASON_MAP.get(m.closed_reason, m.closed_reason or ""),
+        "message_count": lambda m, _: m.message_count,
     }
     column_formatters_detail = {
         ChatSession.started_at: lambda m, _: _fmt_dt(m.started_at),
@@ -267,6 +270,9 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.status: lambda m, _: _STATUS_MAP.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
         ChatSession.closed_reason: lambda m, _: _CLOSED_REASON_MAP.get(m.closed_reason, m.closed_reason or ""),
     }
+
+    def list_query(self, request):
+        return super().list_query(request).options(selectinload(ChatSession.messages))
 
     def details_query(self, request):
         return super().details_query(request).options(selectinload(ChatSession.messages))
@@ -353,7 +359,7 @@ class MessageAdmin(ModelView, model=Message):
     name_plural = "Сообщения"
     icon = "fa-solid fa-envelope"
 
-    column_list = [Message.id, Message.session, Message.role, Message.created_at, Message.latency_ms, Message.error_code]
+    column_list = [Message.id, Message.session, Message.role, "text_preview", Message.created_at, Message.latency_ms, Message.error_code]
     column_searchable_list = [Message.session_id, Message.text, Message.role]
     column_filters = [
         _RuStaticValuesFilter(
@@ -371,6 +377,7 @@ class MessageAdmin(ModelView, model=Message):
         "session_id": "ID сессии",
         "role": "Роль",
         "text": "Текст",
+        "text_preview": "Текст",
         "telegram_message_id": "Telegram ID сообщения",
         "created_at": "Дата создания",
         "latency_ms": "Задержка (мс)",
@@ -381,6 +388,7 @@ class MessageAdmin(ModelView, model=Message):
     column_formatters = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),
         Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
+        "text_preview": lambda m, _: (m.text[:100] + "…") if m.text and len(m.text) > 100 else (m.text or ""),
     }
     column_formatters_detail = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),

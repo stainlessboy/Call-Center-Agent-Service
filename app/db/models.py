@@ -79,6 +79,12 @@ class ChatSession(Base):
         order_by="Message.created_at",
     )
 
+    @property
+    def message_count(self) -> int:
+        if self.messages:
+            return len(self.messages)
+        return 0
+
     def __str__(self) -> str:
         return f"{self.id} ({self.status})"
 
