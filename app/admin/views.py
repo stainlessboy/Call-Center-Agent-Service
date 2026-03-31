@@ -50,6 +50,36 @@ class _RuAllUniqueFilter(AllUniqueStringValuesFilter):
         return result
 
 
+class _UserNameFilter:
+    """Filter sessions by user, displaying username/name instead of raw ID."""
+
+    has_operator = False
+
+    def __init__(self, column, title="Пользователь", parameter_name="user_id"):
+        self.column = column
+        self.title = title
+        self.parameter_name = parameter_name
+
+    async def lookups(self, request, model, run_query):
+        rows = await run_query(
+            select(User.id, User.username, User.first_name, User.telegram_user_id)
+            .join(ChatSession, ChatSession.user_id == User.id)
+            .distinct()
+            .order_by(User.username)
+        )
+        choices = [("", "Все")]
+        for row in rows:
+            uid, uname, fname, tg_id = row
+            label = uname or fname or str(tg_id)
+            choices.append((str(uid), label))
+        return choices
+
+    async def get_filtered_query(self, query, value, model):
+        if value == "":
+            return query
+        return query.filter(ChatSession.user_id == int(value))
+
+
 class _RuStaticValuesFilter(StaticValuesFilter):
     """StaticValuesFilter with Russian 'Все' instead of 'All'."""
 
@@ -211,7 +241,7 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
         ChatSession.closed_reason,
     ]
     column_filters = [
-        _RuAllUniqueFilter(ChatSession.user_id, title="Пользователь (ID)"),
+        _UserNameFilter(ChatSession.user_id, title="Пользователь"),
         _RuStaticValuesFilter(
             ChatSession.status, title="Статус",
             values=[("active", "Активна"), ("ended", "Завершена")],
