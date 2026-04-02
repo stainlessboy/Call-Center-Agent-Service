@@ -61,20 +61,21 @@ async def get_overview_cards(session: AsyncSession) -> dict[str, Any]:
         select(func.count()).where(Lead.created_at >= month_start)
     )).scalar() or 0
 
-    # LLM cost
+    # LLM cost (from JSONB field)
+    _cost_expr = Message.llm_usage["cost"].astext.cast(Float)
     cost_today = (await session.execute(
-        select(func.coalesce(func.sum(Message.llm_cost), 0.0)).where(
-            Message.created_at >= today_start, Message.llm_cost.isnot(None)
+        select(func.coalesce(func.sum(_cost_expr), 0.0)).where(
+            Message.created_at >= today_start, Message.llm_usage.isnot(None)
         )
     )).scalar() or 0.0
     cost_week = (await session.execute(
-        select(func.coalesce(func.sum(Message.llm_cost), 0.0)).where(
-            Message.created_at >= week_start, Message.llm_cost.isnot(None)
+        select(func.coalesce(func.sum(_cost_expr), 0.0)).where(
+            Message.created_at >= week_start, Message.llm_usage.isnot(None)
         )
     )).scalar() or 0.0
     cost_month = (await session.execute(
-        select(func.coalesce(func.sum(Message.llm_cost), 0.0)).where(
-            Message.created_at >= month_start, Message.llm_cost.isnot(None)
+        select(func.coalesce(func.sum(_cost_expr), 0.0)).where(
+            Message.created_at >= month_start, Message.llm_usage.isnot(None)
         )
     )).scalar() or 0.0
 
@@ -97,16 +98,20 @@ async def get_overview_cards(session: AsyncSession) -> dict[str, Any]:
 async def get_llm_daily_stats(session: AsyncSession, days: int = 30) -> list[dict]:
     """Token usage and cost per day."""
     since = _days_ago(days)
+    _prompt = Message.llm_usage["prompt_tokens"].astext.cast(Integer)
+    _compl = Message.llm_usage["completion_tokens"].astext.cast(Integer)
+    _total = Message.llm_usage["total_tokens"].astext.cast(Integer)
+    _cost = Message.llm_usage["cost"].astext.cast(Float)
     stmt = (
         select(
             func.date(Message.created_at).label("day"),
-            func.coalesce(func.sum(Message.prompt_tokens), 0).label("prompt_tokens"),
-            func.coalesce(func.sum(Message.completion_tokens), 0).label("completion_tokens"),
-            func.coalesce(func.sum(Message.total_tokens), 0).label("total_tokens"),
-            func.coalesce(func.sum(Message.llm_cost), 0.0).label("cost"),
-            func.count().filter(Message.llm_cost.isnot(None)).label("llm_calls"),
+            func.coalesce(func.sum(_prompt), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(_compl), 0).label("completion_tokens"),
+            func.coalesce(func.sum(_total), 0).label("total_tokens"),
+            func.coalesce(func.sum(_cost), 0.0).label("cost"),
+            func.count().filter(Message.llm_usage.isnot(None)).label("llm_calls"),
         )
-        .where(Message.created_at >= since, Message.role == "agent")
+        .where(Message.created_at >= since, Message.role == "agent", Message.llm_usage.isnot(None))
         .group_by(func.date(Message.created_at))
         .order_by(func.date(Message.created_at))
     )

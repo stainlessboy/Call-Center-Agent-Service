@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langgraph.types import Command
 
+from app.agent.constants import FLOW_CALC
 from app.agent.state import BotState, _default_dialog
 
 
@@ -17,6 +18,6 @@ async def node_router(state: BotState) -> Command:
     dialog = state.get("dialog") or _default_dialog()
     if dialog.get("lead_step"):
         return Command(goto="calc_flow")
-    if dialog.get("flow") == "calc_flow":
+    if dialog.get("flow") == FLOW_CALC:
         return Command(goto="calc_flow")
     return Command(goto="faq")

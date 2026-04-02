@@ -23,7 +23,7 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
     """Return a LangChain ChatOpenAI instance."""
     try:
         kwargs: dict[str, Any] = {
-            "model": os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL", "gpt-4o-mini"),
+            "model": os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL") or "gpt-4o-mini",
             "temperature": 0.3,
             "max_tokens": 512,
             "api_key": os.getenv("OPENAI_API_KEY"),
@@ -32,12 +32,14 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
         if base_url:
             kwargs["base_url"] = base_url
         return ChatOpenAI(**kwargs)
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Failed to create ChatOpenAI: %s", exc)
         return None
 
 
 def get_model_name() -> str:
-    return os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL", "gpt-4o-mini")
+    return os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL") or "gpt-4o-mini"
 
 
 def extract_token_usage(ai_msg: Any) -> dict:
@@ -71,3 +73,13 @@ def calculate_cost(usage: dict, model: Optional[str] = None) -> float:
     prompt = usage.get("prompt_tokens", 0)
     completion = usage.get("completion_tokens", 0)
     return (prompt * input_price + completion * output_price) / 1_000_000
+
+
+def finalize_usage(usage: dict, model: Optional[str] = None) -> dict:
+    """Add cost and model to usage dict. Returns the same dict mutated."""
+    if not usage:
+        return usage
+    model = model or get_model_name()
+    usage["cost"] = calculate_cost(usage, model)
+    usage["model"] = model
+    return usage

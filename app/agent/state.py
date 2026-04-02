@@ -14,7 +14,8 @@ class BotState(TypedDict):
     _route: str
     session_id: Optional[str]
     user_id: Optional[int]
-    token_usage: Optional[dict]  # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int, "llm_cost": float}
+    show_operator_button: bool
+    token_usage: Optional[dict]  # {"model": str, "prompt_tokens": int, "completion_tokens": int, "total_tokens": int, "cost": float}
 
 
 @dataclass

@@ -18,6 +18,16 @@ _CURRENT_DIALOG: contextvars.ContextVar[dict] = contextvars.ContextVar("_CURRENT
 
 FALLBACK_STREAK_THRESHOLD = 2  # show operator button after this many consecutive fallbacks (re-ask once, then escalate)
 
+# ── Dialog flow names ────────────────────────────────────────
+FLOW_SHOW_PRODUCTS = "show_products"
+FLOW_PRODUCT_DETAIL = "product_detail"
+FLOW_CALC = "calc_flow"
+
+# ── Calculator step names ────────────────────────────────────
+STEP_AMOUNT = "amount"
+STEP_TERM = "term"
+STEP_DOWNPAYMENT = "downpayment"
+
 
 def _greeting_with_menu(lang: str = "ru") -> str:
     if lang == "en":

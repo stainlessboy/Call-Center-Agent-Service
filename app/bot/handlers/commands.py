@@ -511,56 +511,6 @@ async def cmd_new(message: Message, chat_service: ChatService) -> None:
     )
 
 
-@router.message(Command("op_sessions"))
-async def op_sessions(message: Message, chat_service: ChatService) -> None:
-    settings = get_settings()
-    if message.from_user is None or message.from_user.id not in settings.operator_ids:
-        return
-    sessions = await chat_service.list_human_sessions(limit=10)
-    if not sessions:
-        await message.answer("Нет сессий в режиме оператора.")
-        return
-    lines = ["Активные запросы оператору:"]
-    for chat_session, user in sessions:
-        started = chat_session.started_at.strftime("%Y-%m-%d %H:%M") if chat_session.started_at else "-"
-        lines.append(
-            f"• {chat_session.id}\n"
-            f"  пользователь: @{user.username or '—'} ({user.telegram_user_id})\n"
-            f"  c {started}"
-        )
-    await message.answer("\n".join(lines))
-
-
-@router.message(Command("op"))
-async def op_reply(message: Message, chat_service: ChatService) -> None:
-    settings = get_settings()
-    if message.from_user is None or message.from_user.id not in settings.operator_ids:
-        return
-    parts = (message.text or "").split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer("Использование: /op <session_id> <текст ответа>")
-        return
-    _, session_id, reply_text = parts
-    target_chat_id = await chat_service.send_operator_message(
-        session_id=session_id,
-        operator_telegram_id=message.from_user.id,
-        text=reply_text,
-    )
-    if target_chat_id is None:
-        await message.answer("Сессия не найдена или закрыта.")
-        return
-    try:
-        operator_name = message.from_user.username or str(message.from_user.id)
-        await message.bot.send_message(
-            chat_id=target_chat_id,
-            text=_format_source_reply(reply_text, "operator", operator_name),
-        )
-    except Exception as exc:  # pragma: no cover
-        await message.answer(f"Не удалось отправить пользователю: {exc}")
-        return
-    await message.answer("Сообщение отправлено.")
-
-
 @router.message(F.contact)
 async def contact_shared(message: Message, chat_service: ChatService) -> None:
     tg_user = message.from_user
@@ -1037,34 +987,36 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
         return
     await chat_service.set_human_mode(session_id, True)
     lang = normalize_lang(user.language)
-    await callback.message.answer(
-        {
-            "ru": "Переключаю на оператора. Сообщения будут отвечать сотрудники поддержки.",
-            "en": "Switching to an operator. Support staff will reply to your messages.",
-            "uz": "Operatorga o‘tkazyapman. Xabarlarga qo‘llab-quvvatlash xodimlari javob beradi.",
-        }[lang]
-    )
-    await callback.answer(
-        {
-            "ru": "Запрос отправлен.",
-            "en": "Request sent.",
-            "uz": "So‘rov yuborildi.",
-        }[lang]
-    )
 
-    settings = get_settings()
-    if settings.operator_ids:
-        alert = (
-            f"🚨 Пользователь запросил оператора\n"
-            f"Сессия: {chat_session.id}\n"
-            f"Пользователь: @{user.username or '—'} ({user.telegram_user_id})\n"
-            "Ответьте командой /op <session_id> <текст>."
-        )
-        for op_id in settings.operator_ids:
-            try:
-                await callback.message.bot.send_message(chat_id=op_id, text=alert)
-            except Exception:
-                continue
+    # Chat Middleware
+    from app.api.fastapi_app import app as _fastapi_app
+    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+
+    if middleware_client is None:
+        # Middleware not configured — tell user operators are unavailable
+        await chat_service.set_human_mode(session_id, False)
+        await callback.message.answer(t("middleware_unavailable", lang))
+        await callback.answer()
+        return
+
+    recent = await chat_service.get_recent_messages(session_id, limit=10)
+    context = "\n".join(
+        f"{'User' if m.role == 'user' else 'Bot'}: {m.text}"
+        for m in recent if m.text
+    )
+    customer_name = f"@{user.username}" if user.username else (user.first_name or str(user.telegram_user_id))
+
+    await callback.message.answer(t("searching_operator", lang))
+    await callback.answer()
+
+    ok = await middleware_client.start_chat(
+        session_id=session_id,
+        user_name=customer_name,
+        initial_message=context or "Клиент запросил оператора",
+    )
+    if not ok:
+        await chat_service.set_human_mode(session_id, False)
+        await callback.message.answer(t("middleware_unavailable", lang))
 
 
 @router.callback_query(F.data.startswith("bot:"))
@@ -1089,6 +1041,12 @@ async def disable_human_mode(callback: CallbackQuery, chat_service: ChatService)
             }[normalize_lang(user.language)]
         )
         return
+    # End middleware chat if active
+    from app.api.fastapi_app import app as _fastapi_app
+    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+    if middleware_client is not None:
+        await middleware_client.end_chat(session_id)
+
     await chat_service.set_human_mode(session_id, False)
     lang = normalize_lang(user.language)
     await callback.message.answer(

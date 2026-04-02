@@ -224,7 +224,7 @@ class UserAdmin(ModelView, model=User):
 
 
 # ---------------------------------------------------------------------------
-# ChatSession (with operator_reply feature)
+# ChatSession
 # ---------------------------------------------------------------------------
 
 class ChatSessionAdmin(ModelView, model=ChatSession):
@@ -318,61 +318,6 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     def details_query(self, request):
         return super().details_query(request).options(selectinload(ChatSession.messages))
 
-    async def scaffold_form(self, rules=None):
-        form_class = await super().scaffold_form(rules)
-        form_class.operator_reply = wtforms.TextAreaField(
-            "Ответ оператором",
-            description="Отправится пользователю в Telegram и сохранится в истории сообщений.",
-            render_kw={"rows": 4},
-        )
-        return form_class
-
-    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
-        if is_created:
-            return
-
-        operator_reply = (data.get("operator_reply") or "").strip()
-        if not operator_reply:
-            return
-
-        # Update session state
-        async with AsyncSessionLocal() as session:
-            async with session.begin():
-                chat_session = await session.get(ChatSession, model.id)
-                if chat_session is None:
-                    return
-                chat_session.human_mode = True
-                chat_session.human_mode_since = chat_session.human_mode_since or datetime.now(timezone.utc)
-                chat_session.last_activity_at = datetime.now(timezone.utc)
-
-                # Find user
-                user = await session.get(User, chat_session.user_id)
-                if user is None:
-                    logger.error("User not found for session %s", model.id)
-                    return
-
-                # Send Telegram message
-                token = (os.getenv("BOT_TOKEN") or "").strip()
-                if not token:
-                    logger.error("BOT_TOKEN not configured, cannot send operator reply")
-                    return
-
-                label = "👤 Оператор"
-                ok, error = await _send_telegram_message_async(
-                    token, user.telegram_user_id, f"{label}: {operator_reply}",
-                )
-                if not ok:
-                    logger.error("Failed to send Telegram message: %s", error)
-                    return
-
-                # Save operator message
-                session.add(Message(
-                    session_id=model.id,
-                    role="operator",
-                    text=operator_reply,
-                    created_at=datetime.now(timezone.utc),
-                ))
-
     @action(
         name="delete_with_messages",
         label="Удалить с сообщениями",
@@ -400,7 +345,7 @@ class MessageAdmin(ModelView, model=Message):
     name_plural = "Сообщения"
     icon = "fa-solid fa-envelope"
 
-    column_list = [Message.id, Message.session, Message.role, "text_preview", Message.created_at, Message.latency_ms, Message.total_tokens, Message.llm_cost, Message.error_code]
+    column_list = [Message.id, Message.session, Message.role, "text_preview", Message.created_at, Message.latency_ms, "llm_model", "llm_tokens", "llm_cost_fmt", Message.error_code]
     column_searchable_list = [Message.session_id, Message.text, Message.role]
     column_filters = [
         _RuStaticValuesFilter(
@@ -422,23 +367,37 @@ class MessageAdmin(ModelView, model=Message):
         "telegram_message_id": "Telegram ID сообщения",
         "created_at": "Дата создания",
         "latency_ms": "Задержка (мс)",
-        "agent_model": "Модель агента",
         "error_code": "Код ошибки",
-        "prompt_tokens": "Prompt токены",
-        "completion_tokens": "Completion токены",
-        "total_tokens": "Всего токенов",
-        "llm_cost": "Стоимость ($)",
+        "llm_usage": "LLM Usage",
+        "llm_model": "Модель LLM",
+        "llm_prompt_tokens": "Prompt токены",
+        "llm_completion_tokens": "Completion токены",
+        "llm_tokens": "Всего токенов",
+        "llm_cost_fmt": "Стоимость ($)",
     }
 
     column_formatters = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),
         Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
         "text_preview": lambda m, _: (m.text[:100] + "…") if m.text and len(m.text) > 100 else (m.text or ""),
-        Message.llm_cost: lambda m, _: f"${m.llm_cost:.6f}" if m.llm_cost else "",
+        "llm_model": lambda m, _: (m.llm_usage or {}).get("model", "") if m.llm_usage else "",
+        "llm_tokens": lambda m, _: str((m.llm_usage or {}).get("total_tokens", "")) if m.llm_usage else "",
+        "llm_cost_fmt": lambda m, _: f"${m.llm_usage['cost']:.6f}" if m.llm_usage and m.llm_usage.get("cost") else "",
     }
+    column_details_list = [
+        Message.id, Message.session_id, Message.role, Message.text,
+        Message.created_at, Message.latency_ms, Message.error_code,
+        "llm_model", "llm_prompt_tokens", "llm_completion_tokens", "llm_tokens", "llm_cost_fmt",
+    ]
+
     column_formatters_detail = {
         Message.created_at: lambda m, _: _fmt_dt(m.created_at),
         Message.role: lambda m, _: _ROLE_MAP.get(m.role, m.role),
+        "llm_model": lambda m, _: (m.llm_usage or {}).get("model", "—") if m.llm_usage else "—",
+        "llm_prompt_tokens": lambda m, _: str((m.llm_usage or {}).get("prompt_tokens", "—")) if m.llm_usage else "—",
+        "llm_completion_tokens": lambda m, _: str((m.llm_usage or {}).get("completion_tokens", "—")) if m.llm_usage else "—",
+        "llm_tokens": lambda m, _: str((m.llm_usage or {}).get("total_tokens", "—")) if m.llm_usage else "—",
+        "llm_cost_fmt": lambda m, _: f"${m.llm_usage['cost']:.6f}" if m.llm_usage and m.llm_usage.get("cost") else "—",
     }
 
 

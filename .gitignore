@@ -19,3 +19,4 @@ nginx/conf.d/app.conf
 nginx/certbot/
 .claude
 .playwright-mcp
+chat-middleware-mock

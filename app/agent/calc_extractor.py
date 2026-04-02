@@ -6,6 +6,7 @@ a question / gave an ambiguous response.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -100,10 +101,13 @@ async def extract_calc_value(
     system_text = system_tpl.format(step_description=step_desc, product_name=product_name)
 
     try:
-        ai_msg = await llm.ainvoke([
-            SystemMessage(content=system_text),
-            HumanMessage(content=user_text),
-        ])
+        ai_msg = await asyncio.wait_for(
+            llm.ainvoke([
+                SystemMessage(content=system_text),
+                HumanMessage(content=user_text),
+            ]),
+            timeout=10.0,
+        )
         usage = extract_token_usage(ai_msg)
         raw = str(ai_msg.content or "").strip()
         # Strip markdown code fences if present

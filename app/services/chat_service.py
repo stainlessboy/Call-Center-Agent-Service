@@ -36,11 +36,9 @@ class ChatService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         agent_client: AgentClient,
-        operator_ids: Optional[list[int]] = None,
     ):
         self.session_factory = session_factory
         self.agent_client = agent_client
-        self.operator_ids = operator_ids or []
 
     async def get_or_create_user(
         self,
@@ -177,12 +175,8 @@ class ChatService:
         text: str,
         telegram_message_id: Optional[int] = None,
         latency_ms: Optional[int] = None,
-        agent_model: Optional[str] = None,
         error_code: Optional[str] = None,
-        prompt_tokens: Optional[int] = None,
-        completion_tokens: Optional[int] = None,
-        total_tokens: Optional[int] = None,
-        llm_cost: Optional[float] = None,
+        llm_usage: Optional[dict] = None,
     ) -> None:
         async with self.session_factory() as session:
             async with session.begin():
@@ -192,12 +186,8 @@ class ChatService:
                     text=text,
                     telegram_message_id=str(telegram_message_id) if telegram_message_id else None,
                     latency_ms=latency_ms,
-                    agent_model=agent_model,
                     error_code=error_code,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    llm_cost=llm_cost,
+                    llm_usage=llm_usage,
                 )
                 session.add(message)
             await session.commit()
@@ -220,17 +210,23 @@ class ChatService:
         )
 
         if chat_session.human_mode:
-            # Route through LangGraph interrupt so operator reply can resume the graph
-            try:
-                await self.agent_client.send_message(
-                    session_id=chat_session.id,
-                    user_id=user.telegram_user_id,
-                    text=text,
-                    language=normalize_lang(user.language),
-                    human_mode=True,
-                )
-            except Exception:
-                pass
+            # Forward to Chat Middleware if available
+            from app.api.fastapi_app import app as _fastapi_app
+            middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+            if middleware_client is not None and middleware_client.has_active_chat(chat_session.id):
+                await middleware_client.send_message(chat_session.id, text)
+            else:
+                # Route through LangGraph interrupt so operator reply can resume the graph
+                try:
+                    await self.agent_client.send_message(
+                        session_id=chat_session.id,
+                        user_id=user.telegram_user_id,
+                        text=text,
+                        language=normalize_lang(user.language),
+                        human_mode=True,
+                    )
+                except Exception:
+                    pass
             return AgentReply(
                 text=t("sent_to_operator", user.language),
                 pdf_path=None,
@@ -290,16 +286,13 @@ class ChatService:
             except Exception:  # pragma: no cover - translation fallback
                 logger.exception("Agent reply language normalization failed")
 
-        token_usage = getattr(turn_result, "token_usage", None) or {}
+        llm_usage = getattr(turn_result, "token_usage", None) or None
         await self._save_message(
             session_id=chat_session.id,
             role="agent",
             text=agent_text,
             latency_ms=latency_ms,
-            prompt_tokens=token_usage.get("prompt_tokens"),
-            completion_tokens=token_usage.get("completion_tokens"),
-            total_tokens=token_usage.get("total_tokens"),
-            llm_cost=token_usage.get("llm_cost"),
+            llm_usage=llm_usage,
         )
         return AgentReply(
             text=agent_text,
@@ -566,7 +559,6 @@ class ChatService:
                     role="operator",
                     text=text,
                     latency_ms=None,
-                    agent_model=None,
                     error_code=None,
                 )
                 session.add(message)

@@ -7,10 +7,10 @@ import logging as _logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.calc_extractor import extract_calc_value, regex_fallback
-from app.agent.constants import _REQUEST_LANGUAGE
+from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_yes, _looks_like_question
-from app.agent.llm import _get_chat_openai, accumulate_usage, calculate_cost, extract_token_usage
+from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
 from app.agent.state import BotState, _default_dialog
@@ -200,9 +200,10 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
                 "name": lead_slots.get("name", ""),
                 "phone": lead_slots.get("phone", user_text),
             })
+            return _finalize_turn(state, at("lead_saved", lang), _default_dialog())
         except Exception as exc:
-            _agent_logger.warning("lead save failed: %s", exc)
-        return _finalize_turn(state, at("lead_saved", lang), _default_dialog())
+            _agent_logger.exception("lead save failed: %s", exc)
+            return _finalize_turn(state, at("lead_save_error", lang), _default_dialog())
 
     # Unexpected lead_step value — reset
     return _finalize_turn(state, at("lead_fallback", lang), _default_dialog())
@@ -232,37 +233,41 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             is_question = True
         elif extraction["type"] == "value":
             val = extraction["value"]
-            if calc_step == "amount":
-                calc_slots["amount"] = int(val)
-                parsed_value = True
-            elif calc_step == "term":
-                clamped, adjusted = _clamp_term(int(val), selected_product, category)
-                if adjusted:
-                    t_min, t_max = _get_product_term_range(selected_product, category)
-                    if category == "deposit":
-                        schedule = selected_product.get("rate_schedule") or []
-                        available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
-                        avail_str = ", ".join(str(t) for t in available)
-                        adjustment_note = at("term_adjusted_deposit", lang, user_val=int(val), new_val=clamped, available=avail_str)
-                    else:
-                        adjustment_note = at("term_adjusted", lang, user_val=int(val), new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
-                calc_slots["term_months"] = clamped
-                parsed_value = True
-            elif calc_step == "downpayment":
-                clamped, adjusted = _clamp_downpayment(float(val), selected_product)
-                if adjusted:
-                    d_min, d_max = _get_product_downpayment_range(selected_product)
-                    adjustment_note = at("dp_adjusted", lang, user_val=f"{float(val):.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
-                calc_slots["downpayment"] = clamped
-                parsed_value = True
+            try:
+                if calc_step == STEP_AMOUNT:
+                    calc_slots["amount"] = int(float(val))
+                    parsed_value = True
+                elif calc_step == STEP_TERM:
+                    clamped, adjusted = _clamp_term(int(float(val)), selected_product, category)
+                    if adjusted:
+                        t_min, t_max = _get_product_term_range(selected_product, category)
+                        if category == "deposit":
+                            schedule = selected_product.get("rate_schedule") or []
+                            available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
+                            avail_str = ", ".join(str(t) for t in available)
+                            adjustment_note = at("term_adjusted_deposit", lang, user_val=int(float(val)), new_val=clamped, available=avail_str)
+                        else:
+                            adjustment_note = at("term_adjusted", lang, user_val=int(float(val)), new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
+                    calc_slots["term_months"] = clamped
+                    parsed_value = True
+                elif calc_step == STEP_DOWNPAYMENT:
+                    clamped, adjusted = _clamp_downpayment(float(val), selected_product)
+                    if adjusted:
+                        d_min, d_max = _get_product_downpayment_range(selected_product)
+                        adjustment_note = at("dp_adjusted", lang, user_val=f"{float(val):.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
+                    calc_slots["downpayment"] = clamped
+                    parsed_value = True
+            except (ValueError, TypeError):
+                _agent_logger.warning("Invalid value from extractor: step=%s val=%r", calc_step, val)
+                parsed_value = False
         else:
             # LLM unavailable — regex fallback
             val = regex_fallback(user_text, calc_step)
             if val is not None:
-                if calc_step == "amount":
+                if calc_step == STEP_AMOUNT:
                     calc_slots["amount"] = val
                     parsed_value = True
-                elif calc_step == "term":
+                elif calc_step == STEP_TERM:
                     clamped, adjusted = _clamp_term(val, selected_product, category)
                     if adjusted:
                         t_min, t_max = _get_product_term_range(selected_product, category)
@@ -275,7 +280,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                             adjustment_note = at("term_adjusted", lang, user_val=val, new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
                     calc_slots["term_months"] = clamped
                     parsed_value = True
-                elif calc_step == "downpayment":
+                elif calc_step == STEP_DOWNPAYMENT:
                     clamped, adjusted = _clamp_downpayment(val, selected_product)
                     if adjusted:
                         d_min, d_max = _get_product_downpayment_range(selected_product)
@@ -297,24 +302,24 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                         ])
                         faq_ans = str(ai_msg.content or "").strip()
                         accumulate_usage(turn_usage, extract_token_usage(ai_msg))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _agent_logger.debug("Side-question LLM failed: %s", exc)
             current_q = next((q for k, q in calc_qs if k == calc_step), "")
             prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
             if turn_usage:
-                turn_usage["llm_cost"] = calculate_cost(turn_usage)
+                finalize_usage(turn_usage)
             result = _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
             if turn_usage:
                 result["token_usage"] = turn_usage
             return result
         else:
             _hints = {
-                "amount": at("hint_amount", lang),
-                "term": at("hint_term", lang),
-                "downpayment": at("hint_downpayment", lang),
+                STEP_AMOUNT: at("hint_amount", lang),
+                STEP_TERM: at("hint_term", lang),
+                STEP_DOWNPAYMENT: at("hint_downpayment", lang),
             }
             if turn_usage:
-                turn_usage["llm_cost"] = calculate_cost(turn_usage)
+                finalize_usage(turn_usage)
             result = _finalize_turn(
                 state,
                 _hints.get(calc_step, at("hint_generic", lang)),
@@ -326,11 +331,11 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
 
     # Finalize cost before returning
     if turn_usage:
-        turn_usage["llm_cost"] = calculate_cost(turn_usage)
+        finalize_usage(turn_usage)
 
     # Find next unanswered question
     for step_key, step_q in calc_qs:
-        slot_key = "term_months" if step_key == "term" else step_key
+        slot_key = "term_months" if step_key == STEP_TERM else step_key
         if slot_key not in calc_slots:
             new_dialog = {**dialog, "calc_step": step_key, "calc_slots": calc_slots}
             msg = f"{adjustment_note}\n\n{step_q}" if adjustment_note else step_q
@@ -364,7 +369,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             answer = f"{adjustment_note}\n\n{answer}"
         lead_dialog = {
             **_default_dialog(),
-            "flow": "calc_flow",
+            "flow": FLOW_CALC,
             "category": category,
             "selected_product": selected_product,
             "calc_slots": calc_slots,
@@ -407,7 +412,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
 
     lead_dialog = {
         **_default_dialog(),
-        "flow": "calc_flow",
+        "flow": FLOW_CALC,
         "category": category,
         "selected_product": selected_product,
         "calc_slots": calc_slots,

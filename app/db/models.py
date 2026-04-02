@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -99,12 +100,8 @@ class Message(Base):
     telegram_message_id: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    agent_model: Mapped[Optional[str]] = mapped_column(String(128))
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
-    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    total_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    llm_cost: Mapped[Optional[float]] = mapped_column(Float)
+    llm_usage: Mapped[Optional[dict]] = mapped_column(JSONB)  # {model, prompt_tokens, completion_tokens, total_tokens, cost}
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 

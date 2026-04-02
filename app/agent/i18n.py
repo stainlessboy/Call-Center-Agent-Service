@@ -36,7 +36,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "запрос состояния кредита/вклада/карты клиента, проверка баланса, "
             "перевод средств, любые активные операции со счётом — "
             "ты НЕ можешь выполнить такие операции. Вежливо объясни это и вызови request_operator().\n"
-            "3. Клиент сам просит оператора — вызови request_operator() без лишних вопросов."
+            "3. Клиент сам просит оператора — вызови request_operator() без лишних вопросов.\n\n"
+            "КАЛЬКУЛЯТОР И ЗАЯВКИ:\n"
+            "Когда клиент хочет рассчитать кредит/ипотеку/автокредит/вклад или подать заявку — "
+            "НЕ выдумывай ответ и НЕ говори 'заявка принята'. "
+            "Сначала вызови get_products() с нужной категорией, чтобы показать доступные продукты. "
+            "Клиент выберет продукт, и только потом можно запустить калькулятор через start_calculator().\n"
+            "НИКОГДА не говори что заявка принята или что специалист свяжется — ты не можешь принимать заявки напрямую."
         ),
         "en": (
             "You are an experienced bank consultant. Communicate warmly, naturally, and to the point — like a real person. "
@@ -57,7 +63,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "requesting loan/deposit/card account status, checking balance, "
             "money transfers, any active account operations — "
             "you CANNOT perform such operations. Politely explain this and call request_operator().\n"
-            "3. Customer explicitly asks for an operator — call request_operator() without extra questions."
+            "3. Customer explicitly asks for an operator — call request_operator() without extra questions.\n\n"
+            "CALCULATOR AND APPLICATIONS:\n"
+            "When a customer wants to calculate a loan/mortgage/auto loan/deposit or apply — "
+            "DO NOT make up an answer and DO NOT say 'application accepted'. "
+            "First call get_products() with the appropriate category to show available products. "
+            "The customer will choose a product, and only then can the calculator be started via start_calculator().\n"
+            "NEVER say the application is accepted or that a specialist will contact them — you cannot accept applications directly."
         ),
         "uz": (
             "Siz tajribali bank maslahatchisisiz. Iliq, tabiiy va aniq muloqot qiling — tirik inson kabi. "
@@ -78,7 +90,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "kredit/omonat/karta holati so'rovi, balansni tekshirish, "
             "pul o'tkazish, hisobdagi har qanday faol operatsiyalar — "
             "siz bunday operatsiyalarni bajara OLMAYSIZ. Buni muloyimlik bilan tushuntiring va request_operator() ni chaqiring.\n"
-            "3. Mijoz o'zi operator so'rasa — ortiqcha savollarsiz request_operator() ni chaqiring."
+            "3. Mijoz o'zi operator so'rasa — ortiqcha savollarsiz request_operator() ni chaqiring.\n\n"
+            "KALKULYATOR VA ARIZALAR:\n"
+            "Mijoz kredit/ipoteka/avtokredit/depozitni hisoblashni yoki ariza topshirishni xohlasa — "
+            "javobni o'ylab topmang va 'ariza qabul qilindi' demang. "
+            "Avval get_products() ni tegishli kategoriya bilan chaqiring. "
+            "Mijoz mahsulotni tanlaydi, shundan keyin start_calculator() orqali kalkulyatorni ishga tushirish mumkin.\n"
+            "HECH QACHON ariza qabul qilingani yoki mutaxassis bog'lanishini aytmang — siz to'g'ridan-to'g'ri ariza qabul qila olmaysiz."
         ),
     },
 
@@ -166,6 +184,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "Product not found. Please choose from the list.",
         "uz": "Mahsulot topilmadi. Ro'yxatdan tanlang.",
     },
+    "product_not_found_suggest": {
+        "ru": "Продукт не найден. Доступные варианты: {names}",
+        "en": "Product not found. Available options: {names}",
+        "uz": "Mahsulot topilmadi. Mavjud variantlar: {names}",
+    },
     "choose_category": {
         "ru": "Выберите категорию продукта.",
         "en": "Choose a product category.",
@@ -221,6 +244,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "ru": "✅ Отлично! Менеджер свяжется с вами в ближайшее время. Спасибо за обращение!",
         "en": "✅ Great! A manager will contact you shortly. Thank you for reaching out!",
         "uz": "✅ Ajoyib! Menejer tez orada siz bilan bog'lanadi. Murojaat uchun rahmat!",
+    },
+    "lead_save_error": {
+        "ru": "⚠️ Не удалось сохранить заявку. Пожалуйста, попробуйте позже или свяжитесь с нами по телефону.",
+        "en": "⚠️ Could not save your application. Please try again later or contact us by phone.",
+        "uz": "⚠️ Arizani saqlab bo'lmadi. Keyinroq qayta urinib ko'ring yoki telefon orqali bog'laning.",
     },
     "lead_fallback": {
         "ru": "Если нужна помощь — напишите.",

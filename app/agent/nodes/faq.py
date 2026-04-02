@@ -11,6 +11,9 @@ from app.agent.constants import (
     _CURRENT_DIALOG,
     _LANG_INSTRUCTION,
     _REQUEST_LANGUAGE,
+    FLOW_CALC,
+    FLOW_PRODUCT_DETAIL,
+    FLOW_SHOW_PRODUCTS,
 )
 from app.agent.i18n import (
     at,
@@ -18,7 +21,7 @@ from app.agent.i18n import (
     get_credit_menu_buttons,
     get_main_menu_buttons,
 )
-from app.agent.llm import _get_chat_openai, accumulate_usage, calculate_cost, extract_token_usage
+from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
 from app.agent.nodes.helpers import _finalize_turn
 from app.agent.products import _find_product_by_name, _get_products_by_category
 from app.agent.state import BotState, _default_dialog
@@ -37,11 +40,11 @@ def _reattach_keyboard(dialog: dict, lang: str) -> tuple[dict, Optional[List[str
     flow = dialog.get("flow")
     products = list(dialog.get("products") or [])
     category = dialog.get("category", "")
-    if flow == "product_detail":
+    if flow == FLOW_PRODUCT_DETAIL:
         if category in ("debit_card", "fx_card"):
             return dict(dialog), [at("btn_submit_app", lang), at("btn_all_products", lang)]
         return dict(dialog), [at("btn_calc_payment", lang), at("btn_all_products", lang)]
-    if flow == "show_products" and products:
+    if flow == FLOW_SHOW_PRODUCTS and products:
         return dict(dialog), [p["name"] for p in products]
     return dict(dialog), None
 
@@ -77,7 +80,7 @@ async def _update_dialog_from_tools(
         products = await _get_products_by_category(category)
         new_dialog = {
             **_default_dialog(),
-            "flow": "show_products",
+            "flow": FLOW_SHOW_PRODUCTS,
             "category": category,
             "products": products,
         }
@@ -90,7 +93,7 @@ async def _update_dialog_from_tools(
         matched = _find_product_by_name(product_name, products)
         if not matched and products:
             matched = products[0]
-        new_dialog = {**dialog, "flow": "product_detail", "selected_product": matched}
+        new_dialog = {**dialog, "flow": FLOW_PRODUCT_DETAIL, "selected_product": matched}
         if category in ("debit_card", "fx_card"):
             return new_dialog, [at("btn_submit_app", lang), at("btn_all_products", lang)]
         return new_dialog, [at("btn_calc_payment", lang), at("btn_all_products", lang)]
@@ -101,7 +104,7 @@ async def _update_dialog_from_tools(
 
     if name == "back_to_product_list":
         products = list(dialog.get("products") or [])
-        new_dialog = {**dialog, "flow": "show_products", "selected_product": None}
+        new_dialog = {**dialog, "flow": FLOW_SHOW_PRODUCTS, "selected_product": None}
         return new_dialog, [p["name"] for p in products] if products else None
 
     if name == "start_calculator":
@@ -110,7 +113,7 @@ async def _update_dialog_from_tools(
         if not calc_qs:
             return _default_dialog(), None
         first_step, _ = calc_qs[0]
-        new_dialog = {**dialog, "flow": "calc_flow", "calc_step": first_step, "calc_slots": {}}
+        new_dialog = {**dialog, "flow": FLOW_CALC, "calc_step": first_step, "calc_slots": {}}
         return new_dialog, None
 
     if name == "faq_lookup":
@@ -210,7 +213,7 @@ async def node_faq(state: BotState) -> dict:
                 is_fallback = False
 
         if turn_usage:
-            turn_usage["llm_cost"] = calculate_cost(turn_usage)
+            finalize_usage(turn_usage)
 
         new_dialog, keyboard = await _update_dialog_from_tools(
             dialog, tool_calls_made, user_text, lang,

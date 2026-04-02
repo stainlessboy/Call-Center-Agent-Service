@@ -35,8 +35,8 @@ async def _create_async_checkpointer(backend: str, url: Optional[str]) -> tuple[
                 saver = await cm.__aenter__()
                 try:
                     await saver.setup()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _lg.debug("Postgres checkpointer setup (tables may already exist): %s", exc)
                 _lg.info("Using Postgres checkpointer")
                 return saver, cm
             except Exception as e:

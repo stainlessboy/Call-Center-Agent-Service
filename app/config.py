@@ -14,8 +14,6 @@ class Settings:
     bot_token: str
     database_url: str
     log_level: str
-    operator_ids: list[int]
-    operator_api_key: str | None
     webhook_base_url: str | None
     webhook_path: str
     webhook_secret: str | None
@@ -31,22 +29,12 @@ class Settings:
     max_message_length: int
     db_pool_size: int
     db_pool_max_overflow: int
-
-
-def _parse_operator_ids(raw: str | None) -> list[int]:
-    if not raw:
-        return []
-    parts = raw.replace(";", ",").split(",")
-    ids: list[int] = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        try:
-            ids.append(int(p))
-        except ValueError:
-            continue
-    return ids
+    middleware_enabled: bool
+    middleware_url: str | None
+    middleware_login: str | None
+    middleware_password: str | None
+    middleware_csq: str
+    middleware_nginx_ws_url: str | None
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -74,8 +62,6 @@ def get_settings() -> Settings:
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
         database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://bankbot:bankbot@localhost:5432/bankbot").strip(),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
-        operator_ids=_parse_operator_ids(os.getenv("OPERATOR_IDS")),
-        operator_api_key=(os.getenv("OPERATOR_API_KEY") or "").strip() or None,
         webhook_base_url=(os.getenv("WEBHOOK_BASE_URL") or "").strip() or None,
         webhook_path=_parse_webhook_path(os.getenv("WEBHOOK_PATH")),
         webhook_secret=(os.getenv("WEBHOOK_SECRET") or "").strip() or None,
@@ -97,4 +83,10 @@ def get_settings() -> Settings:
         max_message_length=_parse_positive_int(os.getenv("MAX_MESSAGE_LENGTH"), default=4000),
         db_pool_size=_parse_positive_int(os.getenv("DB_POOL_SIZE"), default=10),
         db_pool_max_overflow=_parse_positive_int(os.getenv("DB_POOL_MAX_OVERFLOW"), default=20),
+        middleware_enabled=os.getenv("MIDDLEWARE_ENABLED", "false").strip().lower() == "true",
+        middleware_url=(os.getenv("MIDDLEWARE_URL") or "").strip() or None,
+        middleware_login=(os.getenv("MIDDLEWARE_LOGIN") or "").strip() or None,
+        middleware_password=(os.getenv("MIDDLEWARE_PASSWORD") or "").strip() or None,
+        middleware_csq=os.getenv("MIDDLEWARE_CSQ", "Chat_Queue_1").strip(),
+        middleware_nginx_ws_url=(os.getenv("MIDDLEWARE_NGINX_WS_URL") or "").strip() or None,
     )

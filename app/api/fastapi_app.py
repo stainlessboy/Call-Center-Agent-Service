@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot, Dispatcher
@@ -11,50 +10,21 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from app.bot.i18n import normalize_lang, t
 from app.bot.handlers import commands as command_handlers
 from app.bot.keyboards.feedback import feedback_keyboard
 from app.bot.middlewares.chat_service import ChatServiceMiddleware
 from app.config import get_settings
-from app.db.models import ChatSession, Message, SessionStatus, User
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
 from app.services.agent_client import AgentClient
 from app.services.chat_service import ChatService
-from app.services.telegram_sender import send_telegram_message
+from app.services.chat_middleware_client import ChatMiddlewareClient
 
 logger = logging.getLogger(__name__)
 
-
-class OperatorSendRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    text: str = Field(..., min_length=1)
-    operator_name: Optional[str] = None
-    operator_id: Optional[int] = None
-
-
-class OperatorSendResponse(BaseModel):
-    ok: bool
-    session_id: str
-    user_telegram_id: int
-
-
-def _format_operator_text(text: str, operator_name: Optional[str]) -> str:
-    label = "👤"
-    if operator_name:
-        label = f"{label} ({operator_name})"
-    return f"{label}: {text}"
-
-
-def _require_api_key(x_api_key: Optional[str]) -> None:
-    api_key = (get_settings().operator_api_key or "").strip()
-    if not api_key:
-        raise HTTPException(status_code=403, detail="OPERATOR_API_KEY not configured")
-    if not x_api_key or x_api_key != api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 async def _inactivity_watcher(
@@ -103,12 +73,85 @@ async def lifespan(app: FastAPI):
 
     agent_client = AgentClient()
     await agent_client.setup(settings)
-    chat_service = ChatService(AsyncSessionLocal, agent_client, operator_ids=settings.operator_ids)
+    chat_service = ChatService(AsyncSessionLocal, agent_client)
     chat_service_mw = ChatServiceMiddleware(chat_service)
     dp.message.middleware(chat_service_mw)
     dp.callback_query.middleware(chat_service_mw)
     dp.include_router(command_handlers.router)
 
+    # ── Chat Middleware (operator handoff via Socket.IO) ──
+    middleware_client: ChatMiddlewareClient | None = None
+    if settings.middleware_enabled and settings.middleware_url and settings.middleware_login and settings.middleware_password:
+
+        async def _on_agent_joined(session_id: str, agent_name: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            lang = normalize_lang(user.language)
+            await bot.send_message(
+                chat_id=user.telegram_user_id,
+                text=t("operator_joined", lang, name=agent_name),
+            )
+
+        async def _on_agent_message(session_id: str, text: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            await chat_service._save_message(session_id, role="operator", text=text)
+            name = middleware_client.get_agent_name(session_id) if middleware_client else "Оператор"
+            formatted = f"👤 ({name or 'Оператор'}): {text}"
+            await bot.send_message(chat_id=user.telegram_user_id, text=formatted)
+            try:
+                await agent_client.resume_human_mode(session_id, text)
+            except Exception:
+                pass
+
+        async def _on_chat_ended(session_id: str, reason: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            lang = normalize_lang(user.language)
+            await chat_service.set_human_mode(session_id, False)
+            if reason == "timeout":
+                msg = t("operator_wait_timeout", lang)
+            else:
+                msg = t("human_timeout_back_to_bot", lang, minutes=0)
+            await bot.send_message(chat_id=user.telegram_user_id, text=msg)
+
+        async def _on_error(session_id: str, error_code: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            lang = normalize_lang(user.language)
+            await chat_service.set_human_mode(session_id, False)
+            if error_code == "chat_request_rejected_by_agent":
+                msg = t("all_operators_busy", lang)
+            elif error_code == "chat_timedout_waiting_for_agent":
+                msg = t("operator_wait_timeout", lang)
+            else:
+                msg = t("all_operators_busy", lang)
+            await bot.send_message(chat_id=user.telegram_user_id, text=msg)
+
+        middleware_client = ChatMiddlewareClient(
+            middleware_url=settings.middleware_url,
+            login=settings.middleware_login,
+            password=settings.middleware_password,
+            csq=settings.middleware_csq,
+            on_agent_message=_on_agent_message,
+            on_agent_joined=_on_agent_joined,
+            on_chat_ended=_on_chat_ended,
+            on_error=_on_error,
+            nginx_ws_url=settings.middleware_nginx_ws_url,
+        )
+        logger.info("Chat Middleware client initialized (url=%s)", settings.middleware_url)
+    elif settings.middleware_enabled:
+        logger.warning("MIDDLEWARE_ENABLED=true but missing URL/LOGIN/PASSWORD — middleware disabled")
+
+    app.state.middleware_client = middleware_client
     app.state.bot = bot
     app.state.dp = dp
     app.state.chat_service = chat_service
@@ -144,6 +187,9 @@ async def lifespan(app: FastAPI):
             watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await watcher
+        if middleware_client:
+            with suppress(Exception):
+                await middleware_client.close_all()
         with suppress(Exception):
             await agent_client.aclose()
         with suppress(Exception):
@@ -196,146 +242,3 @@ async def telegram_webhook(
     return {"ok": True}
 
 
-@app.post("/operator/send", response_model=OperatorSendResponse)
-async def send_operator(
-    payload: OperatorSendRequest,
-    request: Request,
-    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
-) -> OperatorSendResponse:
-    _require_api_key(x_api_key)
-
-    settings = get_settings()
-    if not settings.bot_token:
-        raise HTTPException(status_code=500, detail="BOT_TOKEN is not set")
-
-    text = payload.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Text is required")
-
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            result = await session.execute(
-                select(ChatSession, User)
-                .join(User, ChatSession.user_id == User.id)
-                .where(ChatSession.id == payload.session_id)
-            )
-            row = result.one_or_none()
-            if row is None:
-                raise HTTPException(status_code=404, detail="Session not found")
-            chat_session, user = row
-            if chat_session.status != SessionStatus.ACTIVE:
-                raise HTTPException(status_code=409, detail="Session is closed")
-
-            chat_session.human_mode = True
-            chat_session.human_mode_since = chat_session.human_mode_since or datetime.now(timezone.utc)
-            if payload.operator_id is not None:
-                chat_session.assigned_operator_id = payload.operator_id
-            chat_session.last_activity_at = datetime.now(timezone.utc)
-            user_telegram_id = user.telegram_user_id
-
-    text_for_user = _format_operator_text(text, payload.operator_name)
-
-    bot: Optional[Bot] = getattr(request.app.state, "bot", None)
-    if bot is not None:
-        try:
-            await bot.send_message(chat_id=user_telegram_id, text=text_for_user)
-        except Exception as exc:  # pragma: no cover
-            raise HTTPException(status_code=502, detail=f"Telegram send failed: {exc}") from exc
-    else:
-        ok, error = send_telegram_message(settings.bot_token, user_telegram_id, text_for_user)
-        if not ok:
-            raise HTTPException(status_code=502, detail=f"Telegram send failed: {error}")
-
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            session.add(
-                Message(
-                    session_id=payload.session_id,
-                    role="operator",
-                    text=text,
-                    created_at=datetime.now(timezone.utc),
-                )
-            )
-
-    return OperatorSendResponse(
-        ok=True,
-        session_id=payload.session_id,
-        user_telegram_id=user_telegram_id,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Admin panel: operator reply (AJAX from chat detail page)
-# ---------------------------------------------------------------------------
-
-class _AdminReplyRequest(BaseModel):
-    session_id: str
-    text: str
-
-
-@app.post("/admin/api/operator-reply")
-async def admin_operator_reply(payload: _AdminReplyRequest, request: Request) -> dict:
-    """Send operator reply from admin chat detail page."""
-    # Check admin session auth
-    if not request.session.get("authenticated"):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    settings = get_settings()
-    if not settings.bot_token:
-        raise HTTPException(status_code=500, detail="BOT_TOKEN is not set")
-
-    text_msg = payload.text.strip()
-    if not text_msg:
-        raise HTTPException(status_code=400, detail="Text is required")
-
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            result = await session.execute(
-                select(ChatSession, User)
-                .join(User, ChatSession.user_id == User.id)
-                .where(ChatSession.id == payload.session_id)
-            )
-            row = result.one_or_none()
-            if row is None:
-                raise HTTPException(status_code=404, detail="Session not found")
-            chat_session, user = row
-
-            chat_session.human_mode = True
-            chat_session.human_mode_since = chat_session.human_mode_since or datetime.now(timezone.utc)
-            chat_session.last_activity_at = datetime.now(timezone.utc)
-            user_telegram_id = user.telegram_user_id
-
-    label = "\U0001f464 Оператор"
-    text_for_user = f"{label}: {text_msg}"
-
-    bot: Optional[Bot] = getattr(request.app.state, "bot", None)
-    if bot is not None:
-        try:
-            await bot.send_message(chat_id=user_telegram_id, text=text_for_user)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Telegram send failed: {exc}") from exc
-    else:
-        ok, error = send_telegram_message(settings.bot_token, user_telegram_id, text_for_user)
-        if not ok:
-            raise HTTPException(status_code=502, detail=f"Telegram send failed: {error}")
-
-    now = datetime.now(timezone.utc)
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            session.add(
-                Message(
-                    session_id=payload.session_id,
-                    role="operator",
-                    text=text_msg,
-                    created_at=now,
-                )
-            )
-
-    return {
-        "ok": True,
-        "message": {
-            "role": "operator",
-            "text": text_msg,
-            "created_at": now.strftime("%H:%M"),
-        },
-    }

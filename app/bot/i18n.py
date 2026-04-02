@@ -124,7 +124,32 @@ TEXTS: dict[str, dict[str, str]] = {
     "pdf_caption": {
         "ru": "График выплат",
         "en": "Payment schedule",
-        "uz": "To‘lov jadvali",
+        "uz": "To’lov jadvali",
+    },
+    "searching_operator": {
+        "ru": "🔍 Ищем свободного оператора...",
+        "en": "🔍 Looking for an available operator...",
+        "uz": "🔍 Bo’sh operator qidirilmoqda...",
+    },
+    "operator_joined": {
+        "ru": "✅ Оператор {name} подключился к чату.",
+        "en": "✅ Operator {name} joined the chat.",
+        "uz": "✅ Operator {name} chatga qo’shildi.",
+    },
+    "all_operators_busy": {
+        "ru": "😔 Все операторы заняты. Попробуйте позже.",
+        "en": "😔 All operators are busy. Please try again later.",
+        "uz": "😔 Barcha operatorlar band. Keyinroq urinib ko’ring.",
+    },
+    "operator_wait_timeout": {
+        "ru": "⏰ Оператор не ответил. Возвращаю к боту.",
+        "en": "⏰ Operator did not respond. Returning to bot.",
+        "uz": "⏰ Operator javob bermadi. Botga qaytarilmoqda.",
+    },
+    "middleware_unavailable": {
+        "ru": "😔 Операторы сейчас недоступны. Попробуйте позже.",
+        "en": "😔 Operators are currently unavailable. Please try again later.",
+        "uz": "😔 Operatorlar hozircha mavjud emas. Keyinroq urinib ko’ring.",
     },
 }
 

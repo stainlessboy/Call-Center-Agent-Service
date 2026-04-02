@@ -99,9 +99,10 @@ async def select_product(product_name: str) -> str:
     products = list(dialog.get("products") or [])
     category = dialog.get("category", "")
     matched = _find_product_by_name(product_name, products)
-    if not matched and products:
-        matched = products[0]
     if not matched:
+        if products:
+            names = ", ".join(p["name"] for p in products[:5])
+            return at("product_not_found_suggest", lang, names=names)
         return at("product_not_found", lang)
     return _format_product_card(matched, category, lang)
 

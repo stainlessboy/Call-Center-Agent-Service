@@ -39,22 +39,23 @@ class Agent:
         try:
             snapshot = await self._graph.aget_state(config)
             return dict(snapshot.values or {})
-        except Exception:
+        except Exception as exc:
+            _agent_logger.debug("Failed to load existing state: %s", exc)
             return {}
 
     def _save_user_preference(self, user_id: int, key: str, value: Any) -> None:
         try:
             self._store.put((str(user_id), "preferences"), key, {"value": value})
-        except Exception:
-            pass
+        except Exception as exc:
+            _agent_logger.debug("Failed to save user preference: %s", exc)
 
     def _get_user_preference(self, user_id: int, key: str) -> Any:
         try:
             items = self._store.search((str(user_id), "preferences"), query=key, limit=1)
             if items:
                 return items[0].value.get("value")
-        except Exception:
-            pass
+        except Exception as exc:
+            _agent_logger.debug("Failed to get user preference: %s", exc)
         return None
 
     async def _ainvoke(
@@ -74,10 +75,15 @@ class Agent:
             state_in: BotState = {
                 "last_user_text": user_text,
                 "messages": list(existing.get("messages") or [SystemMessage(content=at("system_policy", _REQUEST_LANGUAGE.get()))]),
-                "dialog": dict(existing.get("dialog") or _default_dialog()),
+                "answer": "",
                 "human_mode": human_mode,
+                "keyboard_options": None,
+                "dialog": dict(existing.get("dialog") or _default_dialog()),
+                "_route": "",
                 "session_id": session_id,
                 "user_id": user_id,
+                "show_operator_button": False,
+                "token_usage": None,
             }
             out = await self._graph.ainvoke(state_in, config=config)
             return AgentTurnResult(
@@ -132,8 +138,8 @@ class Agent:
                 msgs.append(AIMessage(content=text))
         try:
             await self._graph.aupdate_state(config, {"messages": msgs})
-        except Exception:
-            pass
+        except Exception as exc:
+            _agent_logger.warning("Failed to sync history for session %s: %s", session_id, exc)
 
     def close(self) -> None:
         return None
@@ -142,5 +148,5 @@ class Agent:
         if self._checkpointer_cm is not None:
             try:
                 await self._checkpointer_cm.__aexit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                _agent_logger.warning("Failed to close checkpointer: %s", exc)
