@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import at
-from app.agent.intent import _is_identity_operation, _is_operator_request
+from app.agent.intent import _is_operator_request
 from app.agent.state import BotState
 
 _logger = _logging.getLogger(__name__)
@@ -38,7 +38,6 @@ def _finalize_turn(
     show_operator = (
         streak >= FALLBACK_STREAK_THRESHOLD
         or _is_operator_request(user_text)
-        or _is_identity_operation(user_text)
         or dialog.get("operator_requested", False)
     )
     dialog = {**dialog, "fallback_streak": streak, "operator_requested": False}
