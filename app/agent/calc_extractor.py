@@ -124,6 +124,232 @@ async def extract_calc_value(
         return {"type": "unparsed"}
 
 
+_PREFILL_SYSTEM_PROMPT = {
+    "ru": (
+        "Ты помощник, анализирующий историю диалога с клиентом банка перед запуском калькулятора.\n"
+        "Категория продукта: {category}\n\n"
+        "Задача: извлечь из последних сообщений финансовые данные, которые можно использовать как начальные значения "
+        "для калькулятора. Используй САМЫЕ ПОСЛЕДНИЕ упомянутые значения, если их было несколько.\n\n"
+        "Важные правила:\n"
+        "- Если клиент назвал зарплату/доход — можно приблизительно оценить подходящую сумму кредита/вклада: "
+        "для кредита — до 2–3 зарплат (если срок до 6 мес.) или исходя из платежеспособности; "
+        "для овердрафта — близко к размеру зарплаты.\n"
+        "- Для суммы (amount): верни в сумах (целое число).\n"
+        "- Для срока (term_months): верни в месяцах (целое число).\n"
+        "- Включай поле только если оно явно упомянуто или уверенно выводится из контекста.\n"
+        "- Если данных нет — верни пустой объект {}.\n\n"
+        "Верни JSON (без markdown): {{\"amount\": <число или null>, \"term_months\": <число или null>}}\n"
+        "Пропускай null-поля из ответа."
+    ),
+    "en": (
+        "You are an assistant analyzing a customer's conversation history before starting the bank calculator.\n"
+        "Product category: {category}\n\n"
+        "Task: extract financial data from the recent messages that can be used as initial values for the calculator. "
+        "Use the MOST RECENT values if multiple were mentioned.\n\n"
+        "Important rules:\n"
+        "- If the customer mentioned salary/income — estimate a reasonable loan/deposit amount: "
+        "for loans — up to 2–3 months' salary (short term) or based on affordability; "
+        "for overdraft — close to the salary amount.\n"
+        "- For amount: return in UZS (integer).\n"
+        "- For term_months: return in months (integer).\n"
+        "- Include a field only if explicitly mentioned or confidently inferred from context.\n"
+        "- If no data found — return empty object {}.\n\n"
+        "Return JSON (no markdown): {{\"amount\": <number or null>, \"term_months\": <number or null>}}\n"
+        "Omit null fields from the response."
+    ),
+    "uz": (
+        "Siz bank kalkulyatorini ishga tushirishdan oldin mijoz suhbati tarixini tahlil qiluvchi yordamchisiz.\n"
+        "Mahsulot toifasi: {category}\n\n"
+        "Vazifa: so'nggi xabarlardagi moliyaviy ma'lumotlarni kalkulyator uchun boshlang'ich qiymatlar sifatida chiqarish. "
+        "Bir nechta qiymat eslatilgan bo'lsa, ENG SO'NGGI qiymatdan foydalaning.\n\n"
+        "Muhim qoidalar:\n"
+        "- Mijoz maosh/daromadini eslatgan bo'lsa — kredit/omonat summasini taxminan baholash mumkin: "
+        "kredit uchun — 2–3 oylik maosh; overdraft uchun — maoshga yaqin.\n"
+        "- Summa (amount): so'mda (butun son).\n"
+        "- Muddat (term_months): oyda (butun son).\n"
+        "- Faqat aniq eslatilgan yoki kontekstdan ishonchli chiqariladigan maydonlarni kiriting.\n"
+        "- Ma'lumot bo'lmasa — bo'sh ob'ekt {} qaytaring.\n\n"
+        "JSON qaytaring (markdownsiz): {{\"amount\": <son yoki null>, \"term_months\": <son yoki null>}}\n"
+        "Null maydonlarni javobdan o'tkazib yuboring."
+    ),
+}
+
+_CONTEXT_UPDATE_SYSTEM_PROMPT = {
+    "ru": (
+        "Ты помощник, определяющий суть ответа клиента в процессе сбора данных калькулятора.\n"
+        "Текущий шаг калькулятора: {step_description}\n"
+        "Продукт: {product_name}\n"
+        "Уже собранные данные: {current_slots}\n\n"
+        "Клиент написал: \"{user_text}\"\n\n"
+        "Определи тип ответа и верни JSON (без markdown):\n"
+        '- Если клиент дал КОНКРЕТНОЕ числовое значение для текущего шага: {{"type": "value", "value": <число>}}\n'
+        '- Если клиент сообщает финансовый контекст (зарплата, доход, бюджет), из которого можно вывести значение: '
+        '{{"type": "context_update", "updates": {{"amount": <число>}}}}\n'
+        '- Если клиент задаёт вопрос или рассуждает: {{"type": "question", "text": "<суть>"}}\n'
+        '- Если не удалось распознать: {{"type": "unparsed"}}\n\n'
+        "Правило для context_update: используй только если можно уверенно вывести числовое значение. "
+        "Например 'моя зарплата 15 млн' при шаге amount → amount=15000000."
+    ),
+    "en": (
+        "You are an assistant determining the intent of a customer's response during calculator data collection.\n"
+        "Current calculator step: {step_description}\n"
+        "Product: {product_name}\n"
+        "Already collected data: {current_slots}\n\n"
+        "Customer wrote: \"{user_text}\"\n\n"
+        "Determine the response type and return JSON (no markdown):\n"
+        '- If customer gave a CONCRETE numeric value for the current step: {{"type": "value", "value": <number>}}\n'
+        '- If customer provides financial context (salary, income, budget) from which a value can be inferred: '
+        '{{"type": "context_update", "updates": {{"amount": <number>}}}}\n'
+        '- If customer is asking a question or reasoning: {{"type": "question", "text": "<essence>"}}\n'
+        '- If unrecognized: {{"type": "unparsed"}}\n\n'
+        "Rule for context_update: only use if a numeric value can be confidently derived. "
+        "E.g. 'my salary is 15 mln' at amount step → amount=15000000."
+    ),
+    "uz": (
+        "Siz kalkulyator ma'lumotlarini yig'ish jarayonida mijoz javobining mohiyatini aniqlovchi yordamchisiz.\n"
+        "Joriy kalkulyator bosqichi: {step_description}\n"
+        "Mahsulot: {product_name}\n"
+        "Allaqachon yig'ilgan ma'lumotlar: {current_slots}\n\n"
+        "Mijoz yozdi: \"{user_text}\"\n\n"
+        "Javob turini aniqlang va JSON qaytaring (markdownsiz):\n"
+        '- Agar mijoz joriy bosqich uchun ANIQ raqamli qiymat bergan bo\'lsa: {{"type": "value", "value": <raqam>}}\n'
+        '- Agar mijoz qiymatni chiqarish mumkin bo\'lgan moliyaviy kontekst bildirsa (maosh, daromad): '
+        '{{"type": "context_update", "updates": {{"amount": <raqam>}}}}\n'
+        '- Agar mijoz savol bersa yoki muhokama qilsa: {{"type": "question", "text": "<mohiyat>"}}\n'
+        '- Agar tanib bo\'lmasa: {{"type": "unparsed"}}\n\n'
+        "context_update qoidasi: faqat raqamli qiymatni ishonchli chiqarish mumkin bo'lsa foydalaning."
+    ),
+}
+
+
+async def extract_prefill_from_history(
+    messages: list,
+    category: str,
+    lang: str = "ru",
+    last_n: int = 10,
+) -> dict:
+    """Extract pre-fill values for the calculator from recent conversation history.
+
+    Uses LLM to identify amounts, terms, or salary context mentioned in the last N messages.
+    Returns a dict with keys like {"amount": 15000000, "term_months": 12}.
+    Falls back to empty dict if LLM is unavailable or nothing is found.
+    """
+    llm = _get_chat_openai()
+    if not llm:
+        return {}
+
+    # Build a text summary of the last N messages
+    recent = messages[-last_n:] if len(messages) > last_n else messages
+    history_lines: list[str] = []
+    for msg in recent:
+        role = getattr(msg, "type", None) or getattr(msg, "role", "unknown")
+        content = str(getattr(msg, "content", "") or "").strip()
+        if content:
+            history_lines.append(f"{role}: {content}")
+
+    if not history_lines:
+        return {}
+
+    history_text = "\n".join(history_lines)
+    system_tpl = _PREFILL_SYSTEM_PROMPT.get(lang, _PREFILL_SYSTEM_PROMPT["ru"])
+    system_text = system_tpl.format(category=category)
+
+    try:
+        ai_msg = await asyncio.wait_for(
+            llm.ainvoke([
+                SystemMessage(content=system_text),
+                HumanMessage(content=history_text),
+            ]),
+            timeout=10.0,
+        )
+        raw = str(ai_msg.content or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            return {}
+        # Only return keys with actual non-null integer/float values
+        prefill = {}
+        if result.get("amount") is not None:
+            prefill["amount"] = int(float(result["amount"]))
+        if result.get("term_months") is not None:
+            prefill["term_months"] = int(float(result["term_months"]))
+        return prefill
+    except Exception as exc:
+        _log.debug("prefill extraction failed: %s", exc)
+        return {}
+
+
+async def extract_updated_value(
+    user_text: str,
+    calc_step: str,
+    current_slots: dict,
+    product_name: str,
+    lang: str = "ru",
+) -> dict:
+    """Determine whether user input is a direct value, context update, question, or unparsed.
+
+    This is a richer version of extract_calc_value that also handles cases where
+    the user provides financial context (salary/income) instead of a direct answer.
+
+    Returns one of:
+        {"type": "value", "value": <number>}
+        {"type": "context_update", "updates": {"amount": <number>, ...}}
+        {"type": "question", "text": "..."}
+        {"type": "unparsed"}
+    All may include an "_usage" key with token counts.
+    """
+    llm = _get_chat_openai()
+    if not llm:
+        return {"type": "unparsed"}
+
+    step_desc = _STEP_DESCRIPTIONS.get(calc_step, {}).get(lang, calc_step)
+    system_tpl = _CONTEXT_UPDATE_SYSTEM_PROMPT.get(lang, _CONTEXT_UPDATE_SYSTEM_PROMPT["ru"])
+
+    slots_repr = ", ".join(f"{k}={v}" for k, v in current_slots.items()) or "нет"
+    system_text = system_tpl.format(
+        step_description=step_desc,
+        product_name=product_name,
+        current_slots=slots_repr,
+        user_text=user_text,
+    )
+
+    try:
+        ai_msg = await asyncio.wait_for(
+            llm.ainvoke([
+                SystemMessage(content=system_text),
+                HumanMessage(content=user_text),
+            ]),
+            timeout=10.0,
+        )
+        usage = extract_token_usage(ai_msg)
+        raw = str(ai_msg.content or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
+        rtype = result.get("type")
+
+        if rtype == "value" and result.get("value") is not None:
+            return {"type": "value", "value": result["value"], "_usage": usage}
+        if rtype == "context_update" and isinstance(result.get("updates"), dict):
+            # Coerce all update values to int/float
+            updates = {}
+            for k, v in result["updates"].items():
+                if v is not None:
+                    try:
+                        updates[k] = int(float(v))
+                    except (ValueError, TypeError):
+                        pass
+            if updates:
+                return {"type": "context_update", "updates": updates, "_usage": usage}
+        if rtype == "question":
+            return {"type": "question", "text": result.get("text", user_text), "_usage": usage}
+        return {"type": "unparsed", "_usage": usage}
+    except Exception as exc:
+        _log.debug("context update extraction failed: %s", exc)
+        return {"type": "unparsed"}
+
+
 def regex_fallback(user_text: str, calc_step: str) -> Optional[int | float]:
     """Regex fallback when LLM is unavailable."""
     if calc_step == "amount":

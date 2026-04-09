@@ -6,7 +6,12 @@ import logging as _logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.calc_extractor import extract_calc_value, regex_fallback
+from app.agent.calc_extractor import (
+    extract_calc_value,
+    extract_prefill_from_history,
+    extract_updated_value,
+    regex_fallback,
+)
 from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_yes, _looks_like_question
@@ -224,6 +229,25 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     calc_qs = get_calc_questions(category, lang)
     turn_usage: dict = {}
 
+    # --- Improvement 2: Pre-fill slots from conversation history on first entry ---
+    # First entry: calc_step is None and slots are empty — try to seed from history
+    if not calc_step and not calc_slots:
+        messages = state.get("messages") or []
+        prefill = await extract_prefill_from_history(messages, category, lang)
+        if prefill:
+            confirmation_parts: list[str] = []
+            if "amount" in prefill:
+                amount_fmt = f"{prefill['amount']:,}".replace(",", " ")
+                calc_slots["amount"] = prefill["amount"]
+                confirmation_parts.append(at("calc_prefill_amount", lang, amount=amount_fmt))
+            if "term_months" in prefill:
+                calc_slots["term_months"] = prefill["term_months"]
+            if confirmation_parts:
+                adjustment_note = "\n".join(confirmation_parts)
+            _agent_logger.debug(
+                "calc prefill from history: category=%s prefill=%r", category, prefill
+            )
+
     if calc_step:
         product_name = _localized_name(selected_product, lang) or selected_product.get("name") or ""
         extraction = await extract_calc_value(user_text, calc_step, product_name, lang)
@@ -291,27 +315,48 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     # User asked a question or gave ambiguous input — answer and re-ask
     if calc_step and (is_question or not parsed_value):
         if is_question or _looks_like_question(user_text):
-            faq_ans = await _faq_lookup(user_text, lang) or ""
-            if not faq_ans:
-                llm = _get_chat_openai()
-                if llm:
-                    try:
-                        ai_msg = await llm.ainvoke([
-                            SystemMessage(content=at("calc_side_system", lang)),
-                            HumanMessage(content=user_text),
-                        ])
-                        faq_ans = str(ai_msg.content or "").strip()
-                        accumulate_usage(turn_usage, extract_token_usage(ai_msg))
-                    except Exception as exc:
-                        _agent_logger.debug("Side-question LLM failed: %s", exc)
-            current_q = next((q for k, q in calc_qs if k == calc_step), "")
-            prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
-            if turn_usage:
-                finalize_usage(turn_usage)
-            result = _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
-            if turn_usage:
-                result["token_usage"] = turn_usage
-            return result
+            # --- Improvement 3: Check if the "question" is actually a context update ---
+            product_name_ctx = _localized_name(selected_product, lang) or selected_product.get("name") or ""
+            ctx_extraction = await extract_updated_value(
+                user_text, calc_step, calc_slots, product_name_ctx, lang
+            )
+            accumulate_usage(turn_usage, ctx_extraction.get("_usage") or {})
+
+            if ctx_extraction["type"] == "context_update":
+                updates = ctx_extraction.get("updates") or {}
+                for slot_key, slot_val in updates.items():
+                    calc_slots[slot_key] = slot_val
+                    if slot_key == "amount":
+                        amount_fmt = f"{slot_val:,}".replace(",", " ")
+                        adjustment_note = at("calc_context_update_amount", lang, amount=amount_fmt)
+                _agent_logger.debug(
+                    "calc context update applied: step=%s updates=%r", calc_step, updates
+                )
+                # Fall through to find the next unanswered question below
+                parsed_value = True
+                is_question = False
+            else:
+                faq_ans = await _faq_lookup(user_text, lang) or ""
+                if not faq_ans:
+                    llm = _get_chat_openai()
+                    if llm:
+                        try:
+                            ai_msg = await llm.ainvoke([
+                                SystemMessage(content=at("calc_side_system", lang)),
+                                HumanMessage(content=user_text),
+                            ])
+                            faq_ans = str(ai_msg.content or "").strip()
+                            accumulate_usage(turn_usage, extract_token_usage(ai_msg))
+                        except Exception as exc:
+                            _agent_logger.debug("Side-question LLM failed: %s", exc)
+                current_q = next((q for k, q in calc_qs if k == calc_step), "")
+                prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
+                if turn_usage:
+                    finalize_usage(turn_usage)
+                result = _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
+                if turn_usage:
+                    result["token_usage"] = turn_usage
+                return result
         else:
             _hints = {
                 STEP_AMOUNT: at("hint_amount", lang),

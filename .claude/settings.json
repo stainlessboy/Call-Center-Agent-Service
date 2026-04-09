@@ -1,33 +1,57 @@
 {
   "permissions": {
     "allow": [
-      "Bash(alembic revision -m \"add lead table\" --autogenerate)",
-      "Bash(alembic upgrade head)",
-      "Bash(xargs ls -lh)",
-      "Bash(pip show langgraph langchain-openai aiogram fastapi)",
-      "Bash(pip install django-unfold -q)",
-      "Bash(pip show django-unfold)",
-      "Bash(python -c \":*)",
-      "Bash(python manage.py collectstatic --noinput)",
-      "Bash(ls /Users/user/PycharmProjects/complex-agent-api/.env*)",
-      "Bash(grep -n \"except.*:$\\\\|except Exception\" /Users/user/PycharmProjects/complex-agent-api/app/services/*.py)",
-      "Bash(wc -l /Users/user/PycharmProjects/complex-agent-api/scripts/*.py)",
-      "Bash(wc -l /Users/user/PycharmProjects/complex-agent-api/app/services/*.py /Users/user/PycharmProjects/complex-agent-api/app/db/session.py /Users/user/PycharmProjects/complex-agent-api/app/db/alembic/env.py /Users/user/PycharmProjects/complex-agent-api/app/bot/i18n.py /Users/user/PycharmProjects/complex-agent-api/bank_admin/models.py)",
-      "Bash(grep -n \"TODO\\\\|FIXME\\\\|XXX\\\\|HACK\\\\|BUG\" /Users/user/PycharmProjects/complex-agent-api/app/services/*.py)",
-      "Bash(grep -E \"^def |^class \" /Users/user/PycharmProjects/complex-agent-api/app/bot/keyboards/*.py)",
-      "Bash(docker compose up -d)",
-      "Bash(docker ps --format \"{{.Names}} {{.Ports}}\")",
-      "Bash(docker start postgres_local)",
-      "Bash(docker exec postgres_local psql -U postgres -c \"SELECT 1 FROM pg_database WHERE datname = ''bankbot''\")",
-      "Bash(docker exec postgres_local psql -U postgres -c \"CREATE USER bankbot WITH PASSWORD ''bankbot'';\" -c \"CREATE DATABASE bankbot OWNER bankbot;\")",
-      "Bash(docker rm complex-agent-api-postgres-1)",
-      "Bash(docker exec postgres_local psql -U bankbot -d bankbot -c \"SELECT 1\")",
-      "Bash(pip install psycopg2-binary)",
-      "Bash(gtimeout 10 python3 main.py)",
-      "Bash(DJANGO_SETTINGS_MODULE=admin_site.settings python3 -c \":*)"
+      "Bash(alembic:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(python3 -c:*)",
+      "Bash(python -c:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pip:*)",
+      "Bash(docker:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(gtimeout:*)",
+      "Bash(python3 main.py:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_close"
     ],
     "additionalDirectories": [
       "/Users/user/.claude/projects/-Users-user-PycharmProjects-complex-agent-api/memory"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q '\\.py\"'; then echo 'Python file edit - will syntax check after'; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get('file_path',''))\" 2>/dev/null); if [ -n \"$FILE\" ] && echo \"$FILE\" | grep -q '\\.py$'; then python3 -m py_compile \"$FILE\" 2>&1 || echo \"SYNTAX ERROR in $FILE\"; fi"
+          }
+        ]
+      }
     ]
   }
 }
