@@ -382,6 +382,18 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     for step_key, step_q in calc_qs:
         slot_key = "term_months" if step_key == STEP_TERM else step_key
         if slot_key not in calc_slots:
+            # Auto-fill fixed-value steps (e.g. term=12..12 → skip question)
+            if step_key == STEP_TERM:
+                t_min, t_max = _get_product_term_range(selected_product, category)
+                if t_min is not None and t_max is not None and t_min == t_max:
+                    calc_slots["term_months"] = t_min
+                    continue
+            elif step_key == STEP_DOWNPAYMENT:
+                d_min, d_max = _get_product_downpayment_range(selected_product)
+                if d_min is not None and d_max is not None and d_min == d_max:
+                    calc_slots["downpayment"] = d_min
+                    continue
+
             new_dialog = {**dialog, "calc_step": step_key, "calc_slots": calc_slots}
             msg = f"{adjustment_note}\n\n{step_q}" if adjustment_note else step_q
             result = _finalize_turn(state, msg, new_dialog)

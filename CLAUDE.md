@@ -255,6 +255,11 @@ Important optional:
 3. If the tool changes dialog state, add a handler in `nodes/faq.py` (`_update_dialog_from_tools()`)
 4. The LLM will discover the tool via its docstring — write a clear description
 
+## Workflow Rules
+
+- **Plan first**: Before any non-trivial task, present a numbered plan and wait for user approval before implementing.
+- **Commit descriptions**: After completing a task, suggest a commit message in Russian (short summary + bullet list of changes). Never run git commit — user commits manually.
+
 ## Claude Code Setup
 
 ### Custom Agents (`.claude/agents/`)
