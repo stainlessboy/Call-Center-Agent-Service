@@ -14,7 +14,7 @@ from app.agent.calc_extractor import (
 )
 from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
-from app.agent.intent import _is_yes, _looks_like_question
+from app.agent.intent import _is_recalculate, _is_yes, _looks_like_question
 from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
@@ -177,6 +177,13 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
     lang = _REQUEST_LANGUAGE.get()
 
     if lead_step == "offer":
+        if _is_recalculate(user_text):
+            calc_qs = get_calc_questions(category, lang)
+            if calc_qs:
+                first_step, first_q = calc_qs[0]
+                new_dialog = {**dialog, "lead_step": None, "calc_step": first_step, "calc_slots": {}}
+                return _finalize_turn(state, at("calc_restart", lang) + "\n\n" + first_q, new_dialog)
+            return _finalize_turn(state, at("calc_restart", lang), _default_dialog())
         if _is_yes(user_text):
             new_dialog = {**dialog, "lead_step": "name"}
             return _finalize_turn(state, at("lead_ask_name", lang), new_dialog)
@@ -407,7 +414,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     amount = int(calc_slots.get("amount") or 10_000_000)
     term_months = int(calc_slots.get("term_months") or 12)
     amount_fmt = f"{amount:,}".replace(",", " ")
-    lead_keyboard = [at("btn_yes_call", lang), at("btn_no_thanks", lang)]
+    lead_keyboard = [at("btn_yes_call", lang), at("btn_no_thanks", lang), at("btn_recalculate", lang)]
 
     if category == "deposit":
         rate_pct = _lookup_deposit_rate(selected_product, calc_slots)

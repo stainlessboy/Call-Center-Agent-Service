@@ -110,6 +110,14 @@ def _looks_like_question(text: str) -> bool:
     ))
 
 
+def _is_recalculate(text: str) -> bool:
+    lower = text.lower()
+    return any(t in lower for t in (
+        "пересчитать", "пересчитай", "перерасч", "🔄", "заново", "recalculate", "recalc",
+        "qayta hisob", "qayta hisobla",
+    ))
+
+
 def _is_yes(text: str) -> bool:
     lower = text.lower()
     return any(t in lower for t in (

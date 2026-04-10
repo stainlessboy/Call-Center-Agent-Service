@@ -42,7 +42,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "ВАЖНО: НЕ задавай самостоятельно вопросы о сумме, сроке или первоначальном взносе. "
             "Для сбора этих данных вызови start_calculator() — калькулятор сам задаст все нужные вопросы. "
             "Если клиент уже назвал сумму/срок/взнос — всё равно вызови start_calculator(), "
-            "данные будут подхвачены автоматически.\n\n"
+            "данные будут подхвачены автоматически.\n"
+            "НИКОГДА не считай кредит/вклад самостоятельно в тексте. Не пиши формулы, не делай расчёты. "
+            "Для ЛЮБОГО расчёта — только start_calculator().\n\n"
+            "ОБРАБОТКА НЕДОВОЛЬСТВА РЕЗУЛЬТАТОМ:\n"
+            "Если клиент недоволен результатом расчёта (\"неправильно\", \"почему такая сумма\", \"я же писал другое\") — "
+            "НЕ прощайся и НЕ говори 'Хорошо, пишите'. Извинись и предложи пересчитать с правильными данными. "
+            "Спроси, какие параметры нужно изменить.\n\n"
             "АДАПТАЦИЯ К ФИНАНСОВОМУ КОНТЕКСТУ КЛИЕНТА:\n"
             "Всегда учитывай самую ПОСЛЕДНЮЮ информацию от клиента — она приоритетнее более ранних заявлений. "
             "Если клиент упомянул зарплату, доход или бюджет — адаптируй рекомендации под эти данные. "
@@ -76,7 +82,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "IMPORTANT: Do NOT ask the customer questions about amount, term, or down payment yourself. "
             "To collect these values, call start_calculator() — the calculator will ask all the necessary questions automatically. "
             "If the customer has already mentioned an amount/term/down payment — still call start_calculator(), "
-            "the data will be picked up automatically.\n\n"
+            "the data will be picked up automatically.\n"
+            "NEVER calculate loans/deposits yourself in text. Do not write formulas or perform calculations. "
+            "For ANY calculation — only start_calculator().\n\n"
+            "HANDLING DISSATISFACTION WITH RESULTS:\n"
+            "If the customer is unhappy with a calculation result (\"wrong\", \"why this amount\", \"I wrote something else\") — "
+            "do NOT say goodbye or 'OK, write if you need help'. Apologize and offer to recalculate with correct data. "
+            "Ask which parameters need to be changed.\n\n"
             "ADAPTING TO CUSTOMER FINANCIAL CONTEXT:\n"
             "Always use the LATEST information from the customer — it takes priority over earlier statements. "
             "If the customer mentions salary, income, or budget — adapt your recommendations accordingly. "
@@ -111,7 +123,13 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "MUHIM: Summa, muddat yoki boshlang'ich to'lov haqida o'zingiz savol bermang. "
             "Bu ma'lumotlarni yig'ish uchun start_calculator() ni chaqiring — kalkulyator barcha kerakli savollarni o'zi beradi. "
             "Agar mijoz allaqachon summa/muddat/to'lovni aytgan bo'lsa ham — baribir start_calculator() ni chaqiring, "
-            "ma'lumotlar avtomatik ravishda olinadi.\n\n"
+            "ma'lumotlar avtomatik ravishda olinadi.\n"
+            "HECH QACHON kredit/depozitni matnda o'zingiz hisoblamang. Formula yozmang, hisob-kitob qilmang. "
+            "HAR QANDAY hisoblash uchun — faqat start_calculator().\n\n"
+            "NATIJADAN NOROZILIKNI QAYTA ISHLASH:\n"
+            "Agar mijoz hisoblash natijasidan norozi bo'lsa (\"noto'g'ri\", \"nega bunday summa\", \"men boshqacha yozganman\") — "
+            "xayrlashmang va 'Yaxshi, yozing' demang. Uzr so'rang va to'g'ri ma'lumotlar bilan qayta hisoblashni taklif qiling. "
+            "Qaysi parametrlarni o'zgartirish kerakligini so'rang.\n\n"
             "MIJOZNING MOLIYAVIY KONTEKSTIGA MOSLASHISH:\n"
             "Har doim mijozning ENG SO'NGGI ma'lumotidan foydalaning — u oldingi bayonotlardan ustundir. "
             "Agar mijoz maosh, daromad yoki byudjetini eslatsa — tavsiyalarni shunga moslashtiring. "
@@ -171,6 +189,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "btn_submit_app": {"ru": "📋 Подать заявку", "en": "📋 Apply", "uz": "📋 Ariza topshirish"},
     "btn_yes_call": {"ru": "✅ Да, позвоните мне", "en": "✅ Yes, call me", "uz": "✅ Ha, menga qo'ng'iroq qiling"},
     "btn_no_thanks": {"ru": "❌ Нет, спасибо", "en": "❌ No, thanks", "uz": "❌ Yo'q, rahmat"},
+    "btn_recalculate": {"ru": "🔄 Пересчитать", "en": "🔄 Recalculate", "uz": "🔄 Qayta hisoblash"},
 
     # ── Tool responses ────────────────────────────────────────────────────
     "thanks_reply": {
@@ -256,6 +275,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "ru": "Хорошо! Если понадобится помощь — пишите.",
         "en": "Alright! Feel free to write if you need help.",
         "uz": "Xo'p! Yordam kerak bo'lsa — yozing.",
+    },
+    "calc_restart": {
+        "ru": "Хорошо, давайте пересчитаем!",
+        "en": "Sure, let's recalculate!",
+        "uz": "Xo'p, qayta hisoblaymiz!",
     },
     "lead_ask_phone": {
         "ru": "Укажите ваш номер телефона:",
