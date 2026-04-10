@@ -23,15 +23,18 @@ _EXTRACT_SYSTEM_PROMPT = {
         "Ты помощник, извлекающий данные из ответа клиента в процессе расчёта банковского продукта.\n"
         "Текущий шаг: {step_description}\n"
         "Продукт: {product_name}\n\n"
+        "{context}"
         "Проанализируй ответ клиента и верни JSON (без markdown):\n"
         '{{"type": "value", "value": <число>}} — если клиент дал КОНКРЕТНОЕ числовое значение\n'
         '{{"type": "question", "text": "<суть вопроса>"}} — если клиент задаёт вопрос или рассуждает, '
         "а не даёт конкретный ответ\n\n"
         "Правила:\n"
+        '- Если бот задал вопрос (например "На какой срок?") и клиент ответил конкретным значением (например "2 года") — '
+        'это КОНКРЕТНЫЙ ответ. type=value\n'
         '- "70% от стоимости авто" — это НЕ конкретная сумма, это описание. type=question\n'
         '- "Если я прошу 70%..." — это вопрос/рассуждение. type=question\n'
         '- "200 млн" — конкретная сумма. type=value, value=200000000\n'
-        '- "36 мес" — конкретный срок. type=value, value=36\n'
+        '- "36 мес" или "3 года" — конкретный срок. type=value, value=36\n'
         '- "20%" или "20" (в контексте первоначального взноса) — конкретный процент. type=value, value=20\n'
         '- Любое рассуждение, уточнение, встречный вопрос — type=question\n'
     ),
@@ -39,24 +42,30 @@ _EXTRACT_SYSTEM_PROMPT = {
         "You are an assistant extracting data from a customer's response during a bank product calculation.\n"
         "Current step: {step_description}\n"
         "Product: {product_name}\n\n"
+        "{context}"
         "Analyze the customer's response and return JSON (no markdown):\n"
         '{{"type": "value", "value": <number>}} — if the customer gave a CONCRETE numeric value\n'
         '{{"type": "question", "text": "<essence of the question>"}} — if the customer is asking '
         "a question or reasoning, not giving a direct answer\n\n"
         "Rules:\n"
+        '- If the bot asked a question (e.g. "For what term?") and customer replied with a specific value '
+        '(e.g. "2 years") — this is a CONCRETE answer. type=value\n'
         '- "70% of car cost" — NOT a concrete amount, it\'s a description. type=question\n'
         '- "200 mln" — concrete amount. type=value, value=200000000\n'
-        '- "36 months" — concrete term. type=value, value=36\n'
+        '- "36 months" or "3 years" — concrete term. type=value, value=36\n'
         '- Any reasoning, clarification, counter-question — type=question\n'
     ),
     "uz": (
         "Siz bank mahsulotini hisoblash jarayonida mijozning javobidan ma'lumot oluvchi yordamchisiz.\n"
         "Joriy qadam: {step_description}\n"
         "Mahsulot: {product_name}\n\n"
+        "{context}"
         "Mijoz javobini tahlil qiling va JSON qaytaring (markdownsiz):\n"
         '{{"type": "value", "value": <raqam>}} — agar mijoz ANIQ raqamli qiymat bergan bo\'lsa\n'
         '{{"type": "question", "text": "<savol mohiyati>"}} — agar mijoz savol bergan yoki '
         "muhokama qilayotgan bo'lsa\n"
+        "Qoida: bot savol bergan bo'lsa (masalan 'Qancha muddatga?') va mijoz aniq qiymat bilan javob bergan bo'lsa "
+        "(masalan '2 yil') — bu ANIQ javob hisoblanadi. type=value\n"
     ),
 }
 
@@ -79,13 +88,51 @@ _STEP_DESCRIPTIONS = {
 }
 
 
+def _format_recent_messages_context(recent_messages: list, lang: str) -> str:
+    """Format last messages as conversation context string for the extraction prompt."""
+    if not recent_messages:
+        return ""
+    _role_labels = {
+        "ru": {"human": "Клиент", "ai": "Бот", "system": None},
+        "en": {"human": "User", "ai": "Bot", "system": None},
+        "uz": {"human": "Mijoz", "ai": "Bot", "system": None},
+    }
+    labels = _role_labels.get(lang, _role_labels["ru"])
+    lines: list[str] = []
+    for msg in recent_messages:
+        role = getattr(msg, "type", None) or getattr(msg, "role", "")
+        content = str(getattr(msg, "content", "") or "").strip()
+        if not content:
+            continue
+        label = labels.get(role)
+        if label is None:
+            continue
+        lines.append(f"{label}: {content}")
+    if not lines:
+        return ""
+    header = {
+        "ru": "Последние сообщения диалога:\n",
+        "en": "Recent conversation:\n",
+        "uz": "So'nggi xabarlar:\n",
+    }.get(lang, "Recent conversation:\n")
+    return header + "\n".join(lines) + "\n\n"
+
+
 async def extract_calc_value(
     user_text: str,
     calc_step: str,
     product_name: str,
     lang: str = "ru",
+    recent_messages: list = None,
 ) -> dict:
     """Use LLM to extract value or detect question from user input.
+
+    Args:
+        user_text: The raw user input to classify.
+        calc_step: Current calculator step (amount/term/downpayment).
+        product_name: Display name of the product being calculated.
+        lang: Language code (ru/en/uz).
+        recent_messages: Last N LangChain messages for conversation context.
 
     Returns:
         {"type": "value", "value": <number>} — parsed concrete value
@@ -98,7 +145,12 @@ async def extract_calc_value(
 
     step_desc = _STEP_DESCRIPTIONS.get(calc_step, {}).get(lang, calc_step)
     system_tpl = _EXTRACT_SYSTEM_PROMPT.get(lang, _EXTRACT_SYSTEM_PROMPT["ru"])
-    system_text = system_tpl.format(step_description=step_desc, product_name=product_name)
+    context_block = _format_recent_messages_context(recent_messages or [], lang)
+    system_text = system_tpl.format(
+        step_description=step_desc,
+        product_name=product_name,
+        context=context_block,
+    )
 
     try:
         ai_msg = await asyncio.wait_for(
@@ -131,6 +183,8 @@ _PREFILL_SYSTEM_PROMPT = {
         "Задача: извлечь из последних сообщений финансовые данные, которые можно использовать как начальные значения "
         "для калькулятора. Используй САМЫЕ ПОСЛЕДНИЕ упомянутые значения, если их было несколько.\n\n"
         "Важные правила:\n"
+        "- Если бот задал вопрос (например 'На какой срок?') и клиент ответил конкретным значением (например '3 года') — "
+        "извлеки term_months=36. Такие пары вопрос-ответ являются ОСНОВНЫМ источником данных.\n"
         "- Если клиент назвал зарплату/доход — можно приблизительно оценить подходящую сумму кредита/вклада: "
         "для кредита — до 2–3 зарплат (если срок до 6 мес.) или исходя из платежеспособности; "
         "для овердрафта — близко к размеру зарплаты.\n"
@@ -147,6 +201,8 @@ _PREFILL_SYSTEM_PROMPT = {
         "Task: extract financial data from the recent messages that can be used as initial values for the calculator. "
         "Use the MOST RECENT values if multiple were mentioned.\n\n"
         "Important rules:\n"
+        "- If the bot asked a question (e.g. 'For what term?') and the customer replied with a specific value "
+        "(e.g. '3 years') — extract term_months=36. Such question-answer pairs are the PRIMARY data source.\n"
         "- If the customer mentioned salary/income — estimate a reasonable loan/deposit amount: "
         "for loans — up to 2–3 months' salary (short term) or based on affordability; "
         "for overdraft — close to the salary amount.\n"
@@ -163,6 +219,8 @@ _PREFILL_SYSTEM_PROMPT = {
         "Vazifa: so'nggi xabarlardagi moliyaviy ma'lumotlarni kalkulyator uchun boshlang'ich qiymatlar sifatida chiqarish. "
         "Bir nechta qiymat eslatilgan bo'lsa, ENG SO'NGGI qiymatdan foydalaning.\n\n"
         "Muhim qoidalar:\n"
+        "- Agar bot savol bergan bo'lsa (masalan 'Qancha muddatga?') va mijoz aniq qiymat bilan javob bergan bo'lsa "
+        "(masalan '3 yil') — term_months=36 ni ajrating. Bunday savol-javob juftliklari ASOSIY ma'lumot manbai hisoblanadi.\n"
         "- Mijoz maosh/daromadini eslatgan bo'lsa — kredit/omonat summasini taxminan baholash mumkin: "
         "kredit uchun — 2–3 oylik maosh; overdraft uchun — maoshga yaqin.\n"
         "- Summa (amount): so'mda (butun son).\n"

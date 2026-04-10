@@ -250,7 +250,8 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
 
     if calc_step:
         product_name = _localized_name(selected_product, lang) or selected_product.get("name") or ""
-        extraction = await extract_calc_value(user_text, calc_step, product_name, lang)
+        recent_msgs = list(state.get("messages") or [])[-4:]
+        extraction = await extract_calc_value(user_text, calc_step, product_name, lang, recent_messages=recent_msgs)
         accumulate_usage(turn_usage, extraction.get("_usage") or {})
 
         if extraction["type"] == "question":

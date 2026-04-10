@@ -113,7 +113,20 @@ async def _update_dialog_from_tools(
         if not calc_qs:
             return _default_dialog(), None
         first_step, _ = calc_qs[0]
-        new_dialog = {**dialog, "flow": FLOW_CALC, "calc_step": first_step, "calc_slots": {}}
+        # Defensive: if selected_product was lost (e.g. LLM gave a text reply before
+        # calling start_calculator), pick the first product from the dialog products list.
+        selected_product = dialog.get("selected_product")
+        if selected_product is None:
+            products = list(dialog.get("products") or [])
+            if products:
+                selected_product = products[0]
+        new_dialog = {
+            **dialog,
+            "flow": FLOW_CALC,
+            "calc_step": first_step,
+            "calc_slots": {},
+            "selected_product": selected_product,
+        }
         return new_dialog, None
 
     if name == "faq_lookup":

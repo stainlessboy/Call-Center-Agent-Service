@@ -271,30 +271,53 @@ def _format_product_card(product: dict, category: str, lang: str = "ru") -> str:
     return "\n".join(lines)
 
 
+def _stem(word: str, prefix_len: int = 5) -> str:
+    """Return a stem prefix for fuzzy word matching (truncate words longer than prefix_len)."""
+    return word[:prefix_len] if len(word) > prefix_len else word
+
+
+def _all_names(product: dict) -> list[str]:
+    """Return all non-empty, lowercased name variants for a product."""
+    names: list[str] = []
+    for key in ("name", "name_en", "name_uz"):
+        val = (product.get(key) or "").lower().strip()
+        if val:
+            names.append(val)
+    return names
+
+
 def _find_product_by_name(user_text: str, products: list[dict]) -> Optional[dict]:
-    """Find product by numeric index, exact, contains, or word-overlap match."""
+    """Find product by numeric index, exact, contains, or word-overlap match.
+
+    Uses all localized name variants (name, name_en, name_uz) and stem-based
+    fuzzy matching for robustness across languages.
+    """
     lower = user_text.lower().strip()
-    # Try numeric index first (e.g. "2" → second product)
+
+    # 1. Numeric index (e.g. "2" → second product, 1-based)
     if lower.isdigit() and products:
-        idx = int(lower) - 1  # 1-based to 0-based
+        idx = int(lower) - 1
         if 0 <= idx < len(products):
             return products[idx]
+
+    # 2. Exact match against all name variants
     for p in products:
-        if p["name"].lower().strip() == lower:
+        if any(n == lower for n in _all_names(p)):
             return p
-    # Also check localized names
+
+    # 3. Substring containment match against all name variants
     for p in products:
-        for key in ("name_en", "name_uz"):
-            pname = (p.get(key) or "").lower().strip()
-            if pname and pname == lower:
+        for n in _all_names(p):
+            if n in lower or lower in n:
                 return p
-    for p in products:
-        pname = p["name"].lower()
-        if pname in lower or lower in pname:
-            return p
-    user_words = {w for w in lower.split() if len(w) > 3}
-    for p in products:
-        pwords = {w for w in p["name"].lower().split() if len(w) > 3}
-        if user_words & pwords:
-            return p
+
+    # 4. Stem-based word-overlap match — tolerates inflection and partial input
+    user_words = {_stem(w) for w in lower.split() if len(w) > 3}
+    if user_words:
+        for p in products:
+            for n in _all_names(p):
+                pwords = {_stem(w) for w in n.split() if len(w) > 3}
+                if user_words & pwords:
+                    return p
+
     return None

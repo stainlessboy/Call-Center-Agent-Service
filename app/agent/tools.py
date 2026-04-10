@@ -21,6 +21,18 @@ from app.agent.products import (
 )
 from app.utils.faq_tools import _faq_lookup
 
+# All supported product categories, ordered from most common to least.
+# Used in the 3-tier fallback search in select_product.
+_ALL_CATEGORIES = [
+    "mortgage",
+    "autoloan",
+    "microloan",
+    "education_credit",
+    "deposit",
+    "debit_card",
+    "fx_card",
+]
+
 
 @lc_tool
 async def greeting_response() -> str:
@@ -96,15 +108,36 @@ async def select_product(product_name: str) -> str:
     """
     lang = _REQUEST_LANGUAGE.get()
     dialog = _CURRENT_DIALOG.get()
-    products = list(dialog.get("products") or [])
-    category = dialog.get("category", "")
-    matched = _find_product_by_name(product_name, products)
-    if not matched:
-        if products:
-            names = ", ".join(p["name"] for p in products[:5])
-            return at("product_not_found_suggest", lang, names=names)
-        return at("product_not_found", lang)
-    return _format_product_card(matched, category, lang)
+    dialog_products = list(dialog.get("products") or [])
+    dialog_category = dialog.get("category", "")
+
+    # Tier 1: search within the products already loaded in dialog state
+    matched = _find_product_by_name(product_name, dialog_products)
+    if matched:
+        return _format_product_card(matched, dialog_category, lang)
+
+    # Tier 2: search in DB by dialog category (dialog has a category but no products list, or
+    # products list was stale and the name didn't match)
+    if dialog_category:
+        db_products = await _get_products_by_category(dialog_category)
+        matched = _find_product_by_name(product_name, db_products)
+        if matched:
+            return _format_product_card(matched, dialog_category, lang)
+
+    # Tier 3: search across all known categories
+    for cat in _ALL_CATEGORIES:
+        if cat == dialog_category:
+            continue  # already tried above
+        cat_products = await _get_products_by_category(cat)
+        matched = _find_product_by_name(product_name, cat_products)
+        if matched:
+            return _format_product_card(matched, cat, lang)
+
+    # No match found anywhere
+    if dialog_products:
+        names = ", ".join(p["name"] for p in dialog_products[:5])
+        return at("product_not_found_suggest", lang, names=names)
+    return at("product_not_found", lang)
 
 
 @lc_tool
