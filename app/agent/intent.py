@@ -36,9 +36,17 @@ def _is_currency_question(text: str) -> bool:
 
 
 def _is_calc_trigger(text: str) -> bool:
-    lower = text.lower()
+    """Detect calculator/apply button press. Only short button-like messages trigger calc.
+    Long free-text messages like 'рассчитай кредит на 250 млн' should NOT trigger."""
+    lower = text.lower().strip()
+    # Emoji buttons always trigger
+    if "✅" in text or "📋" in text:
+        return True
+    # Only short messages (button presses) — max ~40 chars
+    if len(lower) > 40:
+        return False
     return (
-        "рассчита" in lower or "✅" in text or "📋" in text
+        "рассчита" in lower
         or "подать заявку" in lower
         or "calculate" in lower or "hisoblash" in lower or "hisobla" in lower
         or "apply" in lower or "ariza" in lower

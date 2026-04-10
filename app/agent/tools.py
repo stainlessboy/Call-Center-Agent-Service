@@ -230,5 +230,5 @@ async def request_operator(reason: str = "") -> str:
 _FAQ_TOOLS = [
     greeting_response, thanks_response, get_branch_info, get_currency_info,
     show_credit_menu, get_products, select_product, compare_products,
-    back_to_product_list, start_calculator, faq_lookup, request_operator,
+    back_to_product_list, faq_lookup, request_operator,
 ]
