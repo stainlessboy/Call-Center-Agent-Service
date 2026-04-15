@@ -189,7 +189,9 @@ async def back_to_product_list() -> str:
 
 @lc_tool
 async def start_calculator() -> str:
-    """Start payment calculator. Use when user clicks '✅ Рассчитать' or '📋 Подать заявку'."""
+    """Start payment calculator. Use when user clicks '✅ Рассчитать' or '📋 Подать заявку'.
+    IMPORTANT: Return the tool output AS-IS to the user without rephrasing.
+    The category (deposit/credit) is already embedded in the question text."""
     lang = _REQUEST_LANGUAGE.get()
     dialog = _CURRENT_DIALOG.get()
     category = dialog.get("category", "")
@@ -197,7 +199,9 @@ async def start_calculator() -> str:
     if not calc_qs:
         return at("calc_no_questions", lang)
     _, first_q = calc_qs[0]
-    return first_q
+    # Include category context so LLM doesn't confuse deposit with credit
+    cat_label = category_label(category, lang)
+    return at("calc_intro", lang, category=cat_label) + "\n\n" + first_q
 
 
 @lc_tool

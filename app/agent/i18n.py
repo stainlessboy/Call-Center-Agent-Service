@@ -44,7 +44,9 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "Если клиент уже назвал сумму/срок/взнос — всё равно вызови start_calculator(), "
             "данные будут подхвачены автоматически.\n"
             "НИКОГДА не считай кредит/вклад самостоятельно в тексте. Не пиши формулы, не делай расчёты. "
-            "Для ЛЮБОГО расчёта — только start_calculator().\n\n"
+            "Для ЛЮБОГО расчёта — только start_calculator().\n"
+            "После вызова start_calculator() передай ответ инструмента ДОСЛОВНО. "
+            "НЕ заменяй слова и НЕ путай категории — если клиент спрашивал про вклад, НЕ пиши 'кредит'.\n\n"
             "ОБРАБОТКА НЕДОВОЛЬСТВА РЕЗУЛЬТАТОМ:\n"
             "Если клиент недоволен результатом расчёта (\"неправильно\", \"почему такая сумма\", \"я же писал другое\") — "
             "НЕ прощайся и НЕ говори 'Хорошо, пишите'. Извинись и предложи пересчитать с правильными данными. "
@@ -84,7 +86,9 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "If the customer has already mentioned an amount/term/down payment — still call start_calculator(), "
             "the data will be picked up automatically.\n"
             "NEVER calculate loans/deposits yourself in text. Do not write formulas or perform calculations. "
-            "For ANY calculation — only start_calculator().\n\n"
+            "For ANY calculation — only start_calculator().\n"
+            "After calling start_calculator(), pass the tool response VERBATIM. "
+            "Do NOT substitute words or mix up categories — if the customer asked about a deposit, do NOT write 'credit'.\n\n"
             "HANDLING DISSATISFACTION WITH RESULTS:\n"
             "If the customer is unhappy with a calculation result (\"wrong\", \"why this amount\", \"I wrote something else\") — "
             "do NOT say goodbye or 'OK, write if you need help'. Apologize and offer to recalculate with correct data. "
@@ -125,7 +129,9 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "Agar mijoz allaqachon summa/muddat/to'lovni aytgan bo'lsa ham — baribir start_calculator() ni chaqiring, "
             "ma'lumotlar avtomatik ravishda olinadi.\n"
             "HECH QACHON kredit/depozitni matnda o'zingiz hisoblamang. Formula yozmang, hisob-kitob qilmang. "
-            "HAR QANDAY hisoblash uchun — faqat start_calculator().\n\n"
+            "HAR QANDAY hisoblash uchun — faqat start_calculator().\n"
+            "start_calculator() dan keyin instrument javobini SO'ZMA-SO'Z yetkazing. "
+            "So'zlarni ALMASHTIRMANG va kategoriyalarni ARALASHTIRIB YUBORMANG — agar mijoz depozit haqida so'ragan bo'lsa, 'kredit' deb YOZMANG.\n\n"
             "NATIJADAN NOROZILIKNI QAYTA ISHLASH:\n"
             "Agar mijoz hisoblash natijasidan norozi bo'lsa (\"noto'g'ri\", \"nega bunday summa\", \"men boshqacha yozganman\") — "
             "xayrlashmang va 'Yaxshi, yozing' demang. Uzr so'rang va to'g'ri ma'lumotlar bilan qayta hisoblashni taklif qiling. "
@@ -174,6 +180,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "ru": "Какую сумму планируете разместить (в сумах)?",
         "en": "What amount would you like to deposit (in UZS)?",
         "uz": "Qancha mablag' joylashtirmoqchisiz (so'mda)?",
+    },
+    "calc_intro": {
+        "ru": "Для расчёта по продукту ({category}) мне нужна следующая информация:",
+        "en": "To calculate the {category} product, I need the following information:",
+        "uz": "{category} mahsulotini hisoblash uchun quyidagi ma'lumotlar kerak:",
     },
 
     # ── Menu buttons ──────────────────────────────────────────────────────
@@ -469,6 +480,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "label_rates_by_term": {"ru": "Ставки по срокам:", "en": "Rates by term:", "uz": "Muddatlar bo'yicha stavkalar:"},
     "label_more_entries": {"ru": "... и ещё {count}", "en": "... and {count} more", "uz": "... va yana {count}"},
     "label_months_short": {"ru": "мес.", "en": "mo.", "uz": "oy"},
+    "label_term_range": {
+        "ru": "от {t_min} до {t_max} мес.",
+        "en": "from {t_min} to {t_max} mo.",
+        "uz": "{t_min} dan {t_max} oygacha",
+    },
     "label_network": {"ru": "💳 Платёжная сеть", "en": "💳 Payment network", "uz": "💳 To'lov tarmog'i"},
     "label_issue_fee": {"ru": "🏷 Выпуск", "en": "🏷 Issue fee", "uz": "🏷 Chiqarish narxi"},
     "label_reissue_fee": {"ru": "🔄 Перевыпуск", "en": "🔄 Reissue fee", "uz": "🔄 Qayta chiqarish"},

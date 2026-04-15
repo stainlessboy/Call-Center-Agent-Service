@@ -105,6 +105,23 @@ async def _get_products_by_category(category: str) -> list[dict]:
             if all_rates:
                 lo, hi = min(all_rates), max(all_rates)
                 rate_range = f"{lo:.1f}%" if abs(lo - hi) < 0.01 else f"{lo:.1f}–{hi:.1f}%"
+
+            # Collect min_amount per currency (take the smallest per currency across terms)
+            min_amounts_by_currency: dict[str, tuple[int | None, str]] = {}
+            for r in rows:
+                cur = r.get("currency_code") or "UZS"
+                amt = r.get("min_amount")
+                amt_text = r.get("min_amount_text") or ""
+                if cur not in min_amounts_by_currency:
+                    min_amounts_by_currency[cur] = (amt, amt_text)
+                elif amt is not None:
+                    existing_amt = min_amounts_by_currency[cur][0]
+                    if existing_amt is None or amt < existing_amt:
+                        min_amounts_by_currency[cur] = (amt, amt_text)
+
+            # Collect all available terms for term range display
+            all_terms = sorted({e["term_months"] for e in rate_schedule if e.get("term_months") is not None})
+
             result.append({
                 "name": name,
                 "name_en": first.get("service_name_en"),
@@ -113,7 +130,10 @@ async def _get_products_by_category(category: str) -> list[dict]:
                 "rate_pct": first.get("rate_pct"),
                 "term": first.get("term_text") or "",
                 "term_months": first.get("term_months"),
+                "term_min": all_terms[0] if all_terms else None,
+                "term_max": all_terms[-1] if all_terms else None,
                 "min_amount": first.get("min_amount_text") or "",
+                "min_amounts_by_currency": min_amounts_by_currency,
                 "currency": ", ".join(currencies),
                 "topup": first.get("topup_text") or "",
                 "payout": first.get("payout_text") or "",
@@ -159,11 +179,17 @@ def _format_product_list_text(products: list[dict], category: str, lang: str = "
     label = category_label(category, lang)
     lines = [at("product_list_header", lang, label=label)]
     for i, p in enumerate(products, 1):
-        rate = p.get("rate") or ""
         pname = _html.escape(_localized_name(p, lang))
         line = f"{i}. {pname}"
-        if rate:
-            line += f" — {rate}"
+        if category == "deposit":
+            # For deposits, rates vary by currency — show currencies instead of rate range
+            currency = p.get("currency") or ""
+            if currency:
+                line += f" — {currency}"
+        else:
+            rate = p.get("rate") or ""
+            if rate:
+                line += f" — {rate}"
         lines.append(line)
     lines.append(at("product_list_footer", lang))
     return "\n".join(lines)
@@ -214,7 +240,29 @@ def _format_product_card(product: dict, category: str, lang: str = "ru") -> str:
     elif category == "deposit":
         if product.get("rate"):
             lines.append(f"{at('label_rate', lang)}: {product['rate']}")
-        if product.get("min_amount"):
+        # Show term range (e.g. "от 1 до 30 мес.")
+        t_min = product.get("term_min")
+        t_max = product.get("term_max")
+        if t_min is not None and t_max is not None:
+            if t_min == t_max:
+                mo = at("label_months_short", lang)
+                lines.append(f"{at('label_term', lang)}: {t_min} {mo}")
+            else:
+                lines.append(f"{at('label_term', lang)}: {at('label_term_range', lang, t_min=t_min, t_max=t_max)}")
+        # Show min amount per currency instead of a single value
+        min_by_cur = product.get("min_amounts_by_currency") or {}
+        if min_by_cur:
+            if len(min_by_cur) == 1:
+                cur, (amt, amt_text) = next(iter(min_by_cur.items()))
+                display = amt_text or (f"{amt:,}".replace(",", " ") if amt else "—")
+                lines.append(f"{at('label_min_amount', lang)}: {display} {cur}")
+            else:
+                lines.append(f"{at('label_min_amount', lang)}:")
+                for cur in sorted(min_by_cur):
+                    amt, amt_text = min_by_cur[cur]
+                    display = amt_text or (f"{amt:,}".replace(",", " ") if amt else "—")
+                    lines.append(f"  • {cur}: {display}")
+        elif product.get("min_amount"):
             lines.append(f"{at('label_min_amount', lang)}: {product['min_amount']}")
         if product.get("currency"):
             lines.append(f"{at('label_currency', lang)}: {product['currency']}")
