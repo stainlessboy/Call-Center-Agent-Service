@@ -197,9 +197,7 @@ async def _seed(manifest_path: Path, replace: bool) -> tuple[int, int]:
     async with get_session() as session:
         if replace:
             await session.execute(delete(CardProductOffer))
-        else:
-            skipped = len(records)
-            return 0, skipped
+
         for rec in records:
             session.add(CardProductOffer(**rec))
             inserted += 1

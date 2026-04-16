@@ -162,9 +162,7 @@ async def _seed(manifest_path: Path, replace: bool) -> tuple[int, int]:
     async with get_session() as session:
         if replace:
             await session.execute(delete(DepositProductOffer))
-        else:
-            skipped = len(records)
-            return 0, skipped
+
         for rec in records:
             session.add(DepositProductOffer(**rec))
             inserted += 1

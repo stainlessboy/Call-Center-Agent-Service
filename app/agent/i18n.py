@@ -110,7 +110,6 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "unga faqat bank savollari bo'yicha yordam bera olishingizni xushmuomalalik bilan bildiring. "
             "MUHIM: agar asbob formatlangan matn qaytarsa (emoji, HTML <b> teglar, ro'yxatlar bilan), "
             "uni foydalanuvchiga XUDDI SHUNDAY yuboring, qayta formatlamang. Oldiga qisqa kirish qo'shishingiz mumkin.\n\n"
-            "OPERATORGA YO'NALTIRISH — quyidagi hollarda request_operator() ni chaqiring:\n"
             "OPERATORGA YO'NALTIRISH — request_operator() ni FAQAT quyidagi hollarda chaqiring:\n"
             "1. Mijoz ANIQ operator so'rasa (\"operator chaqir\", \"jonli operator\", \"operatorga ulang\") "
             "— ortiqcha savollarsiz request_operator() ni chaqiring.\n"

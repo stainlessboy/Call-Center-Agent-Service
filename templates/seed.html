@@ -1,0 +1,218 @@
+{% extends "sqladmin/layout.html" %}
+
+{% block content %}
+<div class="container-xl">
+
+  <div class="page-header mb-3">
+    <div class="row align-items-center">
+      <div class="col-auto">
+        <h2 class="page-title">Импорт данных</h2>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  {% if results %}
+  <div class="card mb-4">
+    <div class="card-header">
+      <h3 class="card-title">Результаты импорта</h3>
+    </div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-vcenter">
+          <thead>
+            <tr>
+              <th>Этап</th>
+              <th>Статус</th>
+              <th>Детали</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in results %}
+            <tr>
+              <td>{{ r.label }}</td>
+              <td>
+                {% if r.status == 'ok' %}
+                  <span class="badge bg-green-lt">OK</span>
+                {% else %}
+                  <span class="badge bg-red-lt">Ошибка</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if r.status == 'error' %}
+                  <pre class="text-danger mb-0" style="white-space: pre-wrap; font-size: 0.85em;">{{ r.detail }}</pre>
+                {% else %}
+                  {{ r.detail }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="row row-deck row-cards">
+
+    <!-- Products Card -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fa-solid fa-building-columns me-2"></i>
+            Банковские продукты
+          </h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Импорт из Excel-файла: кредиты, вклады, карты.
+            <br>Этапы: Excel &rarr; JSON &rarr; БД.
+          </p>
+          {% if products_xlsx %}
+          <div class="mb-2">
+            <span class="badge bg-azure-lt">
+              <i class="fa-solid fa-file-excel me-1"></i>
+              {{ products_xlsx }}
+            </span>
+          </div>
+          {% endif %}
+          <form method="post" enctype="multipart/form-data">
+            <input type="hidden" name="action" value="products">
+            <div class="mb-3">
+              <label class="form-label">Режим импорта</label>
+              <div class="form-selectgroup">
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="replace" class="form-selectgroup-input" checked>
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-rotate me-1"></i> Перезаписать
+                  </span>
+                </label>
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="append" class="form-selectgroup-input">
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-plus me-1"></i> Дополнить
+                  </span>
+                </label>
+              </div>
+              <small class="form-hint">Перезаписать — удалить старые и загрузить новые. Дополнить — добавить к существующим.</small>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Загрузить новый файл (необязательно)</label>
+              <input type="file" name="products_file" class="form-control" accept=".xlsx,.xls">
+              <small class="form-hint">Или будет использован текущий файл из scripts/</small>
+            </div>
+            <button type="submit" class="btn btn-primary w-100"
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
+              <i class="fa-solid fa-upload me-2"></i>
+              Импортировать продукты
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- FAQ Card -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fa-solid fa-circle-question me-2"></i>
+            FAQ
+          </h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Импорт вопросов-ответов из Excel.
+            <br>Поддержка языков: RU, EN, UZ.
+            <br>Языки определяются по названиям листов.
+          </p>
+          {% if faq_xlsx %}
+          <div class="mb-2">
+            <span class="badge bg-azure-lt">
+              <i class="fa-solid fa-file-excel me-1"></i>
+              {{ faq_xlsx }}
+            </span>
+          </div>
+          {% endif %}
+          <form method="post" enctype="multipart/form-data">
+            <input type="hidden" name="action" value="faq">
+            <div class="mb-3">
+              <label class="form-label">Режим импорта</label>
+              <div class="form-selectgroup">
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="replace" class="form-selectgroup-input" checked>
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-rotate me-1"></i> Перезаписать
+                  </span>
+                </label>
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="append" class="form-selectgroup-input">
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-plus me-1"></i> Дополнить
+                  </span>
+                </label>
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Загрузить новый файл (необязательно)</label>
+              <input type="file" name="faq_file" class="form-control" accept=".xlsx,.xls">
+              <small class="form-hint">Или будет использован текущий FAQ.xlsx</small>
+            </div>
+            <button type="submit" class="btn btn-primary w-100"
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
+              <i class="fa-solid fa-upload me-2"></i>
+              Импортировать FAQ
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Branches Card -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fa-solid fa-location-dot me-2"></i>
+            Филиалы
+          </h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Загрузка тестовых данных филиалов банка.
+            <br>Ташкент, Самарканд, Бухара, Андижан.
+          </p>
+          <form method="post">
+            <input type="hidden" name="action" value="branches">
+            <div class="mb-3">
+              <label class="form-label">Режим импорта</label>
+              <div class="form-selectgroup">
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="replace" class="form-selectgroup-input" checked>
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-rotate me-1"></i> Перезаписать
+                  </span>
+                </label>
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="append" class="form-selectgroup-input">
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-plus me-1"></i> Дополнить
+                  </span>
+                </label>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary w-100"
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
+              <i class="fa-solid fa-upload me-2"></i>
+              Загрузить филиалы
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

@@ -447,10 +447,6 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
     async with get_session() as session:
         if replace:
             await session.execute(delete(CreditProductOffer))
-        else:
-            # For now we only support deterministic full replace mode.
-            skipped = len(records)
-            return inserted, skipped
 
         for payload in records:
             session.add(CreditProductOffer(**payload, is_active=True))
