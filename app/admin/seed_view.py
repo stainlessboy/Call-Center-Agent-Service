@@ -20,6 +20,11 @@ _DEFAULT_FAQ_XLSX = _SCRIPTS_DIR / "FAQ (3 языка).xlsx"
 _FALLBACK_FAQ_XLSX = _SCRIPTS_DIR / "FAQ.xlsx"
 _MANIFEST_PATH = _PROJECT_ROOT / "app" / "data" / "ai_chat_info.json"
 
+# Branch xlsx sources (must match paths hardcoded in scripts/seed_branches.py)
+_BRANCH_FILIALS_XLSX = _SCRIPTS_DIR / "Локации филиалов.xlsx"
+_BRANCH_OFFICES_XLSX = _SCRIPTS_DIR / "Локации офисов продаж.xlsx"
+_BRANCH_POINTS_XLSX = _SCRIPTS_DIR / "Локации точек продаж.xlsx"
+
 
 # ---------------------------------------------------------------------------
 # Helpers: run seed logic in-process (not subprocess) for reliability
@@ -79,11 +84,25 @@ async def _run_seed_faq(xlsx_path: Path, replace: bool) -> dict[str, Any]:
     return {"inserted": len(items), "languages": lang_counts}
 
 
-async def _run_seed_branches(replace: bool) -> tuple[int, int]:
-    from scripts.seed_branches import _seed, _sample_branches
-    count = len(_sample_branches())
+async def _run_seed_branches(replace: bool) -> dict[str, int]:
+    """Run branches seed and return per-table row counts from the DB."""
+    from sqlalchemy import func, select
+
+    from app.db.models import Filial, SalesOffice, SalesPoint
+    from app.db.session import get_session
+    from scripts.seed_branches import _seed
+
     await _seed(replace=replace)
-    return count, 0
+    async with get_session() as session:
+        counts: dict[str, int] = {}
+        for model, key in (
+            (Filial, "filials"),
+            (SalesOffice, "sales_offices"),
+            (SalesPoint, "sales_points"),
+        ):
+            result = await session.execute(select(func.count()).select_from(model))
+            counts[key] = int(result.scalar() or 0)
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +128,8 @@ class SeedAdmin(BaseView):
     @expose("/seed", methods=["POST"])
     async def seed_action(self, request: Request):
         form = await request.form()
+        # Note: the UploadFile objects in form are only valid during this
+        # request, so we must read/save them before rendering the response.
         action = form.get("action", "")
         results: list[dict[str, Any]] = []
 
@@ -118,8 +139,7 @@ class SeedAdmin(BaseView):
             elif action == "faq":
                 results = await self._seed_faq(form)
             elif action == "branches":
-                replace = form.get("mode") == "replace"
-                results = await self._seed_branches(replace)
+                results = await self._seed_branches(form)
             else:
                 results = [{"label": "Ошибка", "status": "error", "detail": f"Неизвестное действие: {action}"}]
         except Exception as exc:
@@ -137,6 +157,9 @@ class SeedAdmin(BaseView):
                 "results": results,
                 "products_xlsx": _DEFAULT_PRODUCTS_XLSX.name if _DEFAULT_PRODUCTS_XLSX.exists() else None,
                 "faq_xlsx": _DEFAULT_FAQ_XLSX.name if _DEFAULT_FAQ_XLSX.exists() else (_FALLBACK_FAQ_XLSX.name if _FALLBACK_FAQ_XLSX.exists() else None),
+                "filials_xlsx": _BRANCH_FILIALS_XLSX.name if _BRANCH_FILIALS_XLSX.exists() else None,
+                "offices_xlsx": _BRANCH_OFFICES_XLSX.name if _BRANCH_OFFICES_XLSX.exists() else None,
+                "points_xlsx": _BRANCH_POINTS_XLSX.name if _BRANCH_POINTS_XLSX.exists() else None,
             },
         )
 
@@ -287,17 +310,65 @@ class SeedAdmin(BaseView):
 
     # ── Branches ──────────────────────────────────────────────────────────
 
-    async def _seed_branches(self, replace: bool = True) -> list[dict]:
-        try:
-            inserted, skipped = await _run_seed_branches(replace)
-            return [{
-                "label": "Филиалы",
-                "status": "ok",
-                "detail": f"Добавлено: {inserted}, пропущено: {skipped}",
-            }]
-        except Exception as exc:
-            return [{
-                "label": "Филиалы",
+    async def _seed_branches(self, form: Any) -> list[dict]:
+        results: list[dict] = []
+        replace = form.get("mode") == "replace"
+        mode_label = "Перезапись" if replace else "Дополнение"
+        results.append({"label": "Режим", "status": "ok", "detail": mode_label})
+
+        # Save any uploaded xlsx files over the default scripts/*.xlsx paths
+        # so seed_branches.py picks them up
+        for form_field, dest_path in (
+            ("filials_file", _BRANCH_FILIALS_XLSX),
+            ("offices_file", _BRANCH_OFFICES_XLSX),
+            ("points_file", _BRANCH_POINTS_XLSX),
+        ):
+            upload = form.get(form_field)
+            if upload and hasattr(upload, "filename") and upload.filename:
+                contents = await upload.read()
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.write_bytes(contents)
+                results.append({
+                    "label": f"Загрузка {dest_path.name}",
+                    "status": "ok",
+                    "detail": f"Файл '{upload.filename}' сохранён ({len(contents):,} байт)",
+                })
+
+        # Verify all 3 source files are present
+        missing = [p.name for p in (
+            _BRANCH_FILIALS_XLSX, _BRANCH_OFFICES_XLSX, _BRANCH_POINTS_XLSX,
+        ) if not p.exists()]
+        if missing:
+            results.append({
+                "label": "Файлы филиалов",
                 "status": "error",
-                "detail": str(exc),
-            }]
+                "detail": f"Не найдены: {', '.join(missing)}. Загрузите их через форму.",
+            })
+            return results
+
+        try:
+            counts = await _run_seed_branches(replace)
+            results.append({
+                "label": "Филиалы (ЦБУ)",
+                "status": "ok",
+                "detail": f"В базе: {counts['filials']}",
+            })
+            results.append({
+                "label": "Офисы продаж",
+                "status": "ok",
+                "detail": f"В базе: {counts['sales_offices']}",
+            })
+            results.append({
+                "label": "Точки продаж",
+                "status": "ok",
+                "detail": f"В базе: {counts['sales_points']}",
+            })
+        except Exception as exc:
+            _logger.exception("Seed branches failed")
+            results.append({
+                "label": "Импорт филиалов",
+                "status": "error",
+                "detail": f"{type(exc).__name__}: {exc}",
+            })
+
+        return results

@@ -176,15 +176,35 @@
         <div class="card-header">
           <h3 class="card-title">
             <i class="fa-solid fa-location-dot me-2"></i>
-            Филиалы
+            Филиалы / Офисы / Точки продаж
           </h3>
         </div>
         <div class="card-body">
           <p class="text-muted">
-            Загрузка тестовых данных филиалов банка.
-            <br>Ташкент, Самарканд, Бухара, Андижан.
+            Импорт из 3 Excel-файлов: филиалы (ЦБУ), офисы продаж,
+            точки продаж в автосалонах. Листы <code>Рус</code> и
+            <code>Узб (латиница)</code>.
           </p>
-          <form method="post">
+          {% if filials_xlsx or offices_xlsx or points_xlsx %}
+          <div class="mb-3 d-flex flex-wrap gap-1">
+            {% if filials_xlsx %}
+            <span class="badge bg-azure-lt" title="Текущий файл филиалов">
+              <i class="fa-solid fa-file-excel me-1"></i>{{ filials_xlsx }}
+            </span>
+            {% endif %}
+            {% if offices_xlsx %}
+            <span class="badge bg-azure-lt" title="Текущий файл офисов продаж">
+              <i class="fa-solid fa-file-excel me-1"></i>{{ offices_xlsx }}
+            </span>
+            {% endif %}
+            {% if points_xlsx %}
+            <span class="badge bg-azure-lt" title="Текущий файл точек продаж">
+              <i class="fa-solid fa-file-excel me-1"></i>{{ points_xlsx }}
+            </span>
+            {% endif %}
+          </div>
+          {% endif %}
+          <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="branches">
             <div class="mb-3">
               <label class="form-label">Режим импорта</label>
@@ -202,11 +222,27 @@
                   </span>
                 </label>
               </div>
+              <small class="form-hint">Перезапись очищает все 3 таблицы. Дополнение добавит к существующим.</small>
             </div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">🏦 Филиалы (ЦБУ) xlsx</label>
+              <input type="file" name="filials_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-1">🏪 Офисы продаж xlsx</label>
+              <input type="file" name="offices_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small mb-1">🚗 Точки продаж xlsx</label>
+              <input type="file" name="points_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+            </div>
+            <small class="form-hint d-block mb-2">
+              Каждый файл опционален — если не загрузить, будет использован текущий из <code>scripts/</code>.
+            </small>
             <button type="submit" class="btn btn-primary w-100"
                     onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
               <i class="fa-solid fa-upload me-2"></i>
-              Загрузить филиалы
+              Импортировать отделения
             </button>
           </form>
         </div>
