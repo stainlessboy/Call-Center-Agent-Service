@@ -41,42 +41,8 @@ router = Router()
 TELEGRAM_SAFE_CHUNK = 3800
 
 
-def _normalize_region(text: str | None) -> str | None:
-    if not text:
-        return None
-    lower = text.lower().strip()
-    mapping = {
-        "ташкент": "Ташкент",
-        "tashkent": "Ташкент",
-        "samarkand": "Самарканд",
-        "самарканд": "Самарканд",
-        "bukhara": "Бухара",
-        "бухара": "Бухара",
-        "andijan": "Андижан",
-        "андижан": "Андижан",
-    }
-    return mapping.get(lower, text)
-
-
-def _safe_cb(text: str) -> str:
-    return text.replace(":", ";")
-
-
 def _unsafecb(text: str) -> str:
     return text.replace(";", ":")
-
-
-def _inline_keyboard(labels: list[str], prefix: str, row_size: int = 2) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for label in labels:
-        row.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:{_safe_cb(label)}"))
-        if len(row) >= row_size:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _flow_keyboard(options: list[str], row_size: int = 2) -> InlineKeyboardMarkup:
@@ -295,31 +261,6 @@ def _user_language_text(lang: str | None) -> dict[str, str]:
         }[code],
         "language_saved": t("language_saved", code),
         "phone_saved_choose_language": t("phone_saved_choose_language", code),
-        "branches_choose_region": {
-            "ru": "📍 Выберите регион:",
-            "en": "📍 Choose a region:",
-            "uz": "📍 Hududni tanlang:",
-        }[code],
-        "no_tashkent_districts": {
-            "ru": "Нет данных по районам Ташкента.",
-            "en": "No data for Tashkent districts.",
-            "uz": "Toshkent tumanlari bo‘yicha ma’lumot topilmadi.",
-        }[code],
-        "choose_tashkent_district": {
-            "ru": "🏢 Отделения Ташкента. Выберите район:",
-            "en": "🏢 Tashkent branches. Choose a district:",
-            "uz": "🏢 Toshkent filiallari. Tumanni tanlang:",
-        }[code],
-        "no_regions": {
-            "ru": "Регионов не найдено.",
-            "en": "No regions found.",
-            "uz": "Hududlar topilmadi.",
-        }[code],
-        "choose_region": {
-            "ru": "🏢 Отделения. Выберите область:",
-            "en": "🏢 Branches. Choose a region:",
-            "uz": "🏢 Filiallar. Viloyatni tanlang:",
-        }[code],
         "send_location_prompt": {
             "ru": "📍 Отправьте геолокацию, чтобы найти ближайший ЦБУ.",
             "en": "📍 Send your location to find the nearest branch.",
@@ -346,52 +287,116 @@ def _user_language_text(lang: str | None) -> dict[str, str]:
     }
 
 
-def format_branch(branch) -> str:
-    lat = getattr(branch, "latitude", None)
-    lon = getattr(branch, "longitude", None)
-    lines = [
-        f"🏦 {branch.name}",
-        f"📌 Адрес: {branch.address or '-'}",
-        f"🎯 Ориентиры: {branch.landmarks or '-'}",
-        f"Ⓜ️ Метро: {branch.metro or '-'}",
-        f"📞 Телефон: {branch.phone or '-'}",
-        f"🕘 Время работы: {branch.hours or '-'}",
-        f"❌ {branch.weekend or '-'}",
-        "",
-        "🧾 Реквизиты",
-        f"🔢 ИНН: {branch.inn or '-'}",
-        f"🏛 МФО: {branch.mfo or '-'}",
-        f"📮 Индекс: {branch.postal_index or '-'}",
-    ]
-    if branch.uzcard_accounts:
-        lines.append("")
-        lines.append("💳 Транзитные счета Uzcard:\n" + branch.uzcard_accounts)
-    if branch.humo_accounts:
-        lines.append("")
-        lines.append("💳 Транзитные счета HUMO:\n" + branch.humo_accounts)
+def format_office(obj, lang: str = "ru") -> str:
+    """Format any office (Filial / SalesOffice / SalesPoint) for Telegram.
+
+    Duck-typed by field presence: landmark_*/location_url only exist on Filial,
+    region_* only on SalesOffice.
+    """
+    def _loc(field: str) -> str:
+        if lang == "uz":
+            val = getattr(obj, f"{field}_uz", None)
+            if val:
+                return val
+        return getattr(obj, f"{field}_ru", None) or ""
+
+    name = _loc("name")
+    address = _loc("address") or "-"
+    lines = [f"🏦 {name}", f"📌 {address}"]
+
+    if hasattr(obj, "region_ru"):
+        region = _loc("region")
+        if region:
+            lines.append(f"🌍 {region}")
+    if hasattr(obj, "landmark_ru"):
+        landmark = _loc("landmark")
+        if landmark:
+            lines.append(f"🧭 {landmark}")
+    if getattr(obj, "location_url", None):
+        lines.append(f"🗺 {obj.location_url}")
+    if getattr(obj, "phone", None):
+        lines.append(f"📞 {obj.phone}")
+    if getattr(obj, "hours", None):
+        lines.append(f"🕘 {obj.hours}")
+    lat = getattr(obj, "latitude", None)
+    lon = getattr(obj, "longitude", None)
     if lat and lon:
-        lines.append("")
-        lines.append(f"📍 Локация: https://maps.google.com/maps?q={lat},{lon}&ll={lat},{lon}&z=16")
+        lines.append(f"📍 https://maps.google.com/maps?q={lat},{lon}&z=16")
     return "\n".join(lines)
 
 
-def _branch_region_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=menu_label("branch_tashkent", lang), callback_data="branches:tashkent"),
-                InlineKeyboardButton(text=menu_label("branch_regions", lang), callback_data="branches:regions"),
-            ],
-        ]
-    )
+def _office_type_inline_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Level 1: choose office type (3 buttons)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=menu_label("branches_filials", lang),
+            callback_data="office:type:filial",
+        )],
+        [InlineKeyboardButton(
+            text=menu_label("branches_sales_offices", lang),
+            callback_data="office:type:sales_office",
+        )],
+        [InlineKeyboardButton(
+            text=menu_label("branches_sales_points", lang),
+            callback_data="office:type:sales_point",
+        )],
+    ])
 
 
-def _build_branches_response(title: str, branches: Sequence[Any]) -> str:
-    parts = [title, ""]
-    for branch in branches:
-        parts.append(format_branch(branch))
-        parts.append("-" * 20)
-    return "\n".join(parts)
+def _office_list_inline_keyboard(office_type: str, offices: list, lang: str) -> InlineKeyboardMarkup:
+    """Level 2: list every office of a given type as a clickable button."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for o in offices:
+        name = (o.name_uz if lang == "uz" and getattr(o, "name_uz", None) else o.name_ru) or ""
+        # Telegram inline-button text max 64 chars — truncate defensively
+        if len(name) > 60:
+            name = name[:57] + "..."
+        rows.append([InlineKeyboardButton(
+            text=name,
+            callback_data=f"office:show:{office_type}:{o.id}",
+        )])
+    back_label = {"ru": "⬅ К типам офисов", "en": "⬅ To office types", "uz": "⬅ Ofis turlariga"}[lang]
+    rows.append([InlineKeyboardButton(text=back_label, callback_data="office:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _office_detail_inline_keyboard(office_type: str, lang: str) -> InlineKeyboardMarkup:
+    """Level 3: office details view → back to list / back to types."""
+    back_to_list = {
+        "ru": "⬅ К списку", "en": "⬅ Back to list", "uz": "⬅ Ro'yxatga",
+    }[lang]
+    back_to_types = {
+        "ru": "⬅ К типам", "en": "⬅ To types", "uz": "⬅ Turlarga",
+    }[lang]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=back_to_list, callback_data=f"office:type:{office_type}")],
+        [InlineKeyboardButton(text=back_to_types, callback_data="office:back")],
+    ])
+
+
+_OFFICE_TYPE_HEADERS = {
+    "filial": {
+        "ru": "🏦 Филиалы (ЦБУ) — выберите:",
+        "en": "🏦 Filials — pick one:",
+        "uz": "🏦 Filiallar (BXM) — tanlang:",
+    },
+    "sales_office": {
+        "ru": "🏪 Офисы продаж — выберите:",
+        "en": "🏪 Sales offices — pick one:",
+        "uz": "🏪 Savdo ofislari — tanlang:",
+    },
+    "sales_point": {
+        "ru": "🚗 Точки продаж — выберите:",
+        "en": "🚗 Sales points — pick one:",
+        "uz": "🚗 Savdo nuqtalari — tanlang:",
+    },
+}
+
+_OFFICE_TYPE_PROMPT = {
+    "ru": "🏢 Выберите тип офиса:",
+    "en": "🏢 Choose office type:",
+    "uz": "🏢 Ofis turini tanlang:",
+}
 
 
 def _split_message_text(text: str, limit: int = TELEGRAM_SAFE_CHUNK) -> list[str]:
@@ -435,10 +440,6 @@ async def _answer_safe(message: Message, text: str, reply_markup=None, parse_mod
             for tiny_idx, tiny in enumerate(tiny_chunks):
                 tiny_markup = markup if tiny_idx == len(tiny_chunks) - 1 else None
                 await message.answer(tiny, reply_markup=tiny_markup, parse_mode=None)
-
-
-async def _non_tashkent_regions(chat_service: ChatService) -> list[str]:
-    return [r for r in await chat_service.list_regions() if _normalize_region(r) != "Ташкент"]
 
 
 @router.message(CommandStart())
@@ -647,25 +648,10 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         return
 
     if action == BRANCHES:
-        await message.answer(texts["branches_choose_region"], reply_markup=_branch_region_keyboard(lang))
-        return
-
-    if action == "branch_tashkent":
-        districts = await chat_service.list_districts("Ташкент")
-        if not districts:
-            await message.answer(texts["no_tashkent_districts"], reply_markup=main_menu_keyboard(lang))
-            return
-        kb = _inline_keyboard(districts, "branches:district", row_size=2)
-        await message.answer(texts["choose_tashkent_district"], reply_markup=kb)
-        return
-
-    if action == "branch_regions":
-        regions = await _non_tashkent_regions(chat_service)
-        if not regions:
-            await message.answer(texts["no_regions"], reply_markup=main_menu_keyboard(lang))
-            return
-        kb = _inline_keyboard(regions, "branches:region", row_size=2)
-        await message.answer(texts["choose_region"], reply_markup=kb)
+        await message.answer(
+            _OFFICE_TYPE_PROMPT[lang],
+            reply_markup=_office_type_inline_keyboard(lang),
+        )
         return
 
     if action == NEAREST_BRANCH or ("ближай" in lower_norm and ("цбу" in lower_norm or "отдел" in lower_norm)):
@@ -781,6 +767,108 @@ async def noop_callback(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("office:"))
+async def office_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
+    """Inline drill-down: office types → list → details."""
+    if not callback.data or callback.message is None:
+        return
+
+    # Resolve user language
+    lang = normalize_lang(getattr(callback.from_user, "language_code", None))
+    if callback.from_user is not None:
+        db_user = await chat_service.get_or_create_user(
+            telegram_user_id=callback.from_user.id,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name,
+        )
+        lang = normalize_lang(db_user.language)
+
+    parts = callback.data.split(":")
+    # parts[0] == "office"
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "back":
+        # Level 1: type selection
+        try:
+            await callback.message.edit_text(
+                _OFFICE_TYPE_PROMPT[lang],
+                reply_markup=_office_type_inline_keyboard(lang),
+            )
+        except TelegramBadRequest:
+            await callback.message.answer(
+                _OFFICE_TYPE_PROMPT[lang],
+                reply_markup=_office_type_inline_keyboard(lang),
+            )
+        await callback.answer()
+        return
+
+    if action == "type":
+        office_type = parts[2] if len(parts) > 2 else ""
+        if office_type == "filial":
+            offices = await chat_service.list_filials()
+        elif office_type == "sales_office":
+            offices = await chat_service.list_sales_offices()
+        elif office_type == "sales_point":
+            offices = await chat_service.list_sales_points()
+        else:
+            await callback.answer()
+            return
+
+        if not offices:
+            empty_msg = {
+                "ru": "Ничего не найдено.",
+                "en": "Nothing found.",
+                "uz": "Hech narsa topilmadi.",
+            }[lang]
+            await callback.message.edit_text(
+                empty_msg, reply_markup=_office_type_inline_keyboard(lang)
+            )
+            await callback.answer()
+            return
+
+        header = _OFFICE_TYPE_HEADERS[office_type][lang]
+        kb = _office_list_inline_keyboard(office_type, offices, lang)
+        try:
+            await callback.message.edit_text(header, reply_markup=kb)
+        except TelegramBadRequest:
+            await callback.message.answer(header, reply_markup=kb)
+        await callback.answer()
+        return
+
+    if action == "show":
+        office_type = parts[2] if len(parts) > 2 else ""
+        try:
+            office_id = int(parts[3]) if len(parts) > 3 else 0
+        except ValueError:
+            await callback.answer()
+            return
+        office = await chat_service.get_office_by_id(office_type, office_id)
+        if office is None:
+            not_found = {
+                "ru": "Офис не найден.",
+                "en": "Office not found.",
+                "uz": "Ofis topilmadi.",
+            }[lang]
+            await callback.answer(not_found, show_alert=True)
+            return
+
+        text = format_office(office, lang)
+        kb = _office_detail_inline_keyboard(office_type, lang)
+        try:
+            await callback.message.edit_text(
+                text, reply_markup=kb, disable_web_page_preview=True
+            )
+        except TelegramBadRequest:
+            await callback.message.answer(
+                text, reply_markup=kb, disable_web_page_preview=True
+            )
+        await callback.answer()
+        return
+
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("flow:"))
 async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
     """Handle inline button answers for flow questions (credit/cross_sell/greeting)."""
@@ -854,93 +942,6 @@ async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatServic
             os.remove(reply.pdf_path)
         except OSError:
             pass
-
-
-@router.callback_query(F.data.startswith("branches:"))
-async def branches_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
-    if not callback.data or callback.message is None:
-        return
-    lang = normalize_lang(getattr(callback.from_user, "language_code", None))
-    if callback.from_user is not None:
-        db_user = await chat_service.get_or_create_user(
-            telegram_user_id=callback.from_user.id,
-            username=callback.from_user.username,
-            first_name=callback.from_user.first_name,
-            last_name=callback.from_user.last_name,
-        )
-        lang = normalize_lang(db_user.language)
-    texts = _user_language_text(lang)
-    parts = callback.data.split(":", 2)
-    action = parts[1] if len(parts) > 1 else ""
-    payload = _unsafecb(parts[2]) if len(parts) > 2 else ""
-
-    if action == "tashkent":
-        districts = await chat_service.list_districts("Ташкент")
-        if not districts:
-            await callback.message.answer(texts["no_tashkent_districts"], reply_markup=main_menu_keyboard(lang))
-            await callback.answer()
-            return
-        kb = _inline_keyboard(districts, "branches:district", row_size=2)
-        await callback.message.edit_text(texts["choose_tashkent_district"], reply_markup=kb)
-        await callback.answer()
-        return
-
-    if action == "regions":
-        regions = await _non_tashkent_regions(chat_service)
-        if not regions:
-            await callback.message.answer(texts["no_regions"], reply_markup=main_menu_keyboard(lang))
-            await callback.answer()
-            return
-        kb = _inline_keyboard(regions, "branches:region", row_size=2)
-        await callback.message.edit_text(texts["choose_region"], reply_markup=kb)
-        await callback.answer()
-        return
-
-    if action == "district":
-        district = payload
-        branches = await chat_service.list_branches(district=district)
-        if not branches:
-            no_branches = {
-                "ru": "Нет отделений в этом районе.",
-                "en": "No branches in this district.",
-                "uz": "Bu tumanda filiallar topilmadi.",
-            }[lang]
-            await callback.message.answer(no_branches, reply_markup=main_menu_keyboard(lang))
-            await callback.answer()
-            return
-        title = {
-            "ru": f"🏢 Отделения ({district}):",
-            "en": f"🏢 Branches ({district}):",
-            "uz": f"🏢 Filiallar ({district}):",
-        }[lang]
-        text = _build_branches_response(title, branches)
-        await _answer_safe(callback.message, text, reply_markup=main_menu_keyboard(lang))
-        await callback.answer()
-        return
-
-    if action == "region":
-        region = payload
-        branches = await chat_service.list_branches(region=region)
-        if not branches:
-            no_branches = {
-                "ru": "Нет отделений в этой области.",
-                "en": "No branches in this region.",
-                "uz": "Bu hududda filiallar topilmadi.",
-            }[lang]
-            await callback.message.answer(no_branches, reply_markup=main_menu_keyboard(lang))
-            await callback.answer()
-            return
-        title = {
-            "ru": f"🏢 Отделения ({region}):",
-            "en": f"🏢 Branches ({region}):",
-            "uz": f"🏢 Filiallar ({region}):",
-        }[lang]
-        text = _build_branches_response(title, branches)
-        await _answer_safe(callback.message, text, reply_markup=main_menu_keyboard(lang))
-        await callback.answer()
-        return
-
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("lang:"))
@@ -1212,14 +1213,14 @@ async def handle_location(message: Message, chat_service: ChatService) -> None:
             last_name=message.from_user.last_name,
         )
         lang = normalize_lang(user.language)
-    # Naive nearest search via in-memory distance
-    branches = await chat_service.list_branches()
-    if not branches:
+    # Naive nearest search across all office types with coords
+    offices = await chat_service.list_all_offices_with_coords()
+    if not offices:
         await message.answer(
             {
-                "ru": "Не нашёл отделения.",
-                "en": "No branch found.",
-                "uz": "Filial topilmadi.",
+                "ru": "Не нашёл отделения с координатами.",
+                "en": "No offices with coordinates found.",
+                "uz": "Koordinatali filiallar topilmadi.",
             }[lang],
             reply_markup=main_menu_keyboard(lang),
         )
@@ -1237,33 +1238,22 @@ async def handle_location(message: Message, chat_service: ChatService) -> None:
         return R * c
 
     nearest = None
-    for b in branches:
-        if b.latitude is None or b.longitude is None:
-            continue
-        dist = haversine(loc.latitude, loc.longitude, b.latitude, b.longitude)
+    for o in offices:
+        dist = haversine(loc.latitude, loc.longitude, o.latitude, o.longitude)
         if nearest is None or dist < nearest["dist"]:
-            nearest = {"branch": b, "dist": dist}
+            nearest = {"office": o, "dist": dist}
 
-    if nearest is None:
-        await message.answer(
-            {
-                "ru": "Не нашёл отделения.",
-                "en": "No branch found.",
-                "uz": "Filial topilmadi.",
-            }[lang],
-            reply_markup=main_menu_keyboard(lang),
-        )
-        return
-
-    b = nearest["branch"]
+    o = nearest["office"]
     dist_km = nearest["dist"]
-    nearest_label = {"ru": "📍 Ближайший ЦБУ", "en": "📍 Nearest branch", "uz": "📍 Eng yaqin filial"}[lang]
+    name = (o.name_uz if lang == "uz" and o.name_uz else o.name_ru)
+    address = (o.address_uz if lang == "uz" and o.address_uz else o.address_ru) or "-"
+    nearest_label = {"ru": "📍 Ближайший офис", "en": "📍 Nearest office", "uz": "📍 Eng yaqin ofis"}[lang]
     distance_label = {"ru": "📏 Расстояние", "en": "📏 Distance", "uz": "📏 Masofa"}[lang]
     text = (
-        f"{nearest_label}: {b.name}\n"
-        f"🏛 {b.address or '-'}\n"
+        f"{nearest_label}: {name}\n"
+        f"🏛 {address}\n"
         f"{distance_label}: {dist_km:.1f} км\n\n"
-        f"🔗 Google: https://maps.google.com/?q={b.latitude},{b.longitude}\n"
-        f"🔗 Yandex: https://yandex.com/maps/?ll={b.longitude},{b.latitude}&z=16&pt={b.longitude},{b.latitude}"
+        f"🔗 Google: https://maps.google.com/?q={o.latitude},{o.longitude}\n"
+        f"🔗 Yandex: https://yandex.com/maps/?ll={o.longitude},{o.latitude}&z=16&pt={o.longitude},{o.latitude}"
     )
     await message.answer(text, reply_markup=main_menu_keyboard(lang))

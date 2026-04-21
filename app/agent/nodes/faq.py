@@ -73,7 +73,10 @@ async def _update_dialog_from_tools(
     if name == "thanks_response":
         return dict(dialog), None
 
-    if name == "get_branch_info":
+    if name in ("find_filials", "find_sales_offices", "find_sales_points"):
+        return dict(dialog), None
+
+    if name == "get_office_types_info":
         return dict(dialog), None
 
     if name == "get_currency_info":

@@ -106,26 +106,92 @@ class Message(Base):
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
-class Branch(Base):
-    __tablename__ = "branches"
+class Filial(Base):
+    """Центр банковских услуг (ЦБУ) — главный офис с полным спектром услуг."""
+    __tablename__ = "filials"
+
+    # Used by agent/branches.py helpers to tag objects polymorphically
+    OFFICE_TYPE_CODE = "filial"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(255))
-    region: Mapped[str] = mapped_column(String(255), index=True)
-    district: Mapped[str] = mapped_column(String(255), index=True)
-    address: Mapped[Optional[str]] = mapped_column(Text)
-    landmarks: Mapped[Optional[str]] = mapped_column(Text)
-    metro: Mapped[Optional[str]] = mapped_column(String(255))
+
+    name_ru: Mapped[str] = mapped_column(String(255), index=True)
+    name_uz: Mapped[Optional[str]] = mapped_column(String(255))
+
+    address_ru: Mapped[str] = mapped_column(Text)
+    address_uz: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Only filials have landmarks and map URLs in the source data
+    landmark_ru: Mapped[Optional[str]] = mapped_column(Text)
+    landmark_uz: Mapped[Optional[str]] = mapped_column(Text)
+    location_url: Mapped[Optional[str]] = mapped_column(String(512))
+
+    latitude: Mapped[Optional[float]] = mapped_column(Float)
+    longitude: Mapped[Optional[float]] = mapped_column(Float)
     phone: Mapped[Optional[str]] = mapped_column(String(64))
     hours: Mapped[Optional[str]] = mapped_column(String(255))
-    weekend: Mapped[Optional[str]] = mapped_column(String(255))
-    inn: Mapped[Optional[str]] = mapped_column(String(64))
-    mfo: Mapped[Optional[str]] = mapped_column(String(64))
-    postal_index: Mapped[Optional[str]] = mapped_column(String(32))
-    uzcard_accounts: Mapped[Optional[str]] = mapped_column(Text)
-    humo_accounts: Mapped[Optional[str]] = mapped_column(Text)
-    latitude: Mapped[Optional[float]] = mapped_column()
-    longitude: Mapped[Optional[float]] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    sales_offices: Mapped[List["SalesOffice"]] = relationship(
+        back_populates="parent_filial", cascade="all, delete-orphan"
+    )
+    sales_points: Mapped[List["SalesPoint"]] = relationship(
+        back_populates="parent_filial", cascade="all, delete-orphan"
+    )
+
+
+class SalesOffice(Base):
+    """Офис продаж (мини-офис) — полный спектр услуг для физлиц, без юрлиц."""
+    __tablename__ = "sales_offices"
+
+    OFFICE_TYPE_CODE = "sales_office"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    name_ru: Mapped[str] = mapped_column(String(255), index=True)
+    name_uz: Mapped[Optional[str]] = mapped_column(String(255))
+
+    region_ru: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    region_uz: Mapped[Optional[str]] = mapped_column(String(255))
+
+    address_ru: Mapped[str] = mapped_column(Text)
+    address_uz: Mapped[Optional[str]] = mapped_column(Text)
+
+    parent_filial_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("filials.id", ondelete="SET NULL"), index=True
+    )
+    parent_filial: Mapped[Optional["Filial"]] = relationship(back_populates="sales_offices")
+
+    latitude: Mapped[Optional[float]] = mapped_column(Float)
+    longitude: Mapped[Optional[float]] = mapped_column(Float)
+    phone: Mapped[Optional[str]] = mapped_column(String(64))
+    hours: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SalesPoint(Base):
+    """Точка продаж (в автосалонах) — только автокредиты + консультации + ATM."""
+    __tablename__ = "sales_points"
+
+    OFFICE_TYPE_CODE = "sales_point"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    name_ru: Mapped[str] = mapped_column(String(255), index=True)
+    name_uz: Mapped[Optional[str]] = mapped_column(String(255))
+
+    address_ru: Mapped[str] = mapped_column(Text)
+    address_uz: Mapped[Optional[str]] = mapped_column(Text)
+
+    parent_filial_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("filials.id", ondelete="SET NULL"), index=True
+    )
+    parent_filial: Mapped[Optional["Filial"]] = relationship(back_populates="sales_points")
+
+    latitude: Mapped[Optional[float]] = mapped_column(Float)
+    longitude: Mapped[Optional[float]] = mapped_column(Float)
+    phone: Mapped[Optional[str]] = mapped_column(String(64))
+    hours: Mapped[Optional[str]] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -14,7 +14,15 @@ CREDIT_SECTION_MAP: dict[str, str] = {
 VALID_LANGS: tuple[str, ...] = ("ru", "en", "uz")
 
 _REQUEST_LANGUAGE: contextvars.ContextVar[str] = contextvars.ContextVar("_REQUEST_LANGUAGE", default="ru")
-_LANG_INSTRUCTION = {"en": " Reply in English.", "uz": " Javobni o'zbek tilida yoz.", "ru": ""}
+_LANG_INSTRUCTION = {
+    "en": " Reply in English.",
+    "uz": (
+        " Javobni FAQAT o'zbek tilida LOTIN yozuvida yoz. Kirill yozuvidan (ўқғҳ) "
+        "umuman foydalanma. Misol: 'Assalomu alaykum', 'qancha', 'muddat', 'so'm' — "
+        "to'g'ri. 'Ассалому алайкум', 'қанча' — XATO."
+    ),
+    "ru": "",
+}
 
 
 def resolve_language(

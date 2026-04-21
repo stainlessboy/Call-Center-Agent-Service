@@ -23,9 +23,14 @@ SYSTEM_POLICY = (
     "СТРОГОЕ ПРАВИЛО: ты отвечаешь ТОЛЬКО на вопросы о банковских продуктах, финансах и услугах банка. "
     "Если клиент спрашивает что-то не связанное с банком и финансами (политика, погода, общие знания и т.д.), "
     "вежливо сообщи, что ты можешь помочь только по банковским вопросам. "
-    "ЯЗЫК ОТВЕТА: Всегда отвечай на языке ТЕКУЩЕГО сообщения клиента (ru/en/uz-Latin). "
-    "В КАЖДОМ вызове tool передавай `lang` — код языка текущего сообщения. "
-    "Если клиент пишет узбекской кириллицей — lang=\"uz\" и ответ в латинице. "
+    "ЯЗЫК ОТВЕТА: Всегда отвечай на языке ТЕКУЩЕГО сообщения клиента (ru / en / uz). "
+    "В КАЖДОМ вызове tool передавай `lang` — код языка текущего сообщения.\n"
+    "КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ УЗБЕКСКОГО: на узбекском (lang=\"uz\") отвечай ИСКЛЮЧИТЕЛЬНО "
+    "латиницей (Latin / lotin yozuvi). НИКОГДА, ни при каких обстоятельствах, не используй "
+    "узбекскую кириллицу (ўқғҳ). Даже если клиент сам пишет узбекской кириллицей или смешивает — "
+    "твой ответ ВСЕГДА в латинице. Примеры правильных слов: 'Assalomu alaykum', 'qancha', "
+    "\"muddat\", \"so'm\", \"bo'lishi\", \"O'zbekiston\". Примеры ЗАПРЕЩЁННЫХ слов: "
+    "\"Ассалому алайкум\", \"қанча\", \"муддат\", \"сўм\", \"Ўзбекистон\". "
     "Если клиент переключился на другой язык в середине диалога — переключайся с ним немедленно. "
     "ВАЖНО: когда инструмент возвращает отформатированный текст (с эмодзи, HTML-тегами <b>, списками), "
     "передавай его пользователю КАК ЕСТЬ, не переформатируй. Можешь добавить короткое вступление перед ним.\n\n"
@@ -131,10 +136,49 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "You're welcome! Feel free to write if you need anything.",
         "uz": "Arzimaydi! Kerak bo'lsa — yozing.",
     },
-    "branch_info": {
-        "ru": "В банке есть отделения по всему Узбекистану.\nНапишите ваш город или район — подскажу ближайший адрес.",
-        "en": "The bank has branches throughout Uzbekistan.\nWrite your city or district — I'll find the nearest address.",
-        "uz": "Bankning butun O'zbekiston bo'ylab filiallari mavjud.\nShahar yoki tumaningizni yozing — eng yaqin manzilni topaman.",
+    "branch_found_header": {
+        "ru": "Нашёл {count} подходящих офис(ов):",
+        "en": "Found {count} matching office(s):",
+        "uz": "{count} ta mos ofis topildi:",
+    },
+    "branch_none_found": {
+        "ru": "По запросу «{query}» офисов не нашёл. Уточните город или район.",
+        "en": "No offices matched \"{query}\". Please clarify the city or district.",
+        "uz": "\"{query}\" bo'yicha ofislar topilmadi. Shahar yoki tumanni aniqlashtiring.",
+    },
+    "office_types_info": {
+        "ru": (
+            "<b>Три типа офисов AsakaBank:</b>\n\n"
+            "🏦 <b>Филиал (ЦБУ)</b> — полный спектр услуг: кредиты физлицам, "
+            "автокредиты, карты, касса, обмен валют, устройства самообслуживания, "
+            "а также услуги для ИП и юридических лиц (счета, корп. кредиты).\n\n"
+            "🏢 <b>Офис продаж (мини-офис)</b> — всё для физлиц: все виды кредитов, "
+            "карты, касса, обмен валют, устройства самообслуживания. "
+            "Без услуг для юрлиц.\n\n"
+            "🚗 <b>Точка продаж (в автосалоне)</b> — только автокредит, "
+            "консультации и устройства самообслуживания. Касса и карты — не оформляют."
+        ),
+        "en": (
+            "<b>Three types of AsakaBank offices:</b>\n\n"
+            "🏦 <b>Filial (Bank Service Center)</b> — full range: individual loans, "
+            "auto loans, cards, cashier, currency exchange, self-service terminals, "
+            "plus services for sole proprietors and legal entities (accounts, corp. loans).\n\n"
+            "🏢 <b>Sales office (mini-office)</b> — everything for individuals: all loan types, "
+            "cards, cashier, currency exchange, self-service terminals. No services for legal entities.\n\n"
+            "🚗 <b>Sales point (car dealership)</b> — auto loans only, consultation, "
+            "and self-service terminals. No cashier or cards."
+        ),
+        "uz": (
+            "<b>AsakaBank ofislarining uch turi:</b>\n\n"
+            "🏦 <b>Filial (BXM)</b> — to'liq xizmatlar: jismoniy shaxslar uchun kreditlar, "
+            "avtokredit, kartalar, kassa, valyuta ayirboshlash, o'zini o'zi xizmat qilish qurilmalari, "
+            "shuningdek yakka tartibdagi tadbirkorlar va yuridik shaxslar uchun xizmatlar (hisoblar, korp. kreditlar).\n\n"
+            "🏢 <b>Savdo ofisi (mini-ofis)</b> — jismoniy shaxslar uchun barcha xizmatlar: "
+            "barcha kredit turlari, kartalar, kassa, valyuta ayirboshlash, o'zini o'zi xizmat qilish qurilmalari. "
+            "Yuridik shaxslar uchun xizmatlar yo'q.\n\n"
+            "🚗 <b>Savdo nuqtasi (avtosalonda)</b> — faqat avtokredit, maslahat va "
+            "o'zini o'zi xizmat qilish qurilmalari. Kassa va kartalar yo'q."
+        ),
     },
     "currency_info": {
         "ru": "Актуальные курсы валют смотрите на сайте банка или в мобильном приложении AsakaBank.\n"

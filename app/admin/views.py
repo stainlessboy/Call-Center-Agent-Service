@@ -16,14 +16,16 @@ from starlette.responses import RedirectResponse
 
 from app.config import get_settings
 from app.db.models import (
-    Branch,
     CardProductOffer,
     ChatSession,
     CreditProductOffer,
     DepositProductOffer,
     FaqItem,
+    Filial,
     Lead,
     Message,
+    SalesOffice,
+    SalesPoint,
     User,
 )
 from app.db.session import AsyncSessionLocal
@@ -402,74 +404,92 @@ class MessageAdmin(ModelView, model=Message):
 
 
 # ---------------------------------------------------------------------------
-# Branch
+# Filial (ЦБУ), SalesOffice (мини-офис), SalesPoint (автосалон)
 # ---------------------------------------------------------------------------
 
-class BranchAdmin(ModelView, model=Branch):
-    name = "Отделение"
-    name_plural = "Отделения"
-    icon = "fa-solid fa-building"
+_OFFICE_COMMON_LABELS = {
+    "id": "ID",
+    "name_ru": "Название (RU)",
+    "name_uz": "Название (UZ)",
+    "address_ru": "Адрес (RU)",
+    "address_uz": "Адрес (UZ)",
+    "latitude": "Широта",
+    "longitude": "Долгота",
+    "phone": "Телефон",
+    "hours": "Часы работы",
+    "created_at": "Создан",
+    "parent_filial_id": "Родительский филиал (ID)",
+    "parent_filial": "Родительский филиал",
+}
 
-    column_list = [Branch.id, Branch.name, Branch.region, Branch.district, Branch.phone, Branch.hours]
-    column_details_exclude_list = []
-    column_searchable_list = [Branch.name, Branch.region, Branch.district, Branch.address, Branch.phone]
-    column_filters = [
-        _RuAllUniqueFilter(Branch.region, title="Регион"),
-        _RuAllUniqueFilter(Branch.district, title="Район"),
+
+class FilialAdmin(ModelView, model=Filial):
+    name = "Филиал (ЦБУ)"
+    name_plural = "Филиалы (ЦБУ)"
+    icon = "fa-solid fa-building-columns"
+    category = "Офисы"
+
+    column_list = [Filial.id, Filial.name_ru, Filial.address_ru, Filial.phone]
+    column_searchable_list = [
+        Filial.name_ru, Filial.name_uz, Filial.address_ru, Filial.address_uz
     ]
-    column_sortable_list = [Branch.id, Branch.name, Branch.region]
-    column_default_sort = ("id", True)
+    column_sortable_list = [Filial.id, Filial.name_ru]
+    column_default_sort = ("name_ru", False)
 
     column_labels = {
-        "id": "ID",
-        "name": "Название",
-        "region": "Регион",
-        "district": "Район",
-        "address": "Адрес",
-        "landmarks": "Ориентиры",
-        "metro": "Метро",
-        "phone": "Телефон",
-        "hours": "Время работы",
-        "weekend": "Выходные",
-        "inn": "ИНН",
-        "mfo": "МФО",
-        "postal_index": "Почтовый индекс",
-        "uzcard_accounts": "Счета Uzcard",
-        "humo_accounts": "Счета HUMO",
-        "latitude": "Широта",
-        "longitude": "Долгота",
-        "created_at": "Дата создания",
+        **_OFFICE_COMMON_LABELS,
+        "landmark_ru": "Ориентир (RU)",
+        "landmark_uz": "Ориентир (UZ)",
+        "location_url": "Ссылка на карту (Яндекс/Google)",
+        "sales_offices": "Прикреплённые офисы продаж",
+        "sales_points": "Прикреплённые точки продаж",
     }
 
-    _REGION_CHOICES = [
-        ("Ташкент", "Ташкент"),
-        ("Ташкентская область", "Ташкентская область"),
-        ("Самарканд", "Самарканд"),
-        ("Бухара", "Бухара"),
-        ("Андижан", "Андижан"),
-        ("Фергана", "Фергана"),
-        ("Наманган", "Наманган"),
-        ("Хорезм", "Хорезм"),
-        ("Навои", "Навои"),
-        ("Кашкадарья", "Кашкадарья"),
-        ("Сурхандарья", "Сурхандарья"),
-        ("Сырдарья", "Сырдарья"),
-        ("Джизак", "Джизак"),
-        ("Каракалпакстан", "Каракалпакстан"),
+
+class SalesOfficeAdmin(ModelView, model=SalesOffice):
+    name = "Офис продаж"
+    name_plural = "Офисы продаж (мини-офисы)"
+    icon = "fa-solid fa-store"
+    category = "Офисы"
+
+    column_list = [
+        SalesOffice.id, SalesOffice.name_ru, SalesOffice.region_ru,
+        SalesOffice.parent_filial_id, SalesOffice.phone,
     ]
+    column_searchable_list = [
+        SalesOffice.name_ru, SalesOffice.name_uz,
+        SalesOffice.region_ru, SalesOffice.region_uz,
+        SalesOffice.address_ru, SalesOffice.address_uz,
+    ]
+    column_filters = [_RuAllUniqueFilter(SalesOffice.region_ru, title="Регион")]
+    column_sortable_list = [SalesOffice.id, SalesOffice.name_ru, SalesOffice.region_ru]
+    column_default_sort = ("region_ru", False)
 
-    form_overrides = {
-        "region": wtforms.SelectField,
+    column_labels = {
+        **_OFFICE_COMMON_LABELS,
+        "region_ru": "Регион (RU)",
+        "region_uz": "Регион (UZ)",
     }
 
-    async def scaffold_form(self, rules=None):
-        form_class = await super().scaffold_form(rules)
-        form_class.region = wtforms.SelectField(
-            "Регион",
-            choices=self._REGION_CHOICES,
-            description="Область / город республиканского значения",
-        )
-        return form_class
+
+class SalesPointAdmin(ModelView, model=SalesPoint):
+    name = "Точка продаж"
+    name_plural = "Точки продаж (автосалоны)"
+    icon = "fa-solid fa-car"
+    category = "Офисы"
+
+    column_list = [
+        SalesPoint.id, SalesPoint.name_ru, SalesPoint.address_ru,
+        SalesPoint.parent_filial_id, SalesPoint.phone,
+    ]
+    column_searchable_list = [
+        SalesPoint.name_ru, SalesPoint.name_uz,
+        SalesPoint.address_ru, SalesPoint.address_uz,
+    ]
+    column_sortable_list = [SalesPoint.id, SalesPoint.name_ru]
+    column_default_sort = ("name_ru", False)
+
+    column_labels = dict(_OFFICE_COMMON_LABELS)
 
 
 # ---------------------------------------------------------------------------

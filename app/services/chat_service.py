@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.i18n import normalize_lang, t
 from app.config import get_settings
-from app.db.models import Branch, ChatSession, Message, SessionStatus, User
+from app.db.models import ChatSession, Filial, Message, SalesOffice, SalesPoint, SessionStatus, User
 from app.services.agent_client import AgentClient
 from app.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
 
@@ -561,28 +561,47 @@ class ChatService:
                 pass
             return user.telegram_user_id
 
-    async def list_regions(self) -> list[str]:
+    async def list_filials(self) -> list[Filial]:
         async with self.session_factory() as session:
-            result = await session.execute(select(Branch.region).distinct())
-            regions = [r[0] for r in result.all() if r[0]]
-            return sorted(regions)
-
-    async def list_districts(self, region: str | None = None) -> list[str]:
-        async with self.session_factory() as session:
-            stmt = select(Branch.district).distinct()
-            if region:
-                stmt = stmt.where(Branch.region == region)
-            result = await session.execute(stmt)
-            districts = [r[0] for r in result.all() if r[0]]
-            return sorted(districts)
-
-    async def list_branches(self, region: str | None = None, district: str | None = None) -> list[Branch]:
-        async with self.session_factory() as session:
-            stmt = select(Branch)
-            if region:
-                stmt = stmt.where(Branch.region == region)
-            if district:
-                stmt = stmt.where(Branch.district == district)
-            stmt = stmt.order_by(Branch.name)
-            result = await session.execute(stmt)
+            result = await session.execute(select(Filial).order_by(Filial.name_ru))
             return list(result.scalars().all())
+
+    async def list_sales_offices(self) -> list[SalesOffice]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(SalesOffice).order_by(SalesOffice.region_ru, SalesOffice.name_ru)
+            )
+            return list(result.scalars().all())
+
+    async def list_sales_points(self) -> list[SalesPoint]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(SalesPoint).order_by(SalesPoint.name_ru)
+            )
+            return list(result.scalars().all())
+
+    async def get_office_by_id(self, office_type: str, office_id: int):
+        """Return Filial / SalesOffice / SalesPoint by its primary key; None if missing/unknown type."""
+        model = {
+            "filial": Filial,
+            "sales_office": SalesOffice,
+            "sales_point": SalesPoint,
+        }.get(office_type)
+        if model is None:
+            return None
+        async with self.session_factory() as session:
+            return await session.get(model, office_id)
+
+    async def list_all_offices_with_coords(self):
+        """Return every office (filial / sales_office / sales_point) that has lat+lon.
+        Used for nearest-branch search by user location.
+        """
+        out = []
+        async with self.session_factory() as session:
+            for model in (Filial, SalesOffice, SalesPoint):
+                stmt = select(model).where(
+                    model.latitude.is_not(None), model.longitude.is_not(None)
+                )
+                result = await session.execute(stmt)
+                out.extend(result.scalars().all())
+        return out

@@ -35,3 +35,5 @@ def chat_keyboard(lang: str | None = None) -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
     )
+
+

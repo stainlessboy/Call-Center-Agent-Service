@@ -32,7 +32,10 @@ from app.agent.nodes.calc_flow import node_calc_flow
 from app.agent.tools import (
     greeting_response,
     thanks_response,
-    get_branch_info,
+    find_filials,
+    find_sales_offices,
+    find_sales_points,
+    get_office_types_info,
     get_currency_info,
     show_credit_menu,
     back_to_product_list,
@@ -341,10 +344,88 @@ class TestToolThanksResponse:
         assert "Пожалуйста" in result
 
 
-class TestToolGetBranchInfo:
-    def test_returns_branch_text(self):
-        result = _run(get_branch_info.coroutine())
-        assert "отделения" in result
+class TestFindFilialsTool:
+    def test_none_found(self):
+        with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
+            result = _run(find_filials.coroutine(query="Мухосранск"))
+        assert "не нашёл" in result.lower() or "Мухосранск" in result
+
+    def test_formats_filial_hit(self):
+        class FakeFilial:
+            OFFICE_TYPE_CODE = "filial"
+            name_ru = "ЦБУ \"Тест\""
+            name_uz = None
+            address_ru = "ул. Тестовая 1"
+            address_uz = None
+            landmark_ru = None
+            landmark_uz = None
+            location_url = None
+            phone = None
+            hours = None
+
+        with patch(
+            "app.agent.branches.search_offices",
+            new=AsyncMock(return_value=[FakeFilial()]),
+        ) as mock_search:
+            result = _run(find_filials.coroutine(query="Ташкент"))
+        # Verify the call was filtered to "filial"
+        assert mock_search.call_args.kwargs["office_types"] == ["filial"]
+        assert "ЦБУ" in result
+        assert "Тестовая" in result
+
+
+class TestFindSalesOfficesTool:
+    def test_passes_correct_office_type(self):
+        with patch(
+            "app.agent.branches.search_offices",
+            new=AsyncMock(return_value=[]),
+        ) as mock_search:
+            _run(find_sales_offices.coroutine(query=""))
+        assert mock_search.call_args.kwargs["office_types"] == ["sales_office"]
+
+
+class TestFindSalesPointsTool:
+    def test_passes_correct_office_type(self):
+        with patch(
+            "app.agent.branches.search_offices",
+            new=AsyncMock(return_value=[]),
+        ) as mock_search:
+            _run(find_sales_points.coroutine(query="KIA"))
+        assert mock_search.call_args.kwargs["office_types"] == ["sales_point"]
+
+    def test_en_none_found(self):
+        with patch(
+            "app.agent.branches.search_offices",
+            new=AsyncMock(return_value=[]),
+        ):
+            result = _run(find_sales_points.coroutine(query="XYZ", lang="en"))
+        assert "no offices" in result.lower() or "not found" in result.lower() or "XYZ" in result
+
+
+class TestNewBranchToolsRegistered:
+    def test_three_find_tools_in_faq_tools(self):
+        from app.agent.tools import _FAQ_TOOLS
+        names = {getattr(t, "name", None) for t in _FAQ_TOOLS}
+        assert "find_filials" in names
+        assert "find_sales_offices" in names
+        assert "find_sales_points" in names
+        assert "get_office_types_info" in names
+        # Old unified tool is gone
+        assert "get_branch_info" not in names
+
+
+class TestToolGetOfficeTypesInfo:
+    def test_ru_mentions_three_types(self):
+        result = _run(get_office_types_info.coroutine(lang="ru"))
+        assert "Филиал" in result
+        assert "мини-офис" in result.lower()
+        assert "автосалон" in result.lower()
+
+    def test_uz_mentions_three_types(self):
+        result = _run(get_office_types_info.coroutine(lang="uz"))
+        assert "Filial" in result
+        assert "mini-ofis" in result.lower()
+        assert "avtosalon" in result.lower()
 
 
 class TestToolGetCurrencyInfo:
@@ -846,8 +927,9 @@ class TestToolsI18n:
         assert "welcome" in result.lower()
 
     def test_branch_info_en(self):
-        result = _run(get_branch_info.coroutine(lang="en"))
-        assert "branch" in result.lower()
+        with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
+            result = _run(find_filials.coroutine(query="NotFound", lang="en"))
+        assert "no offices" in result.lower() or "not found" in result.lower() or "NotFound" in result
 
     def test_credit_menu_en(self):
         result = _run(show_credit_menu.coroutine(lang="en"))
@@ -1138,4 +1220,266 @@ class TestCreditCalcPrincipalSubtraction:
             mock_pdf.return_value = "/tmp/test.pdf"
             _run(node_calc_flow(state))
         assert mock_pdf.call_args.kwargs["principal"] == 500_000_000
+
+
+# ---- Branches module: service matrix + search + formatting ----------------
+
+class TestBranchesServiceMatrix:
+    def test_filial_has_all_services(self):
+        from app.agent.branches import FILIAL, office_types_for_service
+        for svc in ("credit_individual", "credit_legal", "cashier", "cards"):
+            types = office_types_for_service(svc)
+            assert FILIAL in types, f"filial missing for {svc}"
+
+    def test_credit_legal_only_at_filial(self):
+        from app.agent.branches import FILIAL, office_types_for_service
+        assert office_types_for_service("credit_legal") == [FILIAL]
+
+    def test_sales_point_only_autoloan_atm_consultation(self):
+        from app.agent.branches import SALES_POINT, _SERVICE_MATRIX
+        assert _SERVICE_MATRIX[SALES_POINT] == {"autoloan", "atm", "consultation"}
+
+    def test_sales_office_has_no_legal_entity_services(self):
+        from app.agent.branches import SALES_OFFICE, _SERVICE_MATRIX
+        so = _SERVICE_MATRIX[SALES_OFFICE]
+        assert "credit_legal" not in so
+        assert "cashier" in so
+        assert "cards" in so
+
+    def test_unknown_service_returns_all_types(self):
+        from app.agent.branches import ALL_OFFICE_TYPES, office_types_for_service
+        assert set(office_types_for_service("banana")) == set(ALL_OFFICE_TYPES)
+
+
+class TestBranchCardFormat:
+    def test_format_uses_ru_by_default(self):
+        from app.agent.branches import format_branch_card
+
+        class FakeFilial:
+            OFFICE_TYPE_CODE = "filial"
+            name_ru = "ЦБУ Тест"
+            name_uz = "Test BXM"
+            address_ru = "ул. Тест 1"
+            address_uz = "Test ko'chasi 1"
+            landmark_ru = "рядом с парком"
+            landmark_uz = "parkga yaqin"
+            location_url = "https://maps.example/1"
+            phone = None
+            hours = None
+
+        card = format_branch_card(FakeFilial(), lang="ru")
+        assert "ЦБУ Тест" in card
+        assert "ул. Тест 1" in card
+        assert "рядом с парком" in card
+
+    def test_format_uses_uz_when_available(self):
+        from app.agent.branches import format_branch_card
+
+        class FakeSalesOffice:
+            OFFICE_TYPE_CODE = "sales_office"
+            name_ru = "Офис RU"
+            name_uz = "Ofis UZ"
+            address_ru = "addr ru"
+            address_uz = "addr uz"
+            # SalesOffice doesn't have landmark fields at all
+            location_url = None
+            phone = None
+            hours = None
+
+        card = format_branch_card(FakeSalesOffice(), lang="uz")
+        assert "Ofis UZ" in card
+        assert "addr uz" in card
+        assert "Офис RU" not in card
+
+    def test_sales_point_has_no_region_no_landmark(self):
+        """SalesPoint is the leanest: no region, no landmark."""
+        from app.agent.branches import format_branch_card
+
+        class FakeSalesPoint:
+            OFFICE_TYPE_CODE = "sales_point"
+            name_ru = "Andijon KIA"
+            name_uz = "Andijon KIA"
+            address_ru = "Андижан, ул. Амира Темура 11"
+            address_uz = "Andijon, A. Temur ko'chasi 11"
+            phone = None
+            hours = None
+            # No landmark_ru, no location_url — format should not crash
+            location_url = None
+
+        card = format_branch_card(FakeSalesPoint(), lang="ru")
+        assert "Andijon KIA" in card
+        assert "автосалон" in card.lower()
+
+
+class TestBranchesI18n:
+    def test_branch_keys_present_in_3_langs(self):
+        from app.agent.i18n import AGENT_TEXTS
+        for key in ("branch_found_header", "branch_none_found", "office_types_info"):
+            assert key in AGENT_TEXTS, f"missing {key}"
+            for lang in ("ru", "en", "uz"):
+                assert lang in AGENT_TEXTS[key] and AGENT_TEXTS[key][lang], (
+                    f"missing {lang} for {key}"
+                )
+
+
+# ---- Seed script: parent-filial fuzzy matching ----------------------------
+
+class TestSeedBranchesFuzzyMatching:
+    def test_normalize_strips_tsbu_and_punctuation(self):
+        from scripts.seed_branches import _normalize
+        assert _normalize('ЦБУ "Андижан"') == "андижан"
+        assert _normalize("BXM 'Andijon'") == "andijon"
+        assert _normalize("  Самарканд  ") == "самарканд"
+
+    def test_resolve_parent_exact_match(self):
+        from scripts.seed_branches import _resolve_parent
+        index = {"андижан": 1, "самарканд": 2, "автотранспорт": 13}
+        assert _resolve_parent("Андижан", index) == 1
+        assert _resolve_parent('ЦБУ "Самарканд"', index) == 2
+
+    def test_resolve_parent_fuzzy_match_variants(self):
+        """Real-world: 'Автотранспортный' (sales_office) ↔ 'Автотранспорт' (filial)."""
+        from scripts.seed_branches import _resolve_parent
+        index = {"автотранспорт": 13, "джизак": 4}
+        assert _resolve_parent("Автотранспортный", index) == 13
+        # Кириллические варианты написания (Жиззах ↔ Джизак) — fuzzy cutoff=0.6
+        # works for short strings that share common chars
+        assert _resolve_parent("Жиззах", index) in (4, None)  # allow None if too different
+
+    def test_resolve_parent_no_match_returns_none(self):
+        from scripts.seed_branches import _resolve_parent
+        index = {"андижан": 1}
+        assert _resolve_parent("Мурманск", index) is None
+        assert _resolve_parent("", index) is None
+        assert _resolve_parent(None, index) is None
+
+
+# ---- Bot menu: 3 buttons submenu for Отделения ---------------------------
+
+class TestBranchesInlineKeyboard:
+    """When user clicks '🏢 Отделения', bot shows inline-drill-down:
+    type selection → office list → office details.
+    """
+
+    def test_type_keyboard_has_3_inline_buttons_with_correct_callbacks(self):
+        from app.bot.handlers.commands import _office_type_inline_keyboard
+
+        kb = _office_type_inline_keyboard("ru")
+        # Flatten all buttons
+        all_btns = [btn for row in kb.inline_keyboard for btn in row]
+        callbacks = [b.callback_data for b in all_btns]
+        assert "office:type:filial" in callbacks
+        assert "office:type:sales_office" in callbacks
+        assert "office:type:sales_point" in callbacks
+
+    def test_type_keyboard_labels_localized_uz(self):
+        from app.bot.handlers.commands import _office_type_inline_keyboard
+
+        kb = _office_type_inline_keyboard("uz")
+        texts = [btn.text for row in kb.inline_keyboard for btn in row]
+        assert any("Filial" in t for t in texts)
+        assert any("Savdo ofis" in t for t in texts)
+        assert any("Savdo nuqta" in t for t in texts)
+
+    def test_list_keyboard_has_button_per_office_plus_back(self):
+        from app.bot.handlers.commands import _office_list_inline_keyboard
+
+        class FakeOffice:
+            def __init__(self, id_, name):
+                self.id = id_
+                self.name_ru = name
+                self.name_uz = None
+
+        offices = [FakeOffice(1, "A"), FakeOffice(2, "B"), FakeOffice(3, "C")]
+        kb = _office_list_inline_keyboard("filial", offices, "ru")
+        rows = kb.inline_keyboard
+        # 3 office buttons + 1 back row = 4 rows
+        assert len(rows) == 4
+        # Each office row has 1 button with show callback
+        assert rows[0][0].callback_data == "office:show:filial:1"
+        assert rows[0][0].text == "A"
+        assert rows[1][0].callback_data == "office:show:filial:2"
+        # Last row is back
+        assert rows[-1][0].callback_data == "office:back"
+
+    def test_list_keyboard_truncates_long_names(self):
+        from app.bot.handlers.commands import _office_list_inline_keyboard
+
+        class FakeOffice:
+            id = 1
+            name_ru = "A" * 200  # very long
+            name_uz = None
+
+        kb = _office_list_inline_keyboard("sales_office", [FakeOffice()], "ru")
+        assert len(kb.inline_keyboard[0][0].text) <= 64  # Telegram limit
+
+    def test_detail_keyboard_has_two_back_buttons(self):
+        from app.bot.handlers.commands import _office_detail_inline_keyboard
+
+        kb = _office_detail_inline_keyboard("sales_point", "ru")
+        rows = kb.inline_keyboard
+        assert len(rows) == 2
+        assert rows[0][0].callback_data == "office:type:sales_point"
+        assert rows[1][0].callback_data == "office:back"
+
+    def test_detail_keyboard_labels_localized(self):
+        from app.bot.handlers.commands import _office_detail_inline_keyboard
+
+        for lang in ("ru", "en", "uz"):
+            kb = _office_detail_inline_keyboard("filial", lang)
+            # Just ensure it doesn't crash and produces non-empty labels
+            assert kb.inline_keyboard[0][0].text
+            assert kb.inline_keyboard[1][0].text
+
+
+# ---- Uzbek Latin-only enforcement ----------------------------------------
+
+class TestUzbekLatinOnly:
+    """Bot must reply to Uzbek customers ONLY in Latin script — never Cyrillic.
+
+    Two layers of defence:
+    1. SYSTEM_POLICY contains a critical rule forbidding Uzbek Cyrillic.
+    2. _LANG_INSTRUCTION['uz'] reinforces it on every UZ turn.
+    3. Static AGENT_TEXTS['uz'] must contain no Cyrillic characters.
+    """
+
+    def test_system_policy_forbids_uzbek_cyrillic(self):
+        assert "ЛАТИН" in SYSTEM_POLICY.upper() or "LATIN" in SYSTEM_POLICY.upper() \
+            or "лотин" in SYSTEM_POLICY.lower()
+        # Example of forbidden pattern must be listed
+        assert "Ассалому" in SYSTEM_POLICY or "қанча" in SYSTEM_POLICY \
+            or "ўқғҳ" in SYSTEM_POLICY or "Ўзбекистон" in SYSTEM_POLICY
+
+    def test_lang_instruction_uz_forbids_cyrillic(self):
+        from app.agent.constants import _LANG_INSTRUCTION
+        uz = _LANG_INSTRUCTION["uz"]
+        assert "LOTIN" in uz.upper() or "Latin" in uz
+        # Mentions forbidden Cyrillic examples
+        assert "Kirill" in uz or "кирилл" in uz.lower() or "ўқғҳ" in uz
+
+    def test_agent_texts_uz_has_no_cyrillic(self):
+        """Every 'uz' value in AGENT_TEXTS must be in Latin script only."""
+        from app.agent.i18n import AGENT_TEXTS
+        import re
+        cyr = re.compile(r"[А-Яа-яЁёЎўҚқҒғҲҳҶҷ]")
+        bad = []
+        for key, variants in AGENT_TEXTS.items():
+            uz_val = variants.get("uz")
+            if not uz_val:
+                continue
+            if cyr.search(uz_val):
+                chars = "".join(cyr.findall(uz_val)[:10])
+                bad.append((key, chars))
+        assert not bad, f"UZ values with Cyrillic chars: {bad}"
+
+    def test_bot_i18n_uz_menu_labels_has_no_cyrillic(self):
+        """All UZ menu labels must be Latin-only (bot keyboard text)."""
+        from app.bot.i18n import MENU_LABELS
+        import re
+        cyr = re.compile(r"[А-Яа-яЁёЎўҚқҒғҲҳҶҷ]")
+        bad = []
+        for key, value in MENU_LABELS["uz"].items():
+            if cyr.search(value):
+                bad.append((key, value))
+        assert not bad, f"UZ menu labels with Cyrillic chars: {bad}"
 

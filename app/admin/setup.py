@@ -9,14 +9,16 @@ from app.admin.auth import AdminAuth
 from app.admin.dashboard_view import DashboardAdmin
 from app.admin.seed_view import SeedAdmin
 from app.admin.views import (
-    BranchAdmin,
     CardProductOfferAdmin,
     ChatSessionAdmin,
     CreditProductOfferAdmin,
     DepositProductOfferAdmin,
     FaqItemAdmin,
+    FilialAdmin,
     LeadAdmin,
     MessageAdmin,
+    SalesOfficeAdmin,
+    SalesPointAdmin,
     UserAdmin,
 )
 from app.config import get_settings
@@ -49,6 +51,8 @@ def setup_admin(app: FastAPI) -> Admin:
     admin.add_view(DepositProductOfferAdmin)
     admin.add_view(CardProductOfferAdmin)
     admin.add_view(FaqItemAdmin)
-    admin.add_view(BranchAdmin)
+    admin.add_view(FilialAdmin)
+    admin.add_view(SalesOfficeAdmin)
+    admin.add_view(SalesPointAdmin)
 
     return admin

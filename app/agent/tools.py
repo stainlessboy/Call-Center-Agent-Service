@@ -61,17 +61,113 @@ async def thanks_response(
     return at("thanks_reply", lang)
 
 
+async def _find_offices_impl(office_type: str, query: str, lang: str) -> str:
+    """Shared body for find_filials / find_sales_offices / find_sales_points tools."""
+    from app.agent.branches import format_branches_list, search_offices
+
+    offices = await search_offices(query=query, office_types=[office_type], limit=5)
+    if not offices:
+        return at("branch_none_found", lang, query=query or "—")
+
+    header = at("branch_found_header", lang, count=len(offices))
+    return f"{header}\n\n{format_branches_list(offices, lang)}"
+
+
 @lc_tool
-async def get_branch_info(
+async def find_filials(
+    query: str = "",
     lang: Literal["ru", "en", "uz"] = "ru",
 ) -> str:
-    """Get bank branch locations and working hours. Use when user asks about branches, offices, addresses.
+    """Find bank filials (Центры банковских услуг, ЦБУ) — the main full-service branches.
+
+    WHEN TO CALL:
+    - User explicitly asks about "филиал" / "ЦБУ" / "БХМ" / "BXM" / "filial" / "branch".
+    - User asks about services available ONLY at filials: accounts for legal entities (юрлица),
+      services for sole proprietors (ИП / yakka tadbirkorlar), corporate loans, business accounts.
+    - User asks about cashier operations, currency exchange, plastic cards, consumer/education/micro
+      loans AND wants the main branch (not a mini-office).
+    - Vague "ближайшее отделение" queries — default to filials as the flagship locations.
+
+    PARAMETERS:
+      query: free-form city / region / branch-name as the user wrote it
+             (e.g. "Ташкент", "Андижан", "Samarkand"). Empty string = list first 5.
 
     lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
     "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
     Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    return at("branch_info", lang)
+    return await _find_offices_impl("filial", query, lang)
+
+
+@lc_tool
+async def find_sales_offices(
+    query: str = "",
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Find bank sales offices (офисы продаж, мини-офисы) — full services for individuals,
+    no legal-entity services.
+
+    WHEN TO CALL:
+    - User explicitly asks about "офис продаж" / "мини-офис" / "savdo ofisi" / "sales office" / "mini-office".
+    - User wants individual services (consumer/auto/micro/education loans, cards, cashier, currency
+      exchange) but prefers a smaller/closer office than a filial.
+    - DO NOT call this for legal-entity services (юрлица, ИП) — those are only at filials (use find_filials).
+
+    PARAMETERS:
+      query: free-form city / region / office-name as the user wrote it.
+             Empty string = list first 5.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
+    return await _find_offices_impl("sales_office", query, lang)
+
+
+@lc_tool
+async def find_sales_points(
+    query: str = "",
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Find bank sales points (точки продаж в автосалонах) — car-dealership-based,
+    ONLY auto loans + consultations + ATM available.
+
+    WHEN TO CALL:
+    - User explicitly asks about "точка продаж" / "автосалон" / "savdo nuqtasi" / "sales point" / "car dealer".
+    - User asks specifically about auto loans in a specific car dealership.
+    - DO NOT call this for anything except auto loans, consultations or ATM — other services
+      are NOT available here; use find_filials or find_sales_offices instead.
+
+    PARAMETERS:
+      query: free-form city / car-dealer-name as the user wrote it (e.g. "KIA Andijon", "BYD").
+             Empty string = list first 5.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
+    return await _find_offices_impl("sales_point", query, lang)
+
+
+@lc_tool
+async def get_office_types_info(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Explain the differences between the three types of bank offices:
+    filial (Центр банковских услуг), sales office (мини-офис), and sales point
+    (точка продаж в автосалоне) — what services each can provide.
+
+    WHEN TO CALL:
+    - User asks about the difference between filial / office / sales point types.
+    - User wants to know where a specific service is available.
+    - Examples: "чем отличается филиал от мини-офиса", "что можно сделать в точке продаж",
+      "filial va mini-ofis farqi nima", "where can I get a card".
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
+    return at("office_types_info", lang)
 
 
 @lc_tool
@@ -401,8 +497,10 @@ async def request_operator(
 
 
 _FAQ_TOOLS = [
-    greeting_response, thanks_response, get_branch_info, get_currency_info,
-    show_credit_menu, get_products, select_product, compare_products,
-    back_to_product_list, faq_lookup, request_operator,
+    greeting_response, thanks_response,
+    find_filials, find_sales_offices, find_sales_points,
+    get_office_types_info,
+    get_currency_info, show_credit_menu, get_products, select_product,
+    compare_products, back_to_product_list, faq_lookup, request_operator,
     custom_loan_calculator,
 ]
