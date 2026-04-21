@@ -205,6 +205,94 @@ async def start_calculator() -> str:
 
 
 @lc_tool
+async def custom_loan_calculator(
+    amount: float,
+    term_months: int,
+    downpayment: float,
+    rate_pct: float,
+) -> str:
+    """Calculate a generic annuity loan payment using the customer's own numbers — NOT tied to any specific bank product.
+
+    WHEN TO CALL:
+    - Customer provides their own figures and wants a payment estimate: "посчитай кредит",
+      "если я возьму X на Y лет под Z%", "какой будет платёж при ...", "calculate loan",
+      "hisoblab bering", "рассчитай для меня", "сколько платить если взять X сум".
+    - The customer explicitly supplies their OWN amount, term, downpayment, and rate — not asking
+      about a specific bank product in the catalogue.
+
+    DO NOT call this tool when:
+    - The customer wants to apply for or calculate a specific bank product (mortgage, autoloan, etc.)
+      — use start_calculator() for that instead.
+
+    IMPORTANT — call only when ALL FOUR parameters are known:
+    - If the customer has NOT provided amount, term, downpayment, or rate — ask for the missing
+      values in plain text first, then call this tool once you have all four.
+    - downpayment is 0 if the customer says "без первоначального взноса" or "нет взноса" or "0".
+
+    Parsing hints:
+    - "3 года" → term_months=36; "полтора года" → 18; "5 лет" → 60; "24 месяца" → 24
+    - "без первоначального" / "0" / not mentioned → downpayment=0.0
+    - "12 процентов годовых" / "под 12%" → rate_pct=12.0
+    - amount is the total requested loan before downpayment, in local currency (UZS)
+
+    Parameters:
+        amount: Total loan amount in local currency (UZS) before deducting downpayment. E.g. 50_000_000.
+        term_months: Loan term as integer number of months. E.g. 36 for 3 years.
+        downpayment: Absolute downpayment in local currency (same units as amount). Use 0.0 if none.
+        rate_pct: Annual interest rate as a percentage. E.g. 12.5 for 12.5% per annum.
+    """
+    lang = _REQUEST_LANGUAGE.get()
+
+    principal = amount - downpayment
+    if principal <= 0:
+        _err = {
+            "ru": "Укажите корректные суммы: сумма кредита должна быть больше первоначального взноса.",
+            "en": "Please provide valid amounts: the loan amount must exceed the down payment.",
+            "uz": "Iltimos, to'g'ri summalarni kiriting: kredit summasi boshlang'ich to'lovdan katta bo'lishi kerak.",
+        }
+        return _err.get(lang) or _err["ru"]
+    if term_months <= 0:
+        _err = {
+            "ru": "Укажите корректный срок (в месяцах, больше нуля).",
+            "en": "Please provide a valid term (in months, greater than zero).",
+            "uz": "Iltimos, to'g'ri muddatni kiriting (oyda, noldan katta).",
+        }
+        return _err.get(lang) or _err["ru"]
+    if rate_pct < 0:
+        _err = {
+            "ru": "Ставка не может быть отрицательной. Укажите корректное значение.",
+            "en": "The interest rate cannot be negative. Please provide a valid value.",
+            "uz": "Foiz stavkasi manfiy bo'lishi mumkin emas. Iltimos, to'g'ri qiymat kiriting.",
+        }
+        return _err.get(lang) or _err["ru"]
+
+    if rate_pct == 0:
+        monthly = principal / term_months
+    else:
+        r = rate_pct / 100 / 12
+        monthly = principal * r * (1 + r) ** term_months / ((1 + r) ** term_months - 1)
+
+    total = monthly * term_months
+    overpayment = total - principal
+
+    def fmt(v: float) -> str:
+        return f"{v:,.0f}".replace(",", " ")
+
+    return at(
+        "custom_calc_result",
+        lang,
+        amount=fmt(amount),
+        downpayment=fmt(downpayment),
+        principal=fmt(principal),
+        term=term_months,
+        rate=rate_pct,
+        monthly=fmt(monthly),
+        total=fmt(total),
+        overpayment=fmt(overpayment),
+    )
+
+
+@lc_tool
 async def faq_lookup(query: str) -> str:
     """Look up FAQ database for banking questions about services, products, or procedures."""
     lang = _REQUEST_LANGUAGE.get()
@@ -235,4 +323,5 @@ _FAQ_TOOLS = [
     greeting_response, thanks_response, get_branch_info, get_currency_info,
     show_credit_menu, get_products, select_product, compare_products,
     back_to_product_list, faq_lookup, request_operator,
+    custom_loan_calculator,
 ]
