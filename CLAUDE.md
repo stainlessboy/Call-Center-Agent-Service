@@ -148,7 +148,7 @@ The LLM receives message history + current state context, then picks which tool 
 | `faq_lookup(query)` | any banking question |
 | `request_operator(reason)` | user wants live operator / identity-required ops |
 
-Tools access dialog state via `_CURRENT_DIALOG` contextvar. Product categories: `mortgage`, `autoloan`, `microloan`, `education_credit`, `deposit`, `debit_card`, `fx_card`.
+Tools that need dialog state declare `state: Annotated[dict, InjectedState] = None` — `ToolNode` injects graph state automatically, the parameter stays hidden from the LLM schema. Product categories: `mortgage`, `autoloan`, `microloan`, `education_credit`, `deposit`, `debit_card`, `fx_card`.
 
 #### node_calc_flow (`nodes/calc_flow.py`) — deterministic calculator + lead capture
 

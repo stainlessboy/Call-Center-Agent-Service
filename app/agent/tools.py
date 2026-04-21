@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Annotated, Literal
+
 from langchain_core.tools import tool as lc_tool
+from langgraph.prebuilt import InjectedState
 
 from app.agent.constants import (
-    _CURRENT_DIALOG,
-    _REQUEST_LANGUAGE,
     _greeting_with_menu,
 )
 from app.agent.i18n import (
@@ -35,30 +36,54 @@ _ALL_CATEGORIES = [
 
 
 @lc_tool
-async def greeting_response() -> str:
-    """Greet the user. Use when user says hello/hi/привет/салом/здравствуйте or any greeting."""
-    lang = _REQUEST_LANGUAGE.get()
+async def greeting_response(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Greet the user. Use when user says hello/hi/привет/салом/здравствуйте or any greeting.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     return _greeting_with_menu(lang)
 
 
 @lc_tool
-async def thanks_response() -> str:
-    """Respond to gratitude. Use when user says спасибо/рахмат/thank you."""
-    lang = _REQUEST_LANGUAGE.get()
+async def thanks_response(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Respond to gratitude. Use when user says спасибо/рахмат/thank you.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     return at("thanks_reply", lang)
 
 
 @lc_tool
-async def get_branch_info() -> str:
-    """Get bank branch locations and working hours. Use when user asks about branches, offices, addresses."""
-    lang = _REQUEST_LANGUAGE.get()
+async def get_branch_info(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Get bank branch locations and working hours. Use when user asks about branches, offices, addresses.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     return at("branch_info", lang)
 
 
 @lc_tool
-async def get_currency_info() -> str:
-    """Get currency exchange rates. Use when user asks about USD, EUR, or currency rates."""
-    lang = _REQUEST_LANGUAGE.get()
+async def get_currency_info(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Get currency exchange rates. Use when user asks about USD, EUR, or currency rates.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     from app.utils.cbu_rates import fetch_cbu_rates
 
     rates = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
@@ -77,21 +102,33 @@ async def get_currency_info() -> str:
 
 
 @lc_tool
-async def show_credit_menu() -> str:
-    """Show credit type selection. Use when user asks about credit/кредит without specifying type."""
-    lang = _REQUEST_LANGUAGE.get()
+async def show_credit_menu(
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Show credit type selection. Use when user asks about credit/кредит without specifying type.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     return at("credit_menu_prompt", lang)
 
 
 @lc_tool
-async def get_products(category: str) -> str:
+async def get_products(
+    category: str,
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
     """
     Get list of bank products for a category.
     Categories: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
     Use when user asks about a specific product type.
     Returns pre-formatted text — pass it to the user AS-IS.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    lang = _REQUEST_LANGUAGE.get()
     products = await _get_products_by_category(category)
     if not products:
         label = category_label(category, lang)
@@ -100,14 +137,21 @@ async def get_products(category: str) -> str:
 
 
 @lc_tool
-async def select_product(product_name: str) -> str:
+async def select_product(
+    product_name: str,
+    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
     """
     Show details for a specific product. Use when user selects a product by name or number.
     The product_name should match one of the products currently displayed.
     Returns pre-formatted HTML text — pass it to the user AS-IS, do not reformat.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    lang = _REQUEST_LANGUAGE.get()
-    dialog = _CURRENT_DIALOG.get()
+    dialog = (state or {}).get("dialog") or {}
     dialog_products = list(dialog.get("products") or [])
     dialog_category = dialog.get("category", "")
 
@@ -141,13 +185,20 @@ async def select_product(product_name: str) -> str:
 
 
 @lc_tool
-async def compare_products(query: str) -> str:
+async def compare_products(
+    query: str,
+    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
     """
     Compare bank products. Use when user asks to compare or find differences.
     Returns product data for comparison — formulate the comparison in your response.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    lang = _REQUEST_LANGUAGE.get()
-    dialog = _CURRENT_DIALOG.get()
+    dialog = (state or {}).get("dialog") or {}
     flow = dialog.get("flow")
     products = list(dialog.get("products") or [])
     cmp_products = list(products) if flow == "show_products" else []
@@ -176,10 +227,17 @@ async def compare_products(query: str) -> str:
 
 
 @lc_tool
-async def back_to_product_list() -> str:
-    """Go back to the product list. Use when user clicks '◀ Все продукты' or says 'назад'."""
-    lang = _REQUEST_LANGUAGE.get()
-    dialog = _CURRENT_DIALOG.get()
+async def back_to_product_list(
+    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
+    """Go back to the product list. Use when user clicks '◀ Все продукты' or says 'назад'.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
+    dialog = (state or {}).get("dialog") or {}
     products = list(dialog.get("products") or [])
     category = dialog.get("category", "")
     if products:
@@ -188,12 +246,19 @@ async def back_to_product_list() -> str:
 
 
 @lc_tool
-async def start_calculator() -> str:
+async def start_calculator(
+    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
     """Start payment calculator. Use when user clicks '✅ Рассчитать' or '📋 Подать заявку'.
     IMPORTANT: Return the tool output AS-IS to the user without rephrasing.
-    The category (deposit/credit) is already embedded in the question text."""
-    lang = _REQUEST_LANGUAGE.get()
-    dialog = _CURRENT_DIALOG.get()
+    The category (deposit/credit) is already embedded in the question text.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
+    dialog = (state or {}).get("dialog") or {}
     category = dialog.get("category", "")
     calc_qs = get_calc_questions(category, lang)
     if not calc_qs:
@@ -210,6 +275,7 @@ async def custom_loan_calculator(
     term_months: int,
     downpayment: float,
     rate_pct: float,
+    lang: Literal["ru", "en", "uz"] = "ru",
 ) -> str:
     """Calculate a generic annuity loan payment using the customer's own numbers — NOT tied to any specific bank product.
 
@@ -240,9 +306,10 @@ async def custom_loan_calculator(
         term_months: Loan term as integer number of months. E.g. 36 for 3 years.
         downpayment: Absolute downpayment in local currency (same units as amount). Use 0.0 if none.
         rate_pct: Annual interest rate as a percentage. E.g. 12.5 for 12.5% per annum.
+        lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+        "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+        Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    lang = _REQUEST_LANGUAGE.get()
-
     principal = amount - downpayment
     if principal <= 0:
         _err = {
@@ -293,15 +360,25 @@ async def custom_loan_calculator(
 
 
 @lc_tool
-async def faq_lookup(query: str) -> str:
-    """Look up FAQ database for banking questions about services, products, or procedures."""
-    lang = _REQUEST_LANGUAGE.get()
+async def faq_lookup(
+    query: str,
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
+    """Look up FAQ database for banking questions about services, products, or procedures.
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     result = await _faq_lookup(query, lang)
     return result or ""
 
 
 @lc_tool
-async def request_operator(reason: str = "") -> str:
+async def request_operator(
+    reason: str = "",
+    lang: Literal["ru", "en", "uz"] = "ru",
+) -> str:
     """Transfer the user to a live operator. Call this tool when:
     1. The user explicitly asks to speak with a human operator, support agent, or live person.
     2. The user requests an operation that requires identity verification: enabling/disabling SMS,
@@ -309,8 +386,12 @@ async def request_operator(reason: str = "") -> str:
        money transfers, or any active account operations you cannot perform.
     3. You asked the user to rephrase their message but still cannot understand their request.
     The 'reason' parameter should briefly describe why the operator is needed
-    (e.g. 'identity_required', 'unclear_message', 'user_request')."""
-    lang = _REQUEST_LANGUAGE.get()
+    (e.g. 'identity_required', 'unclear_message', 'user_request').
+
+    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
+    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
+    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    """
     reason_lower = (reason or "").lower()
     if "identity" in reason_lower or "верификац" in reason_lower or "операци" in reason_lower:
         return at("operator_identity_required", lang)

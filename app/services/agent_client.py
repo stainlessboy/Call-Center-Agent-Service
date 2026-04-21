@@ -46,9 +46,6 @@ class AgentClient:
             operator_reply=operator_reply,
         )
 
-    async def ensure_language(self, text: str, language: str | None = None) -> str:
-        return await self._agent.ensure_language(text=text, language=language)
-
     async def sync_history(self, session_id: str, events: Sequence[dict[str, str]]) -> None:
         await self._agent.sync_history(session_id=session_id, events=events)
 

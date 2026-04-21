@@ -277,15 +277,6 @@ class ChatService:
             pdf_path = match.group(1).strip()
             agent_text = PDF_MARKER_RE.sub("", agent_text).strip()
 
-        if agent_text:
-            try:
-                agent_text = await self.agent_client.ensure_language(
-                    text=agent_text,
-                    language=normalize_lang(user.language),
-                )
-            except Exception:  # pragma: no cover - translation fallback
-                logger.exception("Agent reply language normalization failed")
-
         llm_usage = getattr(turn_result, "token_usage", None) or None
         await self._save_message(
             session_id=chat_session.id,

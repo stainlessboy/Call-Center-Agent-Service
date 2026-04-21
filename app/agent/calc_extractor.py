@@ -9,12 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
-
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.llm import _get_chat_openai, extract_token_usage
-from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
 
 _log = logging.getLogger(__name__)
 
@@ -34,7 +31,11 @@ _EXTRACT_SYSTEM_PROMPT = {
         '- "70% от стоимости авто" — это НЕ конкретная сумма, это описание. type=question\n'
         '- "Если я прошу 70%..." — это вопрос/рассуждение. type=question\n'
         '- "200 млн" — конкретная сумма. type=value, value=200000000\n'
-        '- "36 мес" или "3 года" — конкретный срок. type=value, value=36\n'
+        "- ДЛЯ ШАГА term: ВСЕГДА возвращай value в МЕСЯЦАХ, никогда в годах. "
+        '"3 года"/"3 yil"/"3 йил"/"3 years" → value=36; '
+        '"10 лет"/"10 yil"/"10 йил" → value=120; '
+        '"24 мес"/"24 oy"/"24 ой"/"24 months" → value=24. '
+        "Всегда умножай годы на 12.\n"
         '- "20%" или "20" (в контексте первоначального взноса) — конкретный процент. type=value, value=20\n'
         '- Любое рассуждение, уточнение, встречный вопрос — type=question\n'
     ),
@@ -52,7 +53,11 @@ _EXTRACT_SYSTEM_PROMPT = {
         '(e.g. "2 years") — this is a CONCRETE answer. type=value\n'
         '- "70% of car cost" — NOT a concrete amount, it\'s a description. type=question\n'
         '- "200 mln" — concrete amount. type=value, value=200000000\n'
-        '- "36 months" or "3 years" — concrete term. type=value, value=36\n'
+        "- FOR term STEP: ALWAYS return value in MONTHS, never in years. "
+        '"3 years"/"3 yil"/"3 йил"/"3 года" → value=36; '
+        '"10 years"/"10 yil"/"10 йил"/"10 лет" → value=120; '
+        '"24 months"/"24 oy"/"24 ой"/"24 мес" → value=24. '
+        "Always multiply years by 12.\n"
         '- Any reasoning, clarification, counter-question — type=question\n'
     ),
     "uz": (
@@ -66,6 +71,11 @@ _EXTRACT_SYSTEM_PROMPT = {
         "muhokama qilayotgan bo'lsa\n"
         "Qoida: bot savol bergan bo'lsa (masalan 'Qancha muddatga?') va mijoz aniq qiymat bilan javob bergan bo'lsa "
         "(masalan '2 yil') — bu ANIQ javob hisoblanadi. type=value\n"
+        "Muddat (term) qadami uchun: HAR DOIM value ni OYDA qaytaring, yillarda emas. "
+        "'3 yil'/'3 йил'/'3 года'/'3 years' → value=36; "
+        "'10 yil'/'10 йил'/'10 лет' → value=120; "
+        "'24 oy'/'24 ой'/'24 мес'/'24 months' → value=24. "
+        "Yillarni har doim 12 ga ko'paytiring.\n"
     ),
 }
 
@@ -408,12 +418,3 @@ async def extract_updated_value(
         return {"type": "unparsed"}
 
 
-def regex_fallback(user_text: str, calc_step: str) -> Optional[int | float]:
-    """Regex fallback when LLM is unavailable."""
-    if calc_step == "amount":
-        return _parse_amount(user_text)
-    elif calc_step == "term":
-        return _parse_term_months(user_text)
-    elif calc_step == "downpayment":
-        return _parse_downpayment(user_text)
-    return None

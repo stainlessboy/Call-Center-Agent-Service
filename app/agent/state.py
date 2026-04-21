@@ -38,4 +38,5 @@ def _default_dialog() -> dict:
         "lead_step": None,
         "lead_slots": {},
         "fallback_streak": 0,
+        "last_lang": "ru",
     }

@@ -10,14 +10,12 @@ from app.agent.calc_extractor import (
     extract_calc_value,
     extract_prefill_from_history,
     extract_updated_value,
-    regex_fallback,
 )
 from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_recalculate, _is_yes, _looks_like_question
 from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
-from app.agent.parsers import _parse_amount, _parse_downpayment, _parse_term_months
 from app.agent.state import BotState, _default_dialog
 from app.utils.faq_tools import _faq_lookup
 from app.utils.pdf_generator import generate_amortization_pdf
@@ -292,33 +290,6 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             except (ValueError, TypeError):
                 _agent_logger.warning("Invalid value from extractor: step=%s val=%r", calc_step, val)
                 parsed_value = False
-        else:
-            # LLM unavailable — regex fallback
-            val = regex_fallback(user_text, calc_step)
-            if val is not None:
-                if calc_step == STEP_AMOUNT:
-                    calc_slots["amount"] = val
-                    parsed_value = True
-                elif calc_step == STEP_TERM:
-                    clamped, adjusted = _clamp_term(val, selected_product, category)
-                    if adjusted:
-                        t_min, t_max = _get_product_term_range(selected_product, category)
-                        if category == "deposit":
-                            schedule = selected_product.get("rate_schedule") or []
-                            available = sorted({e["term_months"] for e in schedule if e.get("term_months") is not None})
-                            avail_str = ", ".join(str(t) for t in available)
-                            adjustment_note = at("term_adjusted_deposit", lang, user_val=val, new_val=clamped, available=avail_str)
-                        else:
-                            adjustment_note = at("term_adjusted", lang, user_val=val, new_val=clamped, t_min=t_min or "?", t_max=t_max or "?")
-                    calc_slots["term_months"] = clamped
-                    parsed_value = True
-                elif calc_step == STEP_DOWNPAYMENT:
-                    clamped, adjusted = _clamp_downpayment(val, selected_product)
-                    if adjusted:
-                        d_min, d_max = _get_product_downpayment_range(selected_product)
-                        adjustment_note = at("dp_adjusted", lang, user_val=f"{val:.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
-                    calc_slots["downpayment"] = clamped
-                    parsed_value = True
 
     # User asked a question or gave ambiguous input — answer and re-ask
     if calc_step and (is_question or not parsed_value):
@@ -447,11 +418,16 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
 
     # Credit → PDF amortization schedule
     rate_pct = _lookup_credit_rate(selected_product, calc_slots)
+    dp_pct = float(calc_slots.get("downpayment") or 0)
+    dp_abs = int(amount * dp_pct / 100)
+    principal = amount - dp_abs
+    principal_fmt = f"{principal:,}".replace(",", " ")
+    dp_abs_fmt = f"{dp_abs:,}".replace(",", " ")
     try:
         pdf_path = await asyncio.to_thread(
             generate_amortization_pdf,
             product_name=product_name,
-            principal=amount,
+            principal=principal,
             annual_rate_pct=rate_pct,
             term_months=term_months,
             output_dir=None,
@@ -460,6 +436,9 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             "credit_result_pdf", lang,
             product=_html.escape(product_name),
             amount=amount_fmt,
+            downpayment=dp_abs_fmt,
+            dp_pct=f"{dp_pct:.0f}",
+            principal=principal_fmt,
             rate=f"{rate_pct:.1f}",
             term=str(term_months),
             pdf_link=f"[[PDF:{pdf_path}]]",
@@ -469,6 +448,9 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             "credit_result_fallback", lang,
             product=_html.escape(product_name),
             amount=amount_fmt,
+            downpayment=dp_abs_fmt,
+            dp_pct=f"{dp_pct:.0f}",
+            principal=principal_fmt,
             rate=f"{rate_pct:.1f}",
             term=str(term_months),
         )

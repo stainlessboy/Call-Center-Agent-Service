@@ -6,11 +6,10 @@ from typing import Any, Dict, Optional, Sequence
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.checkpointer import _create_async_checkpointer
-from app.agent.constants import _REQUEST_LANGUAGE
-from app.agent.i18n import at
+from app.agent.constants import _REQUEST_LANGUAGE, resolve_language
+from app.agent.i18n import SYSTEM_POLICY, at
 from app.agent.graph import build_graph
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
-from app.utils.data_loaders import _normalize_language_code
 
 _agent_logger = _logging.getLogger(__name__)
 
@@ -19,8 +18,6 @@ class Agent:
     """Banking FAQ + product selection agent with LangGraph state persistence."""
 
     def __init__(self) -> None:
-        from langgraph.store.memory import InMemoryStore
-        self._store = InMemoryStore()
         self._graph = build_graph()
         self._checkpointer: Any = None
         self._checkpointer_cm: Any = None
@@ -30,7 +27,7 @@ class Agent:
         checkpointer, cm = await _create_async_checkpointer(backend, url)
         self._checkpointer = checkpointer
         self._checkpointer_cm = cm
-        self._graph = build_graph(checkpointer=checkpointer, store=self._store)
+        self._graph = build_graph(checkpointer=checkpointer)
 
     def _build_config(self, session_id: str) -> Dict[str, Any]:
         return {"configurable": {"thread_id": session_id}}
@@ -43,21 +40,6 @@ class Agent:
             _agent_logger.debug("Failed to load existing state: %s", exc)
             return {}
 
-    def _save_user_preference(self, user_id: int, key: str, value: Any) -> None:
-        try:
-            self._store.put((str(user_id), "preferences"), key, {"value": value})
-        except Exception as exc:
-            _agent_logger.debug("Failed to save user preference: %s", exc)
-
-    def _get_user_preference(self, user_id: int, key: str) -> Any:
-        try:
-            items = self._store.search((str(user_id), "preferences"), query=key, limit=1)
-            if items:
-                return items[0].value.get("value")
-        except Exception as exc:
-            _agent_logger.debug("Failed to get user preference: %s", exc)
-        return None
-
     async def _ainvoke(
         self,
         session_id: str,
@@ -66,19 +48,22 @@ class Agent:
         human_mode: bool = False,
         user_id: Optional[int] = None,
     ) -> AgentTurnResult:
-        if user_id and language is None:
-            language = self._get_user_preference(user_id, "language")
-        lang_token = _REQUEST_LANGUAGE.set(_normalize_language_code(language))
         config = self._build_config(session_id)
+        existing = await self._aload_existing_state(config)
+        dialog = dict(existing.get("dialog") or _default_dialog())
+
+        # Seed _REQUEST_LANGUAGE from persisted last_lang so that calc_flow
+        # (which reads the contextvar directly) has a sane value even before
+        # the FAQ node updates it.
+        lang_token = _REQUEST_LANGUAGE.set(resolve_language(dialog))
         try:
-            existing = await self._aload_existing_state(config)
             state_in: BotState = {
                 "last_user_text": user_text,
-                "messages": list(existing.get("messages") or [SystemMessage(content=at("system_policy", _REQUEST_LANGUAGE.get()))]),
+                "messages": list(existing.get("messages") or [SystemMessage(content=SYSTEM_POLICY)]),
                 "answer": "",
                 "human_mode": human_mode,
                 "keyboard_options": None,
-                "dialog": dict(existing.get("dialog") or _default_dialog()),
+                "dialog": dialog,
                 "_route": "",
                 "session_id": session_id,
                 "user_id": user_id,
@@ -103,8 +88,6 @@ class Agent:
         language: Optional[str] = None,
         human_mode: bool = False,
     ) -> AgentTurnResult:
-        if user_id and language:
-            self._save_user_preference(user_id, "language", language)
         return await self._ainvoke(session_id, text, language, human_mode=human_mode, user_id=user_id)
 
     async def resume_human_mode(self, session_id: str, operator_reply: str) -> str:
@@ -118,15 +101,12 @@ class Agent:
             _agent_logger.warning("resume_human_mode error for %s: %s", session_id, e)
             return operator_reply
 
-    async def ensure_language(self, text: str, language: Optional[str] = None) -> str:
-        return text
-
     async def sync_history(self, session_id: str, events: Sequence[dict[str, str]]) -> None:
         if not events:
             return
         config = self._build_config(session_id)
         existing = await self._aload_existing_state(config)
-        msgs = list(existing.get("messages") or [SystemMessage(content=at("system_policy", _REQUEST_LANGUAGE.get()))])
+        msgs = list(existing.get("messages") or [SystemMessage(content=SYSTEM_POLICY)])
         for event in events:
             role = (event.get("role") or "").strip().lower()
             text = (event.get("text") or "").strip()
@@ -140,9 +120,6 @@ class Agent:
             await self._graph.aupdate_state(config, {"messages": msgs})
         except Exception as exc:
             _agent_logger.warning("Failed to sync history for session %s: %s", session_id, exc)
-
-    def close(self) -> None:
-        return None
 
     async def aclose(self) -> None:
         if self._checkpointer_cm is not None:
