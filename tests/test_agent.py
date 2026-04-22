@@ -1483,3 +1483,308 @@ class TestUzbekLatinOnly:
                 bad.append((key, value))
         assert not bad, f"UZ menu labels with Cyrillic chars: {bad}"
 
+
+# ---- Model pricing: cost must be calculable for currently-used models ----
+
+class TestModelPricing:
+    """Without an entry in _MODEL_PRICING, calculate_cost returns 0 and
+    llm_usage.cost is silently saved as 0 in the DB. Every model we might
+    configure via OPENAI_MODEL must have a pricing row."""
+
+    _SUPPORTED_MODELS = (
+        "gpt-4o-mini", "gpt-4o",
+        "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+        "gpt-5", "gpt-5-mini", "gpt-5-nano",
+        "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-pro",
+    )
+
+    def test_each_supported_model_has_pricing(self):
+        from app.agent.llm import _MODEL_PRICING
+        missing = [m for m in self._SUPPORTED_MODELS if m not in _MODEL_PRICING]
+        assert not missing, f"_MODEL_PRICING missing entries for: {missing}"
+
+    def test_calculate_cost_nonzero_for_supported_models(self):
+        from app.agent.llm import calculate_cost
+        usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+        for model in self._SUPPORTED_MODELS:
+            cost = calculate_cost(usage, model)
+            assert cost > 0, f"calculate_cost returned 0 for {model}"
+
+    def test_gpt5_mini_pricing_matches_openai(self):
+        """Sanity check the GPT-5-mini pricing: $0.25 input, $2.00 output per 1M."""
+        from app.agent.llm import calculate_cost
+        usage = {"prompt_tokens": 1_000_000, "completion_tokens": 0}
+        assert calculate_cost(usage, "gpt-5-mini") == 0.25
+        usage = {"prompt_tokens": 0, "completion_tokens": 1_000_000}
+        assert calculate_cost(usage, "gpt-5-mini") == 2.00
+
+    def test_unknown_model_still_returns_zero(self):
+        """Defensive fallback: unknown model → 0, not an exception."""
+        from app.agent.llm import calculate_cost
+        usage = {"prompt_tokens": 1000, "completion_tokens": 500}
+        assert calculate_cost(usage, "some-future-unknown-model") == 0.0
+
+
+# ---- Reasoning-effort routing for GPT-5 / o-series ------------------------
+
+class TestReasoningEffort:
+    """GPT-5 family and o-series bill hidden 'reasoning tokens' as output —
+    costly + slow when unused. `_is_reasoning_model` gates whether we inject
+    `reasoning_effort` into ChatOpenAI kwargs.
+    """
+
+    def test_reasoning_model_detection(self):
+        from app.agent.llm import _is_reasoning_model
+        assert _is_reasoning_model("gpt-5") is True
+        assert _is_reasoning_model("gpt-5-mini") is True
+        assert _is_reasoning_model("gpt-5-nano") is True
+        assert _is_reasoning_model("gpt-5.4") is True
+        assert _is_reasoning_model("gpt-5.4-mini") is True
+        assert _is_reasoning_model("gpt-5.4-nano") is True
+        assert _is_reasoning_model("gpt-5.4-pro") is True
+        assert _is_reasoning_model("o1") is True
+        assert _is_reasoning_model("o3-mini") is True
+        assert _is_reasoning_model("o4-mini") is True
+        # Non-reasoning
+        assert _is_reasoning_model("gpt-4o") is False
+        assert _is_reasoning_model("gpt-4o-mini") is False
+        assert _is_reasoning_model("gpt-4.1") is False
+        assert _is_reasoning_model("gpt-4.1-mini") is False
+
+    def test_default_reasoning_effort_gpt5_is_minimal(self):
+        from app.agent.llm import _default_reasoning_effort
+        assert _default_reasoning_effort("gpt-5") == "minimal"
+        assert _default_reasoning_effort("gpt-5-mini") == "minimal"
+        assert _default_reasoning_effort("gpt-5-nano") == "minimal"
+
+    def test_default_reasoning_effort_gpt54_is_none(self):
+        """gpt-5.4 family rejects 'minimal' and requires 'none' as lowest effort."""
+        from app.agent.llm import _default_reasoning_effort
+        assert _default_reasoning_effort("gpt-5.4") == "none"
+        assert _default_reasoning_effort("gpt-5.4-mini") == "none"
+        assert _default_reasoning_effort("gpt-5.4-nano") == "none"
+        assert _default_reasoning_effort("gpt-5.4-pro") == "none"
+
+    def test_get_chat_openai_injects_minimal_for_gpt5(self, monkeypatch):
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("REASONING_EFFORT", raising=False)
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert getattr(obj, "reasoning_effort", None) == "minimal"
+        _llm._get_chat_openai.cache_clear()
+
+    def test_get_chat_openai_injects_none_for_gpt54_mini(self, monkeypatch):
+        """Regression: gpt-5.4-mini with 'minimal' gave 400 Bad Request.
+        The default must be 'none' for the gpt-5.4 family."""
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("REASONING_EFFORT", raising=False)
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert getattr(obj, "reasoning_effort", None) == "none"
+        _llm._get_chat_openai.cache_clear()
+
+    def test_needs_responses_api_detection(self):
+        """gpt-5.x must go through /v1/responses when combining tools with
+        reasoning_effort — /v1/chat/completions rejects that combo."""
+        from app.agent.llm import _needs_responses_api
+        assert _needs_responses_api("gpt-5.4") is True
+        assert _needs_responses_api("gpt-5.4-mini") is True
+        assert _needs_responses_api("gpt-5.4-nano") is True
+        assert _needs_responses_api("gpt-5.4-pro") is True
+        # gpt-5 (no dot) does NOT need responses API
+        assert _needs_responses_api("gpt-5") is False
+        assert _needs_responses_api("gpt-5-mini") is False
+        # Older families unaffected
+        assert _needs_responses_api("gpt-4o-mini") is False
+        assert _needs_responses_api("o3-mini") is False
+
+    def test_get_chat_openai_enables_responses_api_for_gpt54(self, monkeypatch):
+        """Regression: gpt-5.4-mini + tools on /v1/chat/completions gave 400
+        'Function tools with reasoning_effort are not supported'. Must route
+        through /v1/responses endpoint."""
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert getattr(obj, "use_responses_api", False) is True
+        _llm._get_chat_openai.cache_clear()
+
+    def test_get_chat_openai_does_not_force_responses_api_for_gpt5(self, monkeypatch):
+        """gpt-5 family (without dot) works fine on /v1/chat/completions — no
+        need to switch endpoints."""
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert not getattr(obj, "use_responses_api", False)
+        _llm._get_chat_openai.cache_clear()
+
+
+# ---- extract_text_content: handle both chat/completions and responses API --
+
+class TestExtractTextContent:
+    """Regression: gpt-5.4 via /v1/responses returns content as a list of
+    structured blocks. str(content) on that produces repr junk like:
+       [{'type': 'text', 'text': '...', 'annotations': []}]
+    The helper must always produce the plain human text instead.
+    """
+
+    def test_string_content_returned_as_is(self):
+        from app.agent.llm import extract_text_content
+        msg = type("M", (), {"content": "Hello"})()
+        assert extract_text_content(msg) == "Hello"
+
+    def test_list_of_text_blocks_is_joined(self):
+        from app.agent.llm import extract_text_content
+        msg = type("M", (), {
+            "content": [
+                {"type": "text", "text": "Hello ", "annotations": []},
+                {"type": "text", "text": "world", "annotations": []},
+            ],
+        })()
+        assert extract_text_content(msg) == "Hello world"
+
+    def test_responses_api_shape_from_production(self):
+        """Exact shape observed from gpt-5.4-mini /v1/responses."""
+        from app.agent.llm import extract_text_content
+        msg = type("M", (), {
+            "content": [{
+                "type": "text",
+                "text": "Assalomu alaykum! Qiziqtirayotgan bo'limni tanlang:",
+                "annotations": [],
+                "id": "msg_009b856f730eb8490069e87f03c1f4819b92ab44682cad2814",
+            }],
+        })()
+        result = extract_text_content(msg)
+        assert result == "Assalomu alaykum! Qiziqtirayotgan bo'limni tanlang:"
+        # Must NOT contain the block wrapper artifacts
+        assert "type" not in result
+        assert "annotations" not in result
+        assert "msg_" not in result
+
+    def test_empty_content_returns_empty_string(self):
+        from app.agent.llm import extract_text_content
+        assert extract_text_content(type("M", (), {"content": None})()) == ""
+        assert extract_text_content(type("M", (), {"content": ""})()) == ""
+        assert extract_text_content(type("M", (), {"content": []})()) == ""
+
+    def test_non_text_blocks_are_skipped(self):
+        from app.agent.llm import extract_text_content
+        msg = type("M", (), {
+            "content": [
+                {"type": "text", "text": "Before"},
+                {"type": "tool_use", "name": "foo", "input": {}},  # not text
+                {"type": "text", "text": " After"},
+            ],
+        })()
+        assert extract_text_content(msg) == "Before After"
+
+
+# ---- extract_token_usage: multiple API shapes ----------------------------
+
+class TestExtractTokenUsage:
+    """Three legitimate places LangChain puts token counts; we must read all."""
+
+    def test_usage_metadata_preferred(self):
+        """LangChain's normalised AIMessage.usage_metadata is the source of truth."""
+        from app.agent.llm import extract_token_usage
+        msg = type("M", (), {
+            "usage_metadata": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            "response_metadata": {},
+        })()
+        u = extract_token_usage(msg)
+        assert u["prompt_tokens"] == 100
+        assert u["completion_tokens"] == 50
+        assert u["total_tokens"] == 150
+
+    def test_chat_completions_token_usage_shape(self):
+        """/v1/chat/completions puts usage at response_metadata['token_usage']
+        using prompt_tokens / completion_tokens names."""
+        from app.agent.llm import extract_token_usage
+        msg = type("M", (), {
+            "usage_metadata": None,
+            "response_metadata": {
+                "token_usage": {
+                    "prompt_tokens": 2000,
+                    "completion_tokens": 300,
+                    "total_tokens": 2300,
+                },
+            },
+        })()
+        u = extract_token_usage(msg)
+        assert u == {"prompt_tokens": 2000, "completion_tokens": 300, "total_tokens": 2300}
+
+    def test_responses_api_usage_shape(self):
+        """Regression: /v1/responses puts usage at response_metadata['usage']
+        using input_tokens / output_tokens names. Before the fix these were
+        read as 0 and cost came out zero in the DB for gpt-5.4-mini."""
+        from app.agent.llm import extract_token_usage
+        msg = type("M", (), {
+            "usage_metadata": None,
+            "response_metadata": {
+                "usage": {
+                    "input_tokens": 1500,
+                    "output_tokens": 250,
+                    "total_tokens": 1750,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                },
+            },
+        })()
+        u = extract_token_usage(msg)
+        assert u["prompt_tokens"] == 1500
+        assert u["completion_tokens"] == 250
+        assert u["total_tokens"] == 1750
+
+    def test_cost_is_nonzero_for_gpt54_via_responses_api(self):
+        """End-to-end: the responses-API usage shape must produce a non-zero
+        cost via calculate_cost(model='gpt-5.4-mini')."""
+        from app.agent.llm import calculate_cost, extract_token_usage
+        msg = type("M", (), {
+            "usage_metadata": None,
+            "response_metadata": {
+                "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "total_tokens": 2_000_000},
+            },
+        })()
+        usage = extract_token_usage(msg)
+        cost = calculate_cost(usage, "gpt-5.4-mini")
+        # $0.75 input + $4.50 output per 1M
+        assert cost == 5.25, f"expected 5.25, got {cost}"
+
+    def test_no_usage_returns_empty_dict(self):
+        from app.agent.llm import extract_token_usage
+        msg = type("M", (), {"usage_metadata": None, "response_metadata": {}})()
+        assert extract_token_usage(msg) == {}
+
+    def test_get_chat_openai_respects_REASONING_EFFORT_env(self, monkeypatch):
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("REASONING_EFFORT", "medium")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert getattr(obj, "reasoning_effort", None) == "medium"
+        _llm._get_chat_openai.cache_clear()
+
+    def test_get_chat_openai_omits_reasoning_for_gpt4(self, monkeypatch):
+        """For gpt-4o-mini the reasoning_effort kwarg must NOT be set —
+        it's an unknown param for that model and would break API calls."""
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert not getattr(obj, "reasoning_effort", None)
+        _llm._get_chat_openai.cache_clear()
+

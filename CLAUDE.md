@@ -227,7 +227,7 @@ Important optional:
 - `OPERATOR_IDS` — comma-separated Telegram IDs allowed to act as operators
 - `OPERATOR_API_KEY` — bearer key for `/operator/send` endpoint
 - `LANGGRAPH_CHECKPOINT_BACKEND` — `memory|postgres|auto`
-- `MAX_DIALOG_MESSAGES` — message history limit (default: 50)
+- `MAX_DIALOG_MESSAGES` — message history limit (default: 12)
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` (default 60)
 - `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` (default 10)
 

@@ -25,7 +25,13 @@ from app.agent.i18n import (
     get_credit_menu_buttons,
     get_main_menu_buttons,
 )
-from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
+from app.agent.llm import (
+    _get_chat_openai,
+    accumulate_usage,
+    extract_text_content,
+    extract_token_usage,
+    finalize_usage,
+)
 from app.agent.nodes.helpers import _finalize_turn
 from app.agent.products import _find_product_by_name, _get_products_by_category
 from app.agent.state import BotState, _default_dialog
@@ -192,7 +198,7 @@ async def node_faq(state: BotState) -> dict:
         chat_msgs = [SystemMessage(content=system_content)] + existing_msgs
     chat_msgs.append(HumanMessage(content=user_text))
 
-    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "50"))
+    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(chat_msgs) > _max + 1:
         chat_msgs = [chat_msgs[0]] + chat_msgs[-_max:]
 
@@ -213,7 +219,7 @@ async def node_faq(state: BotState) -> dict:
             tool_calls = getattr(ai_msg, "tool_calls", None) or []
             if not tool_calls:
                 # No more tool calls → final answer
-                content = str(getattr(ai_msg, "content", "") or "").strip()
+                content = extract_text_content(ai_msg).strip()
                 if content:
                     answer = content
                     is_fallback = False

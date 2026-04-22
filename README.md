@@ -564,7 +564,7 @@ crontab -e
 | `LANGGRAPH_CHECKPOINT_BACKEND` | — | `auto` | `memory\|postgres\|auto` |
 | `SESSION_INACTIVITY_TIMEOUT_MINUTES` | — | `1440` | Таймаут сессии (мин) |
 | `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` | — | `10` | Таймаут оператора (мин) |
-| `MAX_DIALOG_MESSAGES` | — | `50` | Лимит истории сообщений |
+| `MAX_DIALOG_MESSAGES` | — | `12` | Лимит истории сообщений |
 
 ---
 

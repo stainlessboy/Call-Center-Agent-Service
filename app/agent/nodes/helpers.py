@@ -26,7 +26,7 @@ def _finalize_turn(
     msgs = list(state.get("messages") or [SystemMessage(content=SYSTEM_POLICY)])
     msgs.append(HumanMessage(content=user_text))
     msgs.append(AIMessage(content=answer))
-    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "50"))
+    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(msgs) > _max + 1:
         msgs = [msgs[0]] + msgs[-_max:]
 

@@ -14,7 +14,13 @@ from app.agent.calc_extractor import (
 from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_recalculate, _is_yes, _looks_like_question
-from app.agent.llm import _get_chat_openai, accumulate_usage, extract_token_usage, finalize_usage
+from app.agent.llm import (
+    _get_chat_openai,
+    accumulate_usage,
+    extract_text_content,
+    extract_token_usage,
+    finalize_usage,
+)
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.state import BotState, _default_dialog
 from app.utils.faq_tools import _faq_lookup
@@ -324,7 +330,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                                 SystemMessage(content=at("calc_side_system", lang)),
                                 HumanMessage(content=user_text),
                             ])
-                            faq_ans = str(ai_msg.content or "").strip()
+                            faq_ans = extract_text_content(ai_msg).strip()
                             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
                         except Exception as exc:
                             _agent_logger.debug("Side-question LLM failed: %s", exc)

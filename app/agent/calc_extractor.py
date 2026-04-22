@@ -11,7 +11,7 @@ import json
 import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.llm import _get_chat_openai, extract_token_usage
+from app.agent.llm import _get_chat_openai, extract_text_content, extract_token_usage
 
 _log = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ async def extract_calc_value(
             timeout=10.0,
         )
         usage = extract_token_usage(ai_msg)
-        raw = str(ai_msg.content or "").strip()
+        raw = extract_text_content(ai_msg).strip()
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -330,7 +330,7 @@ async def extract_prefill_from_history(
             ]),
             timeout=10.0,
         )
-        raw = str(ai_msg.content or "").strip()
+        raw = extract_text_content(ai_msg).strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         result = json.loads(raw)
@@ -391,7 +391,7 @@ async def extract_updated_value(
             timeout=10.0,
         )
         usage = extract_token_usage(ai_msg)
-        raw = str(ai_msg.content or "").strip()
+        raw = extract_text_content(ai_msg).strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         result = json.loads(raw)
