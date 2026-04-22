@@ -13,7 +13,6 @@ from app.agent.i18n import (
     category_label,
     get_calc_questions,
 )
-from app.agent.intent import _detect_product_category
 from app.agent.products import (
     _find_product_by_name,
     _format_product_card,
@@ -34,35 +33,58 @@ _ALL_CATEGORIES = [
     "fx_card",
 ]
 
+# Fixed conservative default rate (in %) used by custom_loan_calculator when
+# the user did NOT explicitly state one. Making it visible (and configurable
+# via env) keeps the LLM from hallucinating a specific rate like "12%".
+import os as _os
+_DEFAULT_CUSTOM_LOAN_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
+
+# Marker returned by faq_lookup when nothing matched — explicit, not an empty
+# string, so the LLM can detect and handle it without hallucinating an answer.
+NO_MATCH_IN_FAQ = "NO_MATCH_IN_FAQ"
+
+
+def _lang_from_state(state: dict | None) -> str:
+    """Pull `lang` from InjectedState. Falls back to dialog.last_lang, then 'ru'."""
+    if not state:
+        return "ru"
+    lang = state.get("lang")
+    if lang in ("ru", "en", "uz"):
+        return lang
+    dialog = state.get("dialog") or {}
+    return dialog.get("last_lang") or "ru"
+
 
 @lc_tool
 async def greeting_response(
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Greet the user. Use when user says hello/hi/привет/салом/здравствуйте or any greeting.
+    """Greet the user when they say hello.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "привет" → greeting_response()
+    - "здравствуйте" → greeting_response()
+    - "hi" / "hello" → greeting_response()
+    - "salom" / "assalomu alaykum" → greeting_response()
     """
-    return _greeting_with_menu(lang)
+    return _greeting_with_menu(_lang_from_state(state))
 
 
 @lc_tool
 async def thanks_response(
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Respond to gratitude. Use when user says спасибо/рахмат/thank you.
+    """Reply to gratitude from the user.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "спасибо" / "благодарю" → thanks_response()
+    - "thank you" → thanks_response()
+    - "rahmat" / "katta rahmat" → thanks_response()
     """
-    return at("thanks_reply", lang)
+    return at("thanks_reply", _lang_from_state(state))
 
 
 async def _find_offices_impl(office_type: str, query: str, lang: str) -> str:
-    """Shared body for find_filials / find_sales_offices / find_sales_points tools."""
     from app.agent.branches import format_branches_list, search_offices
 
     offices = await search_offices(query=query, office_types=[office_type], limit=5)
@@ -74,114 +96,72 @@ async def _find_offices_impl(office_type: str, query: str, lang: str) -> str:
 
 
 @lc_tool
-async def find_filials(
+async def find_office(
+    office_type: Literal["filial", "sales_office", "sales_point"],
     query: str = "",
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Find bank filials (Центры банковских услуг, ЦБУ) — the main full-service branches.
+    """Find a bank office by type and optional location/name query.
 
-    WHEN TO CALL:
-    - User explicitly asks about "филиал" / "ЦБУ" / "БХМ" / "BXM" / "filial" / "branch".
-    - User asks about services available ONLY at filials: accounts for legal entities (юрлица),
-      services for sole proprietors (ИП / yakka tadbirkorlar), corporate loans, business accounts.
-    - User asks about cashier operations, currency exchange, plastic cards, consumer/education/micro
-      loans AND wants the main branch (not a mini-office).
-    - Vague "ближайшее отделение" queries — default to filials as the flagship locations.
+    OFFICE TYPES:
+    - "filial" — full-service branch (Центр банковских услуг / ЦБУ / БХМ). Has ALL services
+      including legal-entity accounts, business loans, IP/yakka tadbirkor services.
+      Default choice for vague "ближайшее отделение" queries.
+    - "sales_office" — mini-office (офис продаж / savdo ofisi). Individuals only:
+      consumer/auto/micro/education loans, cards, cashier, currency exchange.
+      NO legal-entity services.
+    - "sales_point" — car-dealership point (точка продаж / savdo nuqtasi).
+      ONLY auto loans, consultations, ATM. Nothing else.
+
+    EXAMPLES:
+    - "где ближайший филиал?" → find_office(office_type="filial", query="")
+    - "филиал в Андижане" → find_office(office_type="filial", query="Андижан")
+    - "мне нужен счёт для юрлица в Ташкенте" → find_office(office_type="filial", query="Ташкент")
+    - "где мини-офис в Самарканде" → find_office(office_type="sales_office", query="Самарканд")
+    - "авто кредит в KIA Андижан" → find_office(office_type="sales_point", query="KIA Andijon")
+    - "BYD Tashkent" → find_office(office_type="sales_point", query="BYD Tashkent")
+    - "where is the nearest branch" → find_office(office_type="filial", query="")
+    - "Toshkentdagi filial" → find_office(office_type="filial", query="Toshkent")
 
     PARAMETERS:
-      query: free-form city / region / branch-name as the user wrote it
-             (e.g. "Ташкент", "Андижан", "Samarkand"). Empty string = list first 5.
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
-    """
-    return await _find_offices_impl("filial", query, lang)
-
-
-@lc_tool
-async def find_sales_offices(
-    query: str = "",
-    lang: Literal["ru", "en", "uz"] = "ru",
-) -> str:
-    """Find bank sales offices (офисы продаж, мини-офисы) — full services for individuals,
-    no legal-entity services.
-
-    WHEN TO CALL:
-    - User explicitly asks about "офис продаж" / "мини-офис" / "savdo ofisi" / "sales office" / "mini-office".
-    - User wants individual services (consumer/auto/micro/education loans, cards, cashier, currency
-      exchange) but prefers a smaller/closer office than a filial.
-    - DO NOT call this for legal-entity services (юрлица, ИП) — those are only at filials (use find_filials).
-
-    PARAMETERS:
-      query: free-form city / region / office-name as the user wrote it.
+      office_type: one of "filial" / "sales_office" / "sales_point".
+      query: free-form city / region / office-name / car-dealer as the user wrote it.
              Empty string = list first 5.
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
     """
-    return await _find_offices_impl("sales_office", query, lang)
-
-
-@lc_tool
-async def find_sales_points(
-    query: str = "",
-    lang: Literal["ru", "en", "uz"] = "ru",
-) -> str:
-    """Find bank sales points (точки продаж в автосалонах) — car-dealership-based,
-    ONLY auto loans + consultations + ATM available.
-
-    WHEN TO CALL:
-    - User explicitly asks about "точка продаж" / "автосалон" / "savdo nuqtasi" / "sales point" / "car dealer".
-    - User asks specifically about auto loans in a specific car dealership.
-    - DO NOT call this for anything except auto loans, consultations or ATM — other services
-      are NOT available here; use find_filials or find_sales_offices instead.
-
-    PARAMETERS:
-      query: free-form city / car-dealer-name as the user wrote it (e.g. "KIA Andijon", "BYD").
-             Empty string = list first 5.
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
-    """
-    return await _find_offices_impl("sales_point", query, lang)
+    return await _find_offices_impl(office_type, query, _lang_from_state(state))
 
 
 @lc_tool
 async def get_office_types_info(
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Explain the differences between the three types of bank offices:
-    filial (Центр банковских услуг), sales office (мини-офис), and sales point
-    (точка продаж в автосалоне) — what services each can provide.
+    """Explain the difference between the three bank office types
+    (filial / sales_office / sales_point) and which services each provides.
 
-    WHEN TO CALL:
-    - User asks about the difference between filial / office / sales point types.
-    - User wants to know where a specific service is available.
-    - Examples: "чем отличается филиал от мини-офиса", "что можно сделать в точке продаж",
-      "filial va mini-ofis farqi nima", "where can I get a card".
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "чем отличается филиал от мини-офиса" → get_office_types_info()
+    - "что можно сделать в точке продаж" → get_office_types_info()
+    - "где можно получить карту" → get_office_types_info()
+    - "filial va mini-ofis farqi nima" → get_office_types_info()
+    - "what's the difference between offices" → get_office_types_info()
     """
-    return at("office_types_info", lang)
+    return at("office_types_info", _lang_from_state(state))
 
 
 @lc_tool
 async def get_currency_info(
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Get currency exchange rates. Use when user asks about USD, EUR, or currency rates.
+    """Get the latest currency exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "курс доллара" / "сколько сейчас евро" / "обменный курс" → get_currency_info()
+    - "USD rate today" → get_currency_info()
+    - "dollar narxi" → get_currency_info()
     """
     from app.utils.cbu_rates import fetch_cbu_rates
 
+    lang = _lang_from_state(state)
     rates = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
     if not rates:
         return at("currency_info", lang)
@@ -199,32 +179,45 @@ async def get_currency_info(
 
 @lc_tool
 async def show_credit_menu(
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Show credit type selection. Use when user asks about credit/кредит without specifying type.
+    """Show the credit-type selection menu. Use when user asks about credit without specifying type.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "хочу кредит" / "мне нужен кредит" / "какие есть кредиты" → show_credit_menu()
+    - "I need a loan" → show_credit_menu()
+    - "kredit olmoqchiman" → show_credit_menu()
+
+    DO NOT call when the user specifies the credit type (ипотека/автокредит/etc) — use get_products instead.
     """
-    return at("credit_menu_prompt", lang)
+    return at("credit_menu_prompt", _lang_from_state(state))
 
 
 @lc_tool
 async def get_products(
     category: str,
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """
-    Get list of bank products for a category.
-    Categories: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
-    Use when user asks about a specific product type.
-    Returns pre-formatted text — pass it to the user AS-IS.
+    """Get list of bank products for a specific category.
+    Returns pre-formatted text — pass to the user AS-IS.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    CATEGORIES: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
+
+    EXAMPLES:
+    - "хочу ипотеку" → get_products(category="mortgage")
+    - "покажи автокредиты" → get_products(category="autoloan")
+    - "какие у вас вклады" → get_products(category="deposit")
+    - "микрозайм" → get_products(category="microloan")
+    - "дебетовые карты" → get_products(category="debit_card")
+    - "валютные карты" → get_products(category="fx_card")
+    - "all products" / "◀ Все продукты" when state has category → get_products(category=<state.category>)
+    - "deposit products" → get_products(category="deposit")
+    - "ipoteka" → get_products(category="mortgage")
+
+    Also use when the user clicks a "back to products" button while a category is in state —
+    call with the state's current category to re-render the list.
     """
+    lang = _lang_from_state(state)
     products = await _get_products_by_category(category)
     if not products:
         label = category_label(category, lang)
@@ -235,18 +228,18 @@ async def get_products(
 @lc_tool
 async def select_product(
     product_name: str,
-    lang: Literal["ru", "en", "uz"] = "ru",
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """
-    Show details for a specific product. Use when user selects a product by name or number.
-    The product_name should match one of the products currently displayed.
-    Returns pre-formatted HTML text — pass it to the user AS-IS, do not reformat.
+    """Show details of a specific product the user selected.
+    Returns pre-formatted HTML text — pass AS-IS, do not reformat.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES (assuming state.products = [1. "Ипотека Стандарт", 2. "Ипотека Лайт"]):
+    - "Ипотека Стандарт" → select_product(product_name="Ипотека Стандарт")
+    - "2" → select_product(product_name="Ипотека Лайт")  ← map the number to the product at that position
+    - "первый" → select_product(product_name="Ипотека Стандарт")
+    - "расскажи про стандарт" → select_product(product_name="Ипотека Стандарт")
     """
+    lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     dialog_products = list(dialog.get("products") or [])
     dialog_category = dialog.get("category", "")
@@ -256,8 +249,7 @@ async def select_product(
     if matched:
         return _format_product_card(matched, dialog_category, lang)
 
-    # Tier 2: search in DB by dialog category (dialog has a category but no products list, or
-    # products list was stale and the name didn't match)
+    # Tier 2: search in DB by dialog category
     if dialog_category:
         db_products = await _get_products_by_category(dialog_category)
         matched = _find_product_by_name(product_name, db_products)
@@ -267,7 +259,7 @@ async def select_product(
     # Tier 3: search across all known categories
     for cat in _ALL_CATEGORIES:
         if cat == dialog_category:
-            continue  # already tried above
+            continue
         cat_products = await _get_products_by_category(cat)
         matched = _find_product_by_name(product_name, cat_products)
         if matched:
@@ -281,86 +273,28 @@ async def select_product(
 
 
 @lc_tool
-async def compare_products(
-    query: str,
-    lang: Literal["ru", "en", "uz"] = "ru",
-    state: Annotated[dict, InjectedState] = None,
-) -> str:
-    """
-    Compare bank products. Use when user asks to compare or find differences.
-    Returns product data for comparison — formulate the comparison in your response.
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
-    """
-    dialog = (state or {}).get("dialog") or {}
-    flow = dialog.get("flow")
-    products = list(dialog.get("products") or [])
-    cmp_products = list(products) if flow == "show_products" else []
-    if not cmp_products:
-        detected = _detect_product_category(query)
-        if detected and detected != "credit_menu":
-            cmp_products = await _get_products_by_category(detected)
-    if cmp_products:
-        cmp_lines = []
-        for p in cmp_products:
-            line = (
-                f"• {p['name']}: {at('cmp_rate', lang)} {p.get('rate') or '—'}, "
-                f"{at('cmp_amount', lang)} {p.get('amount') or p.get('min_amount') or '—'}, "
-                f"{at('cmp_term', lang)} {p.get('term') or '—'}"
-            )
-            if p.get("cashback"):
-                line += f", {at('cmp_cashback', lang)} {p['cashback']}"
-            if p.get("annual_fee"):
-                line += f", {at('cmp_annual_fee', lang)} {p['annual_fee']}"
-            if p.get("downpayment"):
-                line += f", {at('cmp_downpayment', lang)} {p['downpayment']}"
-            cmp_lines.append(line)
-        prods_text = "\n".join(cmp_lines)
-        return at("compare_header", lang, products=prods_text)
-    return at("compare_clarify", lang)
-
-
-@lc_tool
-async def back_to_product_list(
-    lang: Literal["ru", "en", "uz"] = "ru",
-    state: Annotated[dict, InjectedState] = None,
-) -> str:
-    """Go back to the product list. Use when user clicks '◀ Все продукты' or says 'назад'.
-
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
-    """
-    dialog = (state or {}).get("dialog") or {}
-    products = list(dialog.get("products") or [])
-    category = dialog.get("category", "")
-    if products:
-        return _format_product_list_text(products, category, lang)
-    return at("choose_category", lang)
-
-
-@lc_tool
 async def start_calculator(
-    lang: Literal["ru", "en", "uz"] = "ru",
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Start payment calculator. Use when user clicks '✅ Рассчитать' or '📋 Подать заявку'.
-    IMPORTANT: Return the tool output AS-IS to the user without rephrasing.
-    The category (deposit/credit) is already embedded in the question text.
+    """Start payment/application calculator for the currently selected bank product.
+    Return the tool output AS-IS without rephrasing.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES (when a product is selected):
+    - "рассчитать" / "подать заявку" / "хочу оформить" → start_calculator()
+    - "calculate" → start_calculator()
+    - "hisoblab bering" / "ariza topshirmoqchiman" → start_calculator()
+
+    DO NOT call when:
+    - no product is selected yet — call get_products first
+    - the user gives their OWN numbers free-form — use custom_loan_calculator instead
     """
+    lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     category = dialog.get("category", "")
     calc_qs = get_calc_questions(category, lang)
     if not calc_qs:
         return at("calc_no_questions", lang)
     _, first_q = calc_qs[0]
-    # Include category context so LLM doesn't confuse deposit with credit
     cat_label = category_label(category, lang)
     return at("calc_intro", lang, category=cat_label) + "\n\n" + first_q
 
@@ -369,43 +303,35 @@ async def start_calculator(
 async def custom_loan_calculator(
     amount: float,
     term_months: int,
-    downpayment: float,
-    rate_pct: float,
-    lang: Literal["ru", "en", "uz"] = "ru",
+    downpayment: float = 0.0,
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Calculate a generic annuity loan payment using the customer's own numbers — NOT tied to any specific bank product.
+    """Calculate a generic annuity loan payment using the customer's OWN numbers.
+    NOT tied to a specific bank product.
 
-    WHEN TO CALL:
-    - Customer provides their own figures and wants a payment estimate: "посчитай кредит",
-      "если я возьму X на Y лет под Z%", "какой будет платёж при ...", "calculate loan",
-      "hisoblab bering", "рассчитай для меня", "сколько платить если взять X сум".
-    - The customer explicitly supplies their OWN amount, term, downpayment, and rate — not asking
-      about a specific bank product in the catalogue.
+    A conservative default interest rate (see DEFAULT_CUSTOM_LOAN_RATE_PCT env,
+    default 20% p.a.) is applied, and the output clearly discloses this.
+    The LLM MUST NOT invent a rate — that's why the tool does not accept one.
 
-    DO NOT call this tool when:
-    - The customer wants to apply for or calculate a specific bank product (mortgage, autoloan, etc.)
-      — use start_calculator() for that instead.
+    EXAMPLES:
+    - "если я возьму 50 млн на 5 лет" → custom_loan_calculator(amount=50000000, term_months=60, downpayment=0)
+    - "посчитай 100 млн на 3 года с первоначальным 20 млн" → custom_loan_calculator(amount=100000000, term_months=36, downpayment=20000000)
+    - "calculate 30m over 24 months" → custom_loan_calculator(amount=30000000, term_months=24, downpayment=0)
 
-    IMPORTANT — call only when ALL FOUR parameters are known:
-    - If the customer has NOT provided amount, term, downpayment, or rate — ask for the missing
-      values in plain text first, then call this tool once you have all four.
-    - downpayment is 0 if the customer says "без первоначального взноса" or "нет взноса" or "0".
+    PARSING HINTS:
+    - "3 года"→36, "полтора года"→18, "5 лет"→60, "24 месяца"→24, "10 йил"→120
+    - "без первоначального"/"0"/not mentioned → downpayment=0.0
 
-    Parsing hints:
-    - "3 года" → term_months=36; "полтора года" → 18; "5 лет" → 60; "24 месяца" → 24
-    - "без первоначального" / "0" / not mentioned → downpayment=0.0
-    - "12 процентов годовых" / "под 12%" → rate_pct=12.0
-    - amount is the total requested loan before downpayment, in local currency (UZS)
+    DO NOT call when the user wants a specific bank product — use get_products + start_calculator instead.
 
     Parameters:
-        amount: Total loan amount in local currency (UZS) before deducting downpayment. E.g. 50_000_000.
-        term_months: Loan term as integer number of months. E.g. 36 for 3 years.
-        downpayment: Absolute downpayment in local currency (same units as amount). Use 0.0 if none.
-        rate_pct: Annual interest rate as a percentage. E.g. 12.5 for 12.5% per annum.
-        lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-        "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-        Must match the language of the user's latest message, even if earlier messages were in a different language.
+        amount: Total loan amount in UZS BEFORE deducting downpayment (e.g. 50_000_000).
+        term_months: Integer number of months (e.g. 36 for 3 years).
+        downpayment: Absolute downpayment in UZS (0.0 if none).
     """
+    lang = _lang_from_state(state)
+    rate_pct = _DEFAULT_CUSTOM_LOAN_RATE_PCT
+
     principal = amount - downpayment
     if principal <= 0:
         _err = {
@@ -421,20 +347,9 @@ async def custom_loan_calculator(
             "uz": "Iltimos, to'g'ri muddatni kiriting (oyda, noldan katta).",
         }
         return _err.get(lang) or _err["ru"]
-    if rate_pct < 0:
-        _err = {
-            "ru": "Ставка не может быть отрицательной. Укажите корректное значение.",
-            "en": "The interest rate cannot be negative. Please provide a valid value.",
-            "uz": "Foiz stavkasi manfiy bo'lishi mumkin emas. Iltimos, to'g'ri qiymat kiriting.",
-        }
-        return _err.get(lang) or _err["ru"]
 
-    if rate_pct == 0:
-        monthly = principal / term_months
-    else:
-        r = rate_pct / 100 / 12
-        monthly = principal * r * (1 + r) ** term_months / ((1 + r) ** term_months - 1)
-
+    r = rate_pct / 100 / 12
+    monthly = principal * r * (1 + r) ** term_months / ((1 + r) ** term_months - 1)
     total = monthly * term_months
     overpayment = total - principal
 
@@ -458,36 +373,51 @@ async def custom_loan_calculator(
 @lc_tool
 async def faq_lookup(
     query: str,
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Look up FAQ database for banking questions about services, products, or procedures.
+    """Look up the FAQ knowledge base for banking questions about services, products or procedures.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    EXAMPLES:
+    - "как обновить паспорт в приложении" → faq_lookup(query="обновить паспорт в приложении")
+    - "можно ли досрочно погасить кредит" → faq_lookup(query="досрочное погашение кредита")
+    - "как заблокировать карту" → faq_lookup(query="блокировка карты")
+    - "how to change phone number" → faq_lookup(query="change phone number")
+    - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
+
+    RETURNS:
+    - the FAQ answer as formatted text if found.
+    - the literal string "NO_MATCH_IN_FAQ" if nothing matched. In that case,
+      ask the user to rephrase, or call request_operator if the question is
+      clearly bank-related but not in the FAQ. DO NOT fabricate an answer.
     """
+    lang = _lang_from_state(state)
     result = await _faq_lookup(query, lang)
-    return result or ""
+    return result if result else NO_MATCH_IN_FAQ
 
 
 @lc_tool
 async def request_operator(
     reason: str = "",
-    lang: Literal["ru", "en", "uz"] = "ru",
+    state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Transfer the user to a live operator. Call this tool when:
-    1. The user explicitly asks to speak with a human operator, support agent, or live person.
-    2. The user requests an operation that requires identity verification: enabling/disabling SMS,
-       card unblocking/blocking, changing personal data, checking loan/deposit/card account status,
-       money transfers, or any active account operations you cannot perform.
-    3. You asked the user to rephrase their message but still cannot understand their request.
-    The 'reason' parameter should briefly describe why the operator is needed
-    (e.g. 'identity_required', 'unclear_message', 'user_request').
+    """Transfer the user to a live operator.
 
-    lang: Customer's CURRENT message language — "ru" for Russian, "en" for English,
-    "uz" for Uzbek (both Cyrillic and Latin scripts — always respond in Latin).
-    Must match the language of the user's latest message, even if earlier messages were in a different language.
+    WHEN TO CALL:
+    1. User explicitly asks for a live operator/human.
+    2. User requests identity-required operations (SMS toggle, card block/unblock,
+       personal-data change, account status check, transfers).
+    3. You asked the user to rephrase but still cannot understand — after 2-3 attempts.
+
+    EXAMPLES:
+    - "позови оператора" / "хочу живого человека" → request_operator(reason="user_request")
+    - "разблокируй мою карту" → request_operator(reason="identity_required")
+    - "подключи смс к моей карте" → request_operator(reason="identity_required")
+    - "connect me to support" → request_operator(reason="user_request")
+    - "operatorga ulang" → request_operator(reason="user_request")
+
+    reason: short tag — "identity_required" / "unclear_message" / "user_request".
     """
+    lang = _lang_from_state(state)
     reason_lower = (reason or "").lower()
     if "identity" in reason_lower or "верификац" in reason_lower or "операци" in reason_lower:
         return at("operator_identity_required", lang)
@@ -497,10 +427,16 @@ async def request_operator(
 
 
 _FAQ_TOOLS = [
-    greeting_response, thanks_response,
-    find_filials, find_sales_offices, find_sales_points,
+    greeting_response,
+    thanks_response,
+    find_office,
     get_office_types_info,
-    get_currency_info, show_credit_menu, get_products, select_product,
-    compare_products, back_to_product_list, faq_lookup, request_operator,
+    get_currency_info,
+    show_credit_menu,
+    get_products,
+    select_product,
+    start_calculator,
     custom_loan_calculator,
+    faq_lookup,
+    request_operator,
 ]

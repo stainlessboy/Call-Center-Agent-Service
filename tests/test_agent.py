@@ -11,7 +11,7 @@ from app.agent.constants import (
     FALLBACK_STREAK_THRESHOLD,
     _greeting_with_menu,
 )
-from app.agent.i18n import SYSTEM_POLICY, at
+from app.agent.i18n import SYSTEM_POLICY, at, get_system_policy
 from app.agent.intent import (
     _detect_product_category,
     _is_back_trigger,
@@ -32,14 +32,10 @@ from app.agent.nodes.calc_flow import node_calc_flow
 from app.agent.tools import (
     greeting_response,
     thanks_response,
-    find_filials,
-    find_sales_offices,
-    find_sales_points,
+    find_office,
     get_office_types_info,
     get_currency_info,
     show_credit_menu,
-    back_to_product_list,
-    compare_products,
     start_calculator,
     select_product,
     request_operator,
@@ -51,7 +47,7 @@ from app.agent.tools import (
 def _make_state(user_text: str = "привет", messages=None) -> dict:
     return {
         "last_user_text": user_text,
-        "messages": messages or [SystemMessage(content=SYSTEM_POLICY)],
+        "messages": messages or [SystemMessage(content=get_system_policy("ru"))],
         "dialog": _default_dialog(),
         "human_mode": False,
         "keyboard_options": None,
@@ -330,11 +326,11 @@ class TestFmtRate:
 
 class TestToolGreetingResponse:
     def test_russian(self):
-        result = _run(greeting_response.coroutine(lang="ru"))
+        result = _run(greeting_response.coroutine(state={"lang": "ru"}))
         assert "Здравствуйте" in result
 
     def test_english(self):
-        result = _run(greeting_response.coroutine(lang="en"))
+        result = _run(greeting_response.coroutine(state={"lang": "en"}))
         assert "Hello" in result
 
 
@@ -344,10 +340,10 @@ class TestToolThanksResponse:
         assert "Пожалуйста" in result
 
 
-class TestFindFilialsTool:
+class TestFindOfficeTool:
     def test_none_found(self):
         with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
-            result = _run(find_filials.coroutine(query="Мухосранск"))
+            result = _run(find_office.coroutine(office_type="filial", query="Мухосранск"))
         assert "не нашёл" in result.lower() or "Мухосранск" in result
 
     def test_formats_filial_hit(self):
@@ -367,30 +363,25 @@ class TestFindFilialsTool:
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[FakeFilial()]),
         ) as mock_search:
-            result = _run(find_filials.coroutine(query="Ташкент"))
-        # Verify the call was filtered to "filial"
+            result = _run(find_office.coroutine(office_type="filial", query="Ташкент"))
         assert mock_search.call_args.kwargs["office_types"] == ["filial"]
         assert "ЦБУ" in result
         assert "Тестовая" in result
 
-
-class TestFindSalesOfficesTool:
-    def test_passes_correct_office_type(self):
+    def test_sales_office_passes_correct_type(self):
         with patch(
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[]),
         ) as mock_search:
-            _run(find_sales_offices.coroutine(query=""))
+            _run(find_office.coroutine(office_type="sales_office", query=""))
         assert mock_search.call_args.kwargs["office_types"] == ["sales_office"]
 
-
-class TestFindSalesPointsTool:
-    def test_passes_correct_office_type(self):
+    def test_sales_point_passes_correct_type(self):
         with patch(
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[]),
         ) as mock_search:
-            _run(find_sales_points.coroutine(query="KIA"))
+            _run(find_office.coroutine(office_type="sales_point", query="KIA"))
         assert mock_search.call_args.kwargs["office_types"] == ["sales_point"]
 
     def test_en_none_found(self):
@@ -398,31 +389,43 @@ class TestFindSalesPointsTool:
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[]),
         ):
-            result = _run(find_sales_points.coroutine(query="XYZ", lang="en"))
+            result = _run(find_office.coroutine(office_type="sales_point", query="XYZ", state={"lang": "en"}))
         assert "no offices" in result.lower() or "not found" in result.lower() or "XYZ" in result
 
 
-class TestNewBranchToolsRegistered:
-    def test_three_find_tools_in_faq_tools(self):
+class TestFaqToolsRegistered:
+    def test_find_office_registered(self):
         from app.agent.tools import _FAQ_TOOLS
         names = {getattr(t, "name", None) for t in _FAQ_TOOLS}
-        assert "find_filials" in names
-        assert "find_sales_offices" in names
-        assert "find_sales_points" in names
+        assert "find_office" in names
         assert "get_office_types_info" in names
-        # Old unified tool is gone
+        # Old per-type tools are gone
+        assert "find_filials" not in names
+        assert "find_sales_offices" not in names
+        assert "find_sales_points" not in names
         assert "get_branch_info" not in names
+
+    def test_redundant_tools_removed(self):
+        from app.agent.tools import _FAQ_TOOLS
+        names = {getattr(t, "name", None) for t in _FAQ_TOOLS}
+        assert "compare_products" not in names
+        assert "back_to_product_list" not in names
+
+    def test_tool_count_trimmed(self):
+        """Consolidated tool set should be 12 tools (was 15)."""
+        from app.agent.tools import _FAQ_TOOLS
+        assert len(_FAQ_TOOLS) == 12
 
 
 class TestToolGetOfficeTypesInfo:
     def test_ru_mentions_three_types(self):
-        result = _run(get_office_types_info.coroutine(lang="ru"))
+        result = _run(get_office_types_info.coroutine(state={"lang": "ru"}))
         assert "Филиал" in result
         assert "мини-офис" in result.lower()
         assert "автосалон" in result.lower()
 
     def test_uz_mentions_three_types(self):
-        result = _run(get_office_types_info.coroutine(lang="uz"))
+        result = _run(get_office_types_info.coroutine(state={"lang": "uz"}))
         assert "Filial" in result
         assert "mini-ofis" in result.lower()
         assert "avtosalon" in result.lower()
@@ -439,22 +442,6 @@ class TestToolShowCreditMenu:
         result = _run(show_credit_menu.coroutine())
         assert "Ипотека" in result
         assert "Автокредит" in result
-
-
-class TestToolBackToProductList:
-    def test_with_products(self):
-        dialog = {
-            **_default_dialog(),
-            "flow": "product_detail",
-            "category": "mortgage",
-            "products": [{"name": "Ипотека Стандарт", "rate": "14%"}],
-        }
-        result = _run(back_to_product_list.coroutine(state={"dialog": dialog}))
-        assert "Ипотека Стандарт" in result
-
-    def test_without_products(self):
-        result = _run(back_to_product_list.coroutine(state={"dialog": _default_dialog()}))
-        assert "категорию" in result.lower()
 
 
 class TestToolStartCalculator:
@@ -518,20 +505,6 @@ class TestUpdateDialogFromTools:
         )
         assert new_dialog["flow"] == "calc_flow"
         assert new_dialog["calc_step"] == "amount"
-
-    def test_back_to_list_sets_show_products(self):
-        dialog = {
-            **_default_dialog(),
-            "flow": "product_detail",
-            "products": [{"name": "Test"}],
-            "selected_product": {"name": "Test"},
-        }
-        new_dialog, keyboard = _run(
-            _update_dialog_from_tools(dialog, [{"name": "back_to_product_list", "args": {}}], "", "ru")
-        )
-        assert new_dialog["flow"] == "show_products"
-        assert new_dialog["selected_product"] is None
-        assert keyboard == ["Test"]
 
     def test_select_product_sets_detail(self):
         dialog = {
@@ -832,7 +805,10 @@ class TestFormatProductCardRichData:
 
 class TestAtFunction:
     def test_system_policy_constant(self):
-        assert "консультант" in SYSTEM_POLICY
+        # SYSTEM_POLICY is now a dict[lang, str] with ru/en/uz versions.
+        assert "консультант" in SYSTEM_POLICY["ru"]
+        assert "consultant" in SYSTEM_POLICY["en"].lower()
+        assert "maslahatchi" in SYSTEM_POLICY["uz"].lower()
 
     def test_none_lang_defaults_to_ru(self):
         assert at("cat_mortgage", None) == at("cat_mortgage", "ru")
@@ -923,49 +899,45 @@ class TestLocalizedName:
 
 class TestToolsI18n:
     def test_thanks_en(self):
-        result = _run(thanks_response.coroutine(lang="en"))
+        result = _run(thanks_response.coroutine(state={"lang": "en"}))
         assert "welcome" in result.lower()
 
     def test_branch_info_en(self):
         with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
-            result = _run(find_filials.coroutine(query="NotFound", lang="en"))
+            result = _run(find_office.coroutine(office_type="filial", query="NotFound", state={"lang": "en"}))
         assert "no offices" in result.lower() or "not found" in result.lower() or "NotFound" in result
 
     def test_credit_menu_en(self):
-        result = _run(show_credit_menu.coroutine(lang="en"))
+        result = _run(show_credit_menu.coroutine(state={"lang": "en"}))
         assert "Mortgage" in result
 
     def test_operator_uz(self):
-        result = _run(request_operator.coroutine(lang="uz"))
+        result = _run(request_operator.coroutine(state={"lang": "uz"}))
         assert "Operator" in result or "operator" in result.lower()
 
 
-# ---- Lang switching: last_lang persists across turns -----------------------
+# ---- Lang switching: persists via state["lang"] (set by detector) ----------
 
 class TestLastLangPersistence:
-    def test_last_lang_saved_by_faq_node(self):
-        """When _update_dialog_from_tools is called with lang='uz', dialog['last_lang'] should be uz."""
-        # Simulate what node_faq does after detecting uz from tool args
-        dialog = _default_dialog()
-        # Inject lang into tool_calls args (as the LLM would do)
-        tool_calls = [{"name": "greeting_response", "args": {"lang": "uz"}}]
-        new_dialog, _ = _run(
-            _update_dialog_from_tools(dialog, tool_calls, "Salom", "uz")
-        )
-        # faq node sets last_lang on new_dialog after _update_dialog_from_tools
-        # We verify the tool arg extraction logic works by checking the lang was honoured
-        assert new_dialog is not None  # dialog returned successfully
-
-    def test_tool_lang_arg_produces_uz_text(self):
-        """Tools called with lang='uz' return Uzbek (Latin) text."""
-        result = _run(thanks_response.coroutine(lang="uz"))
+    def test_tools_render_uz_from_state(self):
+        """Tools read lang from InjectedState, not from a function arg."""
+        result = _run(thanks_response.coroutine(state={"lang": "uz"}))
         assert "Arzimaydi" in result or "rahmat" in result.lower() or "yozing" in result.lower()
 
-    def test_tool_lang_arg_produces_en_text(self):
-        """Tools called with lang='en' return English text."""
-        result = _run(show_credit_menu.coroutine(lang="en"))
+    def test_tools_render_en_from_state(self):
+        result = _run(show_credit_menu.coroutine(state={"lang": "en"}))
         assert "Mortgage" in result
         assert "Auto loan" in result
+
+    def test_tools_fallback_to_last_lang_when_state_empty(self):
+        """If state doesn't have lang explicitly, fallback to dialog.last_lang."""
+        result = _run(thanks_response.coroutine(state={"dialog": {"last_lang": "uz"}}))
+        assert "Arzimaydi" in result or "rahmat" in result.lower() or "yozing" in result.lower()
+
+    def test_tools_default_to_ru(self):
+        """Tools default to Russian when state is entirely absent."""
+        result = _run(thanks_response.coroutine())
+        assert "Пожалуйста" in result
 
     def test_default_lang_is_ru(self):
         """Tools without explicit lang default to Russian."""
@@ -1045,32 +1017,6 @@ class TestInjectedStateTools:
         result = _run(select_product.coroutine("Ипотека Стандарт", state={"dialog": dialog}))
         assert "Ипотека Стандарт" in result
 
-    def test_compare_products_uses_injected_dialog(self):
-        """compare_products reads products from state['dialog']."""
-        dialog = {
-            **_default_dialog(),
-            "flow": "show_products",
-            "category": "mortgage",
-            "products": [
-                {"name": "Ипотека А", "rate": "14%", "amount": "до 500 млн", "term": "до 240 мес"},
-                {"name": "Ипотека Б", "rate": "16%", "amount": "до 300 млн", "term": "до 180 мес"},
-            ],
-        }
-        result = _run(compare_products.coroutine("сравни ипотеки", state={"dialog": dialog}))
-        assert "Ипотека А" in result
-        assert "Ипотека Б" in result
-
-    def test_back_to_product_list_uses_injected_dialog(self):
-        """back_to_product_list renders product list from state['dialog']."""
-        dialog = {
-            **_default_dialog(),
-            "flow": "product_detail",
-            "category": "mortgage",
-            "products": [{"name": "Ипотека Стандарт", "rate": "14%"}],
-        }
-        result = _run(back_to_product_list.coroutine(state={"dialog": dialog}))
-        assert "Ипотека Стандарт" in result
-
     def test_start_calculator_uses_injected_dialog(self):
         """start_calculator reads category from state['dialog'] to pick correct questions."""
         dialog = {**_default_dialog(), "category": "deposit"}
@@ -1078,9 +1024,9 @@ class TestInjectedStateTools:
         assert "сумму" in result.lower() or "вклад" in result.lower() or "депозит" in result.lower()
 
     def test_tool_schemas_exclude_state_param(self):
-        """LLM must not see the injected 'state' parameter in any of the 4 refactored tools."""
+        """LLM must not see the injected 'state' parameter in tools that use InjectedState."""
         from langchain_core.utils.function_calling import convert_to_openai_function
-        for tool_fn in (select_product, compare_products, back_to_product_list, start_calculator):
+        for tool_fn in (select_product, start_calculator):
             schema = convert_to_openai_function(tool_fn)
             params = schema.get("parameters", {}).get("properties", {})
             assert "state" not in params, (
@@ -1092,13 +1038,10 @@ class TestInjectedStateTools:
             )
 
     def test_tools_work_with_empty_state(self):
-        """All 4 tools must not raise when state is empty or dialog is missing."""
-        _run(back_to_product_list.coroutine(state={}))
-        _run(back_to_product_list.coroutine(state={"dialog": {}}))
+        """InjectedState tools must not raise when state is empty or dialog is missing."""
         _run(start_calculator.coroutine(state={}))
         _run(start_calculator.coroutine(state={"dialog": {}}))
         _run(select_product.coroutine("X", state={}))
-        _run(compare_products.coroutine("compare", state={}))
 
     def test_current_dialog_contextvar_removed(self):
         """_CURRENT_DIALOG must no longer exist in app.agent.constants."""
@@ -1444,18 +1387,11 @@ class TestUzbekLatinOnly:
     """
 
     def test_system_policy_forbids_uzbek_cyrillic(self):
-        assert "ЛАТИН" in SYSTEM_POLICY.upper() or "LATIN" in SYSTEM_POLICY.upper() \
-            or "лотин" in SYSTEM_POLICY.lower()
-        # Example of forbidden pattern must be listed
-        assert "Ассалому" in SYSTEM_POLICY or "қанча" in SYSTEM_POLICY \
-            or "ўқғҳ" in SYSTEM_POLICY or "Ўзбекистон" in SYSTEM_POLICY
-
-    def test_lang_instruction_uz_forbids_cyrillic(self):
-        from app.agent.constants import _LANG_INSTRUCTION
-        uz = _LANG_INSTRUCTION["uz"]
-        assert "LOTIN" in uz.upper() or "Latin" in uz
-        # Mentions forbidden Cyrillic examples
-        assert "Kirill" in uz or "кирилл" in uz.lower() or "ўқғҳ" in uz
+        uz_policy = SYSTEM_POLICY["uz"]
+        # Latin-only rule mentioned
+        assert "LOTIN" in uz_policy.upper() or "LATIN" in uz_policy.upper()
+        # Forbidden cyrillic examples present in the UZ prompt
+        assert "Ассалому" in uz_policy or "қанча" in uz_policy or "Ўзбекистон" in uz_policy
 
     def test_agent_texts_uz_has_no_cyrillic(self):
         """Every 'uz' value in AGENT_TEXTS must be in Latin script only."""
@@ -1787,4 +1723,522 @@ class TestExtractTokenUsage:
         assert obj is not None
         assert not getattr(obj, "reasoning_effort", None)
         _llm._get_chat_openai.cache_clear()
+
+
+# ---- XML state context formatter -----------------------------------------
+
+class TestFormatStateXml:
+    def test_empty_dialog_returns_empty_string(self):
+        from app.agent.nodes.faq import _format_state_xml
+        assert _format_state_xml({}) == ""
+        assert _format_state_xml(_default_dialog()) == ""
+
+    def test_wraps_in_state_tag(self):
+        from app.agent.nodes.faq import _format_state_xml
+        out = _format_state_xml({"flow": "show_products", "category": "mortgage"})
+        assert out.startswith("<state>")
+        assert out.endswith("</state>")
+
+    def test_flow_and_category_emitted(self):
+        from app.agent.nodes.faq import _format_state_xml
+        out = _format_state_xml({"flow": "product_detail", "category": "deposit"})
+        assert "<flow>product_detail</flow>" in out
+        assert "<category>deposit</category>" in out
+
+    def test_products_numbered_and_capped_at_10(self):
+        from app.agent.nodes.faq import _format_state_xml
+        products = [{"name": f"P{i}"} for i in range(15)]
+        out = _format_state_xml({"flow": "show_products", "products": products})
+        assert '<product index="1">P0</product>' in out
+        assert '<product index="10">P9</product>' in out
+        # index 11+ should be dropped
+        assert '<product index="11">' not in out
+
+    def test_selected_product_emitted(self):
+        from app.agent.nodes.faq import _format_state_xml
+        out = _format_state_xml({
+            "flow": "product_detail",
+            "selected_product": {"name": "Ипотека Стандарт"},
+        })
+        assert "<selected_product>Ипотека Стандарт</selected_product>" in out
+
+    def test_hint_included_when_products_present(self):
+        from app.agent.nodes.faq import _format_state_xml
+        out = _format_state_xml({
+            "flow": "show_products",
+            "products": [{"name": "A"}],
+        })
+        assert "<hint>" in out
+        assert "select_product" in out
+
+    def test_xml_escapes_special_chars_in_name(self):
+        from app.agent.nodes.faq import _format_state_xml
+        out = _format_state_xml({
+            "flow": "show_products",
+            "products": [{"name": "A <b>bold</b> & co."}],
+        })
+        assert "&lt;b&gt;bold&lt;/b&gt;" in out
+        assert "&amp;" in out
+        # Raw unescaped chars should not appear
+        assert "<b>bold" not in out
+
+
+# ---- SYSTEM_POLICY restructure --------------------------------------------
+
+class TestSystemPolicyStructure:
+    def test_is_dict_with_three_languages(self):
+        assert isinstance(SYSTEM_POLICY, dict)
+        assert set(SYSTEM_POLICY.keys()) == {"ru", "en", "uz"}
+
+    def test_en_has_markdown_sections(self):
+        en = SYSTEM_POLICY["en"]
+        for section in (
+            "## ROLE",
+            "## SCOPE",
+            "## REPLY LANGUAGE",
+            "## OPERATOR REDIRECT",
+            "## CALCULATORS & APPLICATIONS",
+            "## STATE",
+        ):
+            assert section in en, f"Missing section in EN: {section}"
+
+    def test_ru_has_markdown_sections(self):
+        ru = SYSTEM_POLICY["ru"]
+        for section in (
+            "## РОЛЬ",
+            "## ОБЛАСТЬ",
+            "## ЯЗЫК ОТВЕТА",
+            "## ПЕРЕНАПРАВЛЕНИЕ НА ОПЕРАТОРА",
+            "## КАЛЬКУЛЯТОРЫ И ЗАЯВКИ",
+            "## СОСТОЯНИЕ",
+        ):
+            assert section in ru, f"Missing section in RU: {section}"
+
+    def test_uz_has_markdown_sections(self):
+        uz = SYSTEM_POLICY["uz"]
+        for section in (
+            "## ROL",
+            "## DOIRA",
+            "## JAVOB TILI",
+            "## OPERATORGA ULASH",
+            "## KALKULYATORLAR VA ARIZALAR",
+            "## HOLAT",
+        ):
+            assert section in uz, f"Missing section in UZ: {section}"
+
+    def test_each_policy_declares_its_own_reply_language(self):
+        assert "на русском" in SYSTEM_POLICY["ru"].lower()
+        assert "in english" in SYSTEM_POLICY["en"].lower()
+        assert "lotin" in SYSTEM_POLICY["uz"].lower() and "o'zbek" in SYSTEM_POLICY["uz"].lower()
+
+    def test_state_section_describes_xml_tags_in_all_langs(self):
+        for lang in ("ru", "en", "uz"):
+            policy = SYSTEM_POLICY[lang]
+            assert "<state>" in policy, f"Missing <state> in {lang}"
+            assert "<flow>" in policy, f"Missing <flow> in {lang}"
+            assert "<products>" in policy, f"Missing <products> in {lang}"
+
+    def test_uz_prompt_is_predominantly_latin(self):
+        """The UZ prompt must be written mostly in Latin script. A few Cyrillic
+        characters are allowed ONLY as examples of what NOT to produce."""
+        import re
+        uz = SYSTEM_POLICY["uz"]
+        latin_letters = len(re.findall(r"[a-zA-Z]", uz))
+        cyrillic_letters = len(re.findall(r"[а-яёА-ЯЁўқғҳЎҚҒҲ]", uz))
+        # Latin must vastly outnumber Cyrillic (>95%)
+        total = latin_letters + cyrillic_letters
+        assert total > 0
+        latin_ratio = latin_letters / total
+        assert latin_ratio > 0.95, (
+            f"UZ policy has too much Cyrillic: {latin_ratio:.1%} Latin, "
+            f"{cyrillic_letters} Cyrillic chars"
+        )
+
+    def test_get_system_policy_helper(self):
+        assert get_system_policy("ru") == SYSTEM_POLICY["ru"]
+        assert get_system_policy("en") == SYSTEM_POLICY["en"]
+        assert get_system_policy("uz") == SYSTEM_POLICY["uz"]
+        # Fallback to Russian for unknown language
+        assert get_system_policy("fr") == SYSTEM_POLICY["ru"]
+        assert get_system_policy("") == SYSTEM_POLICY["ru"]
+
+
+# ---- Tool docstring few-shot examples -------------------------------------
+
+class TestToolDocstringExamples:
+    def test_all_tools_have_examples_block(self):
+        """Every tool should include few-shot EXAMPLES to help gpt-4o-mini pick the right tool."""
+        from app.agent.tools import _FAQ_TOOLS
+        missing = []
+        for tool in _FAQ_TOOLS:
+            doc = (tool.description or "") + (getattr(tool.func, "__doc__", "") or "") if hasattr(tool, "func") else (tool.description or "")
+            # tool.description is derived from docstring, so just check that
+            if "EXAMPLES" not in (tool.description or ""):
+                missing.append(tool.name)
+        assert not missing, f"Tools missing EXAMPLES block: {missing}"
+
+
+# ---- find_office consolidation -------------------------------------------
+
+class TestFindOfficeConsolidation:
+    def test_office_type_literal_exposed_to_llm(self):
+        from langchain_core.utils.function_calling import convert_to_openai_function
+        schema = convert_to_openai_function(find_office)
+        props = schema.get("parameters", {}).get("properties", {})
+        assert "office_type" in props
+        enum = props["office_type"].get("enum", [])
+        assert set(enum) == {"filial", "sales_office", "sales_point"}
+
+
+# ---- Language detector ---------------------------------------------------
+
+class TestLangDetectHelpers:
+    def test_should_skip_empty(self):
+        from app.agent.lang_detect import _should_skip_detection
+        assert _should_skip_detection("")
+        assert _should_skip_detection("   ")
+        assert _should_skip_detection(None)
+
+    def test_should_skip_single_char(self):
+        from app.agent.lang_detect import _should_skip_detection
+        assert _should_skip_detection("a")
+        assert _should_skip_detection(".")
+
+    def test_should_skip_digits_only(self):
+        from app.agent.lang_detect import _should_skip_detection
+        assert _should_skip_detection("12345")
+        assert _should_skip_detection("500 000")
+        assert _should_skip_detection("???")
+        assert _should_skip_detection("🙂🙂")
+
+    def test_should_not_skip_normal_text(self):
+        from app.agent.lang_detect import _should_skip_detection
+        assert not _should_skip_detection("привет")
+        assert not _should_skip_detection("hi")
+        assert not _should_skip_detection("salom")
+
+    def test_normalize_direct_match(self):
+        from app.agent.lang_detect import _normalize_detector_output
+        assert _normalize_detector_output("ru") == "ru"
+        assert _normalize_detector_output("en") == "en"
+        assert _normalize_detector_output("uz") == "uz"
+        assert _normalize_detector_output("RU") == "ru"
+        assert _normalize_detector_output("  uz  ") == "uz"
+
+    def test_normalize_wrapped_output(self):
+        from app.agent.lang_detect import _normalize_detector_output
+        assert _normalize_detector_output("ru.") == "ru"
+        assert _normalize_detector_output("'uz'") == "uz"
+        assert _normalize_detector_output("Language: en") == "en"
+
+    def test_normalize_invalid(self):
+        from app.agent.lang_detect import _normalize_detector_output
+        assert _normalize_detector_output("") is None
+        assert _normalize_detector_output("french") is None
+        assert _normalize_detector_output("xx") is None
+
+
+class TestLangDetectEndToEnd:
+    def test_skip_short_returns_fallback(self):
+        from app.agent.lang_detect import detect_language
+        result = _run(detect_language("2", fallback="uz"))
+        assert result == "uz"  # skipped, used fallback
+
+    def test_skip_empty_returns_fallback(self):
+        from app.agent.lang_detect import detect_language
+        result = _run(detect_language("", fallback="en"))
+        assert result == "en"
+
+    def test_invalid_fallback_coerced_to_ru(self):
+        from app.agent.lang_detect import detect_language
+        result = _run(detect_language("", fallback="fr"))
+        assert result == "ru"
+
+    def test_detector_none_returns_fallback(self, monkeypatch):
+        """If detector LLM fails to instantiate, fallback wins."""
+        from app.agent import lang_detect as ld
+        monkeypatch.setattr(ld, "_get_detector_llm", lambda: None)
+        result = _run(ld.detect_language("Hello world", fallback="ru"))
+        assert result == "ru"
+
+    def test_detector_returns_uz_for_russian_letters_uzbek_words(self):
+        """The key case: 'Менга кредит керак' — Uzbek in Russian letters."""
+        from app.agent import lang_detect as ld
+
+        class FakeResp:
+            content = "uz"
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(return_value=FakeResp())
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Менга кредит керак", fallback="ru"))
+        assert result == "uz"
+
+    def test_detector_returns_ru(self):
+        from app.agent import lang_detect as ld
+
+        class FakeResp:
+            content = "ru"
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(return_value=FakeResp())
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Здравствуйте мне нужна ипотека", fallback="en"))
+        assert result == "ru"
+
+    def test_detector_returns_en(self):
+        from app.agent import lang_detect as ld
+
+        class FakeResp:
+            content = "en"
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(return_value=FakeResp())
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Hello, I need a mortgage", fallback="ru"))
+        assert result == "en"
+
+    def test_detector_exception_returns_fallback(self):
+        """If LLM call raises, fallback wins instead of crashing."""
+        from app.agent import lang_detect as ld
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Menga kredit kerak", fallback="uz"))
+        assert result == "uz"
+
+    def test_detector_invalid_output_returns_fallback(self):
+        """If detector gives gibberish, fallback wins."""
+        from app.agent import lang_detect as ld
+
+        class FakeResp:
+            content = "I don't know, maybe French?"
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(return_value=FakeResp())
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Bonjour", fallback="ru"))
+        assert result == "ru"
+
+    def test_detector_handles_list_of_blocks_content(self):
+        """Responses API (gpt-5.x) returns content as list of blocks."""
+        from app.agent import lang_detect as ld
+
+        class FakeResp:
+            content = [{"type": "text", "text": "uz", "annotations": []}]
+
+        fake_llm = MagicMock()
+        fake_llm.ainvoke = AsyncMock(return_value=FakeResp())
+        with patch.object(ld, "_get_detector_llm", return_value=fake_llm):
+            result = _run(ld.detect_language("Assalomu alaykum", fallback="ru"))
+        assert result == "uz"
+
+
+class TestLangDetectorModel:
+    def test_default_model_is_gpt4o_mini(self, monkeypatch):
+        from app.agent import lang_detect as ld
+        ld._get_detector_llm.cache_clear()
+        monkeypatch.delenv("LANG_DETECTOR_MODEL", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        obj = ld._get_detector_llm()
+        assert obj is not None
+        assert obj.model_name == "gpt-4o-mini"
+        ld._get_detector_llm.cache_clear()
+
+    def test_env_override(self, monkeypatch):
+        from app.agent import lang_detect as ld
+        ld._get_detector_llm.cache_clear()
+        monkeypatch.setenv("LANG_DETECTOR_MODEL", "gpt-4.1-nano")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        obj = ld._get_detector_llm()
+        assert obj is not None
+        assert obj.model_name == "gpt-4.1-nano"
+        ld._get_detector_llm.cache_clear()
+
+    def test_independent_of_main_openai_model(self, monkeypatch):
+        """Detector must use its own model even if OPENAI_MODEL is set to gpt-5.4-mini."""
+        from app.agent import lang_detect as ld
+        ld._get_detector_llm.cache_clear()
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("LANG_DETECTOR_MODEL", raising=False)
+        obj = ld._get_detector_llm()
+        assert obj is not None
+        assert obj.model_name == "gpt-4o-mini"  # NOT gpt-5.4-mini
+        ld._get_detector_llm.cache_clear()
+
+
+# ---- State-based lang (BotState.lang) -------------------------------------
+
+class TestBotStateLangField:
+    def test_botstate_typeddict_has_lang_key(self):
+        from app.agent.state import BotState
+        annotations = getattr(BotState, "__annotations__", {})
+        assert "lang" in annotations, "BotState must declare 'lang' field"
+        # `from __future__ import annotations` stores these as ForwardRefs or strings.
+        val = annotations["lang"]
+        assert val is str or "str" in repr(val)
+
+    def test_tools_read_lang_from_state_not_contextvar(self):
+        """Verify no tool imports _REQUEST_LANGUAGE (old contextvar)."""
+        import app.agent.tools as tools_module
+        src = __import__("inspect").getsource(tools_module)
+        assert "_REQUEST_LANGUAGE" not in src
+
+    def test_request_language_contextvar_removed(self):
+        """The _REQUEST_LANGUAGE contextvar must be fully removed."""
+        import app.agent.constants as c
+        assert not hasattr(c, "_REQUEST_LANGUAGE")
+
+
+# ---- No lang param in tool schemas ---------------------------------------
+
+class TestToolsHaveNoLangParam:
+    def test_no_tool_exposes_lang_to_llm(self):
+        """LLM-facing tool schemas must not include 'lang' — language is in state."""
+        from app.agent.tools import _FAQ_TOOLS
+        from langchain_core.utils.function_calling import convert_to_openai_function
+
+        offenders = []
+        for tool in _FAQ_TOOLS:
+            schema = convert_to_openai_function(tool)
+            params = schema.get("parameters", {}).get("properties", {}) or {}
+            if "lang" in params:
+                offenders.append(tool.name)
+        assert not offenders, f"Tools still expose 'lang' to LLM: {offenders}"
+
+    def test_no_tool_schema_exposes_state(self):
+        """InjectedState must also be hidden."""
+        from app.agent.tools import _FAQ_TOOLS
+        from langchain_core.utils.function_calling import convert_to_openai_function
+
+        offenders = []
+        for tool in _FAQ_TOOLS:
+            schema = convert_to_openai_function(tool)
+            params = schema.get("parameters", {}).get("properties", {}) or {}
+            if "state" in params:
+                offenders.append(tool.name)
+        assert not offenders, f"Tools leak 'state' to LLM: {offenders}"
+
+
+# ---- User input normalization --------------------------------------------
+
+class TestNormalizeUserText:
+    def test_empty(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        assert _normalize_user_text("") == ""
+        assert _normalize_user_text(None) == ""
+
+    def test_collapses_whitespace(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        assert _normalize_user_text("hello   world") == "hello world"
+        assert _normalize_user_text("hello\t\nworld") == "hello world"
+
+    def test_strips_surrounding(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        assert _normalize_user_text("  hello  ") == "hello"
+
+    def test_trims_repeated_trailing_punct(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        assert _normalize_user_text("привет!!!!") == "привет"
+        assert _normalize_user_text("hello???") == "hello"
+
+    def test_trims_leading_noise(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        assert _normalize_user_text("!!! привет") == "привет"
+
+    def test_preserves_case_and_diacritics(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        # case and diacritics carry signal — do not strip
+        assert _normalize_user_text("Assalomu alaykum") == "Assalomu alaykum"
+        assert _normalize_user_text("so'm") == "so'm"
+        assert _normalize_user_text("ЦБУ Ташкент") == "ЦБУ Ташкент"
+
+    def test_limits_pathological_paste(self):
+        from app.agent.nodes.faq import _normalize_user_text
+        long_text = "a" * 5000
+        out = _normalize_user_text(long_text)
+        assert len(out) == 2000
+
+
+# ---- custom_loan_calculator without rate_pct -----------------------------
+
+class TestCustomLoanCalculatorNoRate:
+    def test_uses_fixed_default_rate(self):
+        """Tool no longer accepts rate_pct — uses DEFAULT_CUSTOM_LOAN_RATE_PCT."""
+        from app.agent.tools import custom_loan_calculator, _DEFAULT_CUSTOM_LOAN_RATE_PCT
+        result = _run(custom_loan_calculator.coroutine(
+            amount=50_000_000,
+            term_months=60,
+            downpayment=0,
+            state={"lang": "ru"},
+        ))
+        assert f"{_DEFAULT_CUSTOM_LOAN_RATE_PCT}" in result
+
+    def test_schema_has_no_rate_pct(self):
+        from app.agent.tools import custom_loan_calculator
+        from langchain_core.utils.function_calling import convert_to_openai_function
+        schema = convert_to_openai_function(custom_loan_calculator)
+        props = schema.get("parameters", {}).get("properties", {})
+        assert "rate_pct" not in props
+        assert "amount" in props
+        assert "term_months" in props
+        assert "downpayment" in props
+
+    def test_output_contains_approximate_disclaimer(self):
+        """Output must flag the rate as assumed/approximate — not real."""
+        from app.agent.tools import custom_loan_calculator
+        for lang in ("ru", "en", "uz"):
+            result = _run(custom_loan_calculator.coroutine(
+                amount=50_000_000,
+                term_months=60,
+                downpayment=0,
+                state={"lang": lang},
+            ))
+            lowered = result.lower()
+            assert ("примерн" in lowered
+                    or "approximate" in lowered or "indicative" in lowered
+                    or "taxminiy" in lowered), f"Missing approximate disclaimer in {lang}"
+
+    def test_env_override_rate(self, monkeypatch):
+        """DEFAULT_CUSTOM_LOAN_RATE_PCT env overrides the default."""
+        monkeypatch.setenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "18.5")
+        # Re-import so the module reads the new env
+        import importlib
+        import app.agent.tools as tools_module
+        importlib.reload(tools_module)
+        assert tools_module._DEFAULT_CUSTOM_LOAN_RATE_PCT == 18.5
+        monkeypatch.delenv("DEFAULT_CUSTOM_LOAN_RATE_PCT")
+        importlib.reload(tools_module)
+
+
+# ---- faq_lookup NO_MATCH_IN_FAQ marker -----------------------------------
+
+class TestFaqLookupNoMatch:
+    def test_returns_marker_when_empty(self):
+        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
+        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value="")):
+            result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
+        assert result == NO_MATCH_IN_FAQ
+
+    def test_returns_marker_when_none(self):
+        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
+        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value=None)):
+            result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
+        assert result == NO_MATCH_IN_FAQ
+
+    def test_returns_answer_when_found(self):
+        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
+        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value="Use the app menu")):
+            result = _run(faq_lookup.coroutine(query="blocking card", state={"lang": "en"}))
+        assert result == "Use the app menu"
+        assert result != NO_MATCH_IN_FAQ
+
+    def test_system_policy_documents_no_match_marker(self):
+        """All three language SYSTEM_POLICY versions must explain the marker."""
+        for lang in ("ru", "en", "uz"):
+            assert "NO_MATCH_IN_FAQ" in SYSTEM_POLICY[lang], (
+                f"SYSTEM_POLICY[{lang}] missing NO_MATCH_IN_FAQ handling"
+            )
 

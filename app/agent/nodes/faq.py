@@ -11,19 +11,16 @@ from langgraph.prebuilt import ToolNode
 from openai import APIError
 
 from app.agent.constants import (
-    _LANG_INSTRUCTION,
-    _REQUEST_LANGUAGE,
     FLOW_CALC,
     FLOW_PRODUCT_DETAIL,
     FLOW_SHOW_PRODUCTS,
-    resolve_language,
 )
 from app.agent.i18n import (
-    SYSTEM_POLICY,
     at,
     get_calc_questions,
     get_credit_menu_buttons,
     get_main_menu_buttons,
+    get_system_policy,
 )
 from app.agent.llm import (
     _get_chat_openai,
@@ -39,6 +36,73 @@ from app.agent.tools import _FAQ_TOOLS
 from app.utils.faq_tools import _faq_lookup, get_faq_fallback
 
 _agent_logger = _logging.getLogger(__name__)
+
+
+def _normalize_user_text(text: str) -> str:
+    """Light normalization of user input before handing it to the LLM.
+
+    - collapses whitespace
+    - strips surrounding punctuation noise ("!!!", "???")
+    - limits length to 2000 chars (pathological pastes)
+
+    We keep the original case / diacritics — they are linguistic signal.
+    Returned string is what we send to the LLM; the raw original is still
+    persisted in state for logging / history.
+    """
+    if not text:
+        return ""
+    import re
+    s = text.strip()
+    # Collapse internal whitespace (tabs, multiple spaces, newlines)
+    s = re.sub(r"\s+", " ", s)
+    # Trim repeated punctuation at both ends (!!!, ???, ... etc.)
+    s = re.sub(r"^[\s!?.,;:\-–—]+", "", s)
+    s = re.sub(r"[!?.,;:\-–—]{3,}\s*$", "", s)
+    if len(s) > 2000:
+        s = s[:2000]
+    return s
+
+
+def _xml_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _format_state_xml(dialog: dict) -> str:
+    """Serialize dialog state as XML for the LLM system prompt.
+
+    GPT-4o-mini parses XML tags more reliably than free-form 'Current state:' text.
+    Returns empty string when there's nothing to report.
+    """
+    flow = dialog.get("flow")
+    category = dialog.get("category", "")
+    products = list(dialog.get("products") or [])
+    selected = dialog.get("selected_product") or {}
+
+    lines: list[str] = []
+    if flow:
+        lines.append(f"  <flow>{_xml_escape(str(flow))}</flow>")
+    if category:
+        lines.append(f"  <category>{_xml_escape(str(category))}</category>")
+    if products:
+        lines.append("  <products>")
+        for i, p in enumerate(products[:10], start=1):
+            name = _xml_escape(str(p.get("name", "")))
+            lines.append(f'    <product index="{i}">{name}</product>')
+        lines.append("  </products>")
+        lines.append(
+            "  <hint>If the user sends only a number (e.g. '2'), "
+            "call select_product with the product at that index.</hint>"
+        )
+    if selected.get("name"):
+        lines.append(f"  <selected_product>{_xml_escape(str(selected['name']))}</selected_product>")
+
+    if not lines:
+        return ""
+    return "<state>\n" + "\n".join(lines) + "\n</state>"
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +143,7 @@ async def _update_dialog_from_tools(
     if name == "thanks_response":
         return dict(dialog), None
 
-    if name in ("find_filials", "find_sales_offices", "find_sales_points"):
+    if name == "find_office":
         return dict(dialog), None
 
     if name == "get_office_types_info":
@@ -113,15 +177,6 @@ async def _update_dialog_from_tools(
         if category in ("debit_card", "fx_card"):
             return new_dialog, [at("btn_submit_app", lang), at("btn_all_products", lang)]
         return new_dialog, [at("btn_calc_payment", lang), at("btn_all_products", lang)]
-
-    if name == "compare_products":
-        products = list(dialog.get("products") or [])
-        return dict(dialog), [p["name"] for p in products] if products else None
-
-    if name == "back_to_product_list":
-        products = list(dialog.get("products") or [])
-        new_dialog = {**dialog, "flow": FLOW_SHOW_PRODUCTS, "selected_product": None}
-        return new_dialog, [p["name"] for p in products] if products else None
 
     if name == "start_calculator":
         category = dialog.get("category", "")
@@ -163,40 +218,26 @@ async def node_faq(state: BotState) -> dict:
     Main FAQ node. The LLM decides which tool to call based on user intent.
     """
     user_text = (state.get("last_user_text") or "").strip()
+    normalized_text = _normalize_user_text(user_text)
     dialog = dict(state.get("dialog") or _default_dialog())
-    lang = _REQUEST_LANGUAGE.get()
+    lang = state.get("lang") or dialog.get("last_lang") or "ru"
 
     llm = _get_chat_openai()
 
-    # Build message list for LLM
-    existing_msgs = list(state.get("messages") or [SystemMessage(content=SYSTEM_POLICY)])
-    lang_instruction = _LANG_INSTRUCTION.get(lang, "")
-    system_content = SYSTEM_POLICY + lang_instruction
+    # Build message list for LLM. Per-language full system policy (Variant B).
+    policy = get_system_policy(lang)
+    existing_msgs = list(state.get("messages") or [SystemMessage(content=policy)])
+    system_content = policy
 
-    # Add current state context for better tool selection
-    context_parts: list[str] = []
-    flow = dialog.get("flow")
-    products = list(dialog.get("products") or [])
-    if flow:
-        context_parts.append(f"Current flow: {flow}")
-    if products:
-        numbered = ", ".join(f"{i+1}. {p['name']}" for i, p in enumerate(products[:10]))
-        context_parts.append(f"Products displayed: {numbered}")
-        context_parts.append(
-            "If the user sends a number (e.g. '2'), call select_product with the corresponding product name."
-        )
-    if dialog.get("selected_product"):
-        context_parts.append(f"Selected: {dialog['selected_product'].get('name')}")
-    if dialog.get("category"):
-        context_parts.append(f"Category: {dialog['category']}")
-    if context_parts:
-        system_content += "\n\nCurrent state:\n" + "\n".join(context_parts)
+    state_xml = _format_state_xml(dialog)
+    if state_xml:
+        system_content += "\n\n" + state_xml
 
     if existing_msgs and isinstance(existing_msgs[0], SystemMessage):
         chat_msgs = [SystemMessage(content=system_content)] + existing_msgs[1:]
     else:
         chat_msgs = [SystemMessage(content=system_content)] + existing_msgs
-    chat_msgs.append(HumanMessage(content=user_text))
+    chat_msgs.append(HumanMessage(content=normalized_text or user_text))
 
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(chat_msgs) > _max + 1:
@@ -241,12 +282,12 @@ async def node_faq(state: BotState) -> dict:
     if turn_usage:
         finalize_usage(turn_usage)
 
-    detected_lang = resolve_language(dialog, tool_calls_made, default=lang)
+    # The dedicated detector in agent._ainvoke already wrote state["lang"]
+    # for this turn. Trust it over any `lang` arg the LLM put in tool_calls.
     new_dialog, keyboard = await _update_dialog_from_tools(
-        dialog, tool_calls_made, user_text, detected_lang,
+        dialog, tool_calls_made, user_text, lang,
     )
-    # Persist detected language for next turn (used by calc_flow via contextvar)
-    new_dialog["last_lang"] = detected_lang
+    new_dialog["last_lang"] = lang
 
     result = _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
     if turn_usage:

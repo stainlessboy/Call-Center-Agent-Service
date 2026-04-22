@@ -6,9 +6,10 @@ from typing import Any, Dict, Optional, Sequence
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.checkpointer import _create_async_checkpointer
-from app.agent.constants import _REQUEST_LANGUAGE, resolve_language
-from app.agent.i18n import SYSTEM_POLICY, at
+from app.agent.constants import resolve_language
+from app.agent.i18n import at, get_system_policy
 from app.agent.graph import build_graph
+from app.agent.lang_detect import detect_language
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
 
 _agent_logger = _logging.getLogger(__name__)
@@ -52,33 +53,32 @@ class Agent:
         existing = await self._aload_existing_state(config)
         dialog = dict(existing.get("dialog") or _default_dialog())
 
-        # Seed _REQUEST_LANGUAGE from persisted last_lang so that calc_flow
-        # (which reads the contextvar directly) has a sane value even before
-        # the FAQ node updates it.
-        lang_token = _REQUEST_LANGUAGE.set(resolve_language(dialog))
-        try:
-            state_in: BotState = {
-                "last_user_text": user_text,
-                "messages": list(existing.get("messages") or [SystemMessage(content=SYSTEM_POLICY)]),
-                "answer": "",
-                "human_mode": human_mode,
-                "keyboard_options": None,
-                "dialog": dialog,
-                "_route": "",
-                "session_id": session_id,
-                "user_id": user_id,
-                "show_operator_button": False,
-                "token_usage": None,
-            }
-            out = await self._graph.ainvoke(state_in, config=config)
-            return AgentTurnResult(
-                text=str(out.get("answer") or at("faq_fallback", _REQUEST_LANGUAGE.get())),
-                keyboard_options=out.get("keyboard_options") or None,
-                show_operator_button=bool(out.get("show_operator_button")),
-                token_usage=out.get("token_usage") or None,
-            )
-        finally:
-            _REQUEST_LANGUAGE.reset(lang_token)
+        # Dedicated LLM detector — one small call, authoritative for this turn.
+        # Falls back to last_lang / "ru" on error or empty input.
+        detected_lang = await detect_language(user_text, fallback=resolve_language(dialog))
+        dialog["last_lang"] = detected_lang
+
+        state_in: BotState = {
+            "last_user_text": user_text,
+            "messages": list(existing.get("messages") or [SystemMessage(content=get_system_policy(detected_lang))]),
+            "answer": "",
+            "human_mode": human_mode,
+            "keyboard_options": None,
+            "dialog": dialog,
+            "lang": detected_lang,
+            "_route": "",
+            "session_id": session_id,
+            "user_id": user_id,
+            "show_operator_button": False,
+            "token_usage": None,
+        }
+        out = await self._graph.ainvoke(state_in, config=config)
+        return AgentTurnResult(
+            text=str(out.get("answer") or at("faq_fallback", out.get("lang") or detected_lang)),
+            keyboard_options=out.get("keyboard_options") or None,
+            show_operator_button=bool(out.get("show_operator_button")),
+            token_usage=out.get("token_usage") or None,
+        )
 
     async def send_message(
         self,
@@ -106,7 +106,8 @@ class Agent:
             return
         config = self._build_config(session_id)
         existing = await self._aload_existing_state(config)
-        msgs = list(existing.get("messages") or [SystemMessage(content=SYSTEM_POLICY)])
+        dialog_for_lang = dict(existing.get("dialog") or {})
+        msgs = list(existing.get("messages") or [SystemMessage(content=get_system_policy(resolve_language(dialog_for_lang)))])
         for event in events:
             role = (event.get("role") or "").strip().lower()
             text = (event.get("text") or "").strip()

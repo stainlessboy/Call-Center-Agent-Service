@@ -28,7 +28,7 @@ from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 from langchain_openai import ChatOpenAI  # noqa: E402
 from sqlalchemy import desc, select  # noqa: E402
 
-from app.agent.i18n import SYSTEM_POLICY  # noqa: E402
+from app.agent.i18n import get_system_policy  # noqa: E402
 from app.agent.llm import calculate_cost  # noqa: E402
 from app.db.models import ChatSession, Message, User  # noqa: E402
 from app.db.session import get_session  # noqa: E402
@@ -71,7 +71,7 @@ async def call(llm: ChatOpenAI, model_name: str, user_text: str) -> dict:
     start = time.time()
     try:
         ai = await llm.ainvoke([
-            SystemMessage(content=SYSTEM_POLICY),
+            SystemMessage(content=get_system_policy("uz")),
             HumanMessage(content=user_text),
         ])
     except Exception as exc:

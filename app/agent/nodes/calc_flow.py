@@ -11,7 +11,7 @@ from app.agent.calc_extractor import (
     extract_prefill_from_history,
     extract_updated_value,
 )
-from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM, _REQUEST_LANGUAGE
+from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM
 from app.agent.i18n import _localized_name, at, get_calc_questions
 from app.agent.intent import _is_recalculate, _is_yes, _looks_like_question
 from app.agent.llm import (
@@ -178,7 +178,7 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
     category = dialog.get("category") or ""
     calc_slots = dict(dialog.get("calc_slots") or {})
     selected_product = dialog.get("selected_product") or {}
-    lang = _REQUEST_LANGUAGE.get()
+    lang = state.get("lang") or dialog.get("last_lang") or "ru"
 
     if lead_step == "offer":
         if _is_recalculate(user_text):
@@ -231,7 +231,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     calc_step = dialog.get("calc_step")
     calc_slots = dict(dialog.get("calc_slots") or {})
     selected_product = dialog.get("selected_product") or {}
-    lang = _REQUEST_LANGUAGE.get()
+    lang = state.get("lang") or dialog.get("last_lang") or "ru"
 
     # Parse answer for current step via LLM extractor, regex as fallback
     parsed_value = False

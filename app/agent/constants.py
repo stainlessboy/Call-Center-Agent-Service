@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import contextvars
-from typing import Optional
-
 # category → section_name in CreditProductOffer table (DB values, NOT translated)
 CREDIT_SECTION_MAP: dict[str, str] = {
     "mortgage": "Ипотека",
@@ -13,38 +10,14 @@ CREDIT_SECTION_MAP: dict[str, str] = {
 
 VALID_LANGS: tuple[str, ...] = ("ru", "en", "uz")
 
-_REQUEST_LANGUAGE: contextvars.ContextVar[str] = contextvars.ContextVar("_REQUEST_LANGUAGE", default="ru")
-_LANG_INSTRUCTION = {
-    "en": " Reply in English.",
-    "uz": (
-        " Javobni FAQAT o'zbek tilida LOTIN yozuvida yoz. Kirill yozuvidan (ўқғҳ) "
-        "umuman foydalanma. Misol: 'Assalomu alaykum', 'qancha', 'muddat', 'so'm' — "
-        "to'g'ri. 'Ассалому алайкум', 'қанча' — XATO."
-    ),
-    "ru": "",
-}
 
+def resolve_language(dialog: dict, default: str = "ru") -> str:
+    """Return persisted language from dialog.last_lang, else default.
 
-def resolve_language(
-    dialog: dict,
-    tool_calls: Optional[list] = None,
-    default: str = "ru",
-) -> str:
-    """Resolve current turn language.
-
-    Priority: last valid `lang` arg from tool_calls > dialog.last_lang > default.
-    The LLM passes `lang` in every tool call; the last valid one wins
-    (reflects the final tool in a multi-round turn).
+    Used by agent._ainvoke as the fallback for the LLM detector when the
+    current user message is empty/ambiguous.
     """
-    if tool_calls:
-        detected: Optional[str] = None
-        for tc in tool_calls:
-            tc_lang = tc.get("args", {}).get("lang")
-            if tc_lang in VALID_LANGS:
-                detected = tc_lang
-        if detected:
-            return detected
-    last_lang = dialog.get("last_lang")
+    last_lang = (dialog or {}).get("last_lang")
     if last_lang in VALID_LANGS:
         return last_lang
     return default

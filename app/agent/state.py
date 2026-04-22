@@ -11,6 +11,7 @@ class BotState(TypedDict):
     human_mode: bool
     keyboard_options: Optional[List[str]]
     dialog: dict          # see _default_dialog()
+    lang: str             # "ru" | "en" | "uz" — set by the language detector in agent._ainvoke
     _route: str
     session_id: Optional[str]
     user_id: Optional[int]

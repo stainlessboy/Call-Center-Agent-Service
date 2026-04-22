@@ -228,6 +228,7 @@ Important optional:
 - `OPERATOR_API_KEY` — bearer key for `/operator/send` endpoint
 - `LANGGRAPH_CHECKPOINT_BACKEND` — `memory|postgres|auto`
 - `MAX_DIALOG_MESSAGES` — message history limit (default: 12)
+- `LANG_DETECTOR_MODEL` — model used by the dedicated language detector (default: `gpt-4o-mini`)
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` (default 60)
 - `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` (default 10)
 

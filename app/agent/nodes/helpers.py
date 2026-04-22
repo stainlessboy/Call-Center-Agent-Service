@@ -7,7 +7,7 @@ from typing import List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
-from app.agent.i18n import SYSTEM_POLICY, at
+from app.agent.i18n import at, get_system_policy
 from app.agent.intent import _is_operator_request
 from app.agent.state import BotState
 
@@ -23,7 +23,8 @@ def _finalize_turn(
     is_fallback: bool = False,
 ) -> dict:
     user_text = (state.get("last_user_text") or "").strip()
-    msgs = list(state.get("messages") or [SystemMessage(content=SYSTEM_POLICY)])
+    lang = (dialog or {}).get("last_lang") or "ru"
+    msgs = list(state.get("messages") or [SystemMessage(content=get_system_policy(lang))])
     msgs.append(HumanMessage(content=user_text))
     msgs.append(AIMessage(content=answer))
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
