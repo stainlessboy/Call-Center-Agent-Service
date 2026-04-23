@@ -100,33 +100,6 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip().lower()
 
 
-_CURRENCY_SHORTCUT_TOKENS = frozenset({
-    "курс", "курсы", "курса", "курсов", "курсу", "курсе", "курсом", "курсам", "курсах",
-    "валюта", "валюты", "валюту", "валюте", "валютой", "валют", "валютах",
-    "rate", "rates", "exchange",
-    "kurs", "kursi", "kurslar", "kurslari",
-    "valyuta", "valyutasi", "valyutalar",
-})
-
-_LANGUAGE_SHORTCUT_TOKENS = frozenset({
-    "язык", "языка", "языку", "языке", "языком", "языки",
-    "language", "languages",
-    "til", "tili", "tilni", "tilim", "tillar",
-})
-
-
-def _has_shortcut_token(lower_norm: str, tokens: frozenset[str]) -> bool:
-    """Word-level match against `tokens`.
-
-    `lower_norm` is whitespace-separated after punctuation stripping, so
-    substring collisions (e.g. Uzbek «курсатолисизме» containing «курс»)
-    cannot falsely trigger a shortcut.
-    """
-    if not lower_norm:
-        return False
-    return any(tok in tokens for tok in lower_norm.split())
-
-
 def _md_to_html(text: str) -> str:
     """Convert common Markdown formatting to Telegram-compatible HTML."""
     # Bold: **text** or __text__
@@ -569,7 +542,6 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
     max_len = get_settings().max_message_length
     if len(raw_text) > max_len:
         raw_text = raw_text[:max_len]
-    lower_norm = _normalize_for_match(raw_text)
     user = await chat_service.get_or_create_user(
         telegram_user_id=tg_user.id,
         username=tg_user.username,
@@ -584,7 +556,7 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await message.answer(texts["main_menu"], reply_markup=main_menu_keyboard(lang))
         return
 
-    if action == END_SESSION or "заверш" in lower_norm:
+    if action == END_SESSION:
         ended = await chat_service.end_active_session(user.id)
         if ended:
             end_ok = {
@@ -664,7 +636,7 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         )
         return
 
-    if action == NEW_CHAT or lower_norm in {"новая сессия", "новый чат", "new chat", "new session"}:
+    if action == NEW_CHAT:
         await chat_service.start_new_session(user.id)
         msg = {
             "ru": "Привет! Чем могу помочь?",
@@ -681,14 +653,14 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         )
         return
 
-    if action == NEAREST_BRANCH or ("ближай" in lower_norm and ("цбу" in lower_norm or "отдел" in lower_norm)):
+    if action == NEAREST_BRANCH:
         await message.answer(
             texts["send_location_prompt"],
             reply_markup=location_keyboard(lang),
         )
         return
 
-    if action == MY_SESSIONS or "сесси" in lower_norm:
+    if action == MY_SESSIONS:
         active_sessions = await chat_service.list_active_sessions(user.id, limit=8)
         if not active_sessions:
             no_active_msg = {
@@ -713,11 +685,11 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await message.answer(header, reply_markup=kb)
         return
 
-    if action == CHANGE_LANGUAGE or _has_shortcut_token(lower_norm, _LANGUAGE_SHORTCUT_TOKENS):
+    if action == CHANGE_LANGUAGE:
         await message.answer(texts["ask_language"], reply_markup=language_keyboard())
         return
 
-    if action == CURRENCY_RATES or _has_shortcut_token(lower_norm, _CURRENCY_SHORTCUT_TOKENS):
+    if action == CURRENCY_RATES:
         from app.utils.cbu_rates import fetch_cbu_rates
 
         cbu_data = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
