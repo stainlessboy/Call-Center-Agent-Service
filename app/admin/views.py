@@ -56,6 +56,7 @@ class _UserNameFilter:
     """Filter sessions by user, displaying username/name instead of raw ID."""
 
     has_operator = False
+    template = "sqladmin/filters/lookup_filter.html"
 
     def __init__(self, column, title="Пользователь", parameter_name="user_id"):
         self.column = column
