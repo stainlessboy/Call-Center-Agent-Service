@@ -12,7 +12,9 @@ from openai import APIError
 
 from app.agent.constants import (
     FLOW_CALC,
+    FLOW_OFFICE_DETAIL,
     FLOW_PRODUCT_DETAIL,
+    FLOW_SHOW_OFFICES,
     FLOW_SHOW_PRODUCTS,
 )
 from app.agent.i18n import (
@@ -100,6 +102,24 @@ def _format_state_xml(dialog: dict) -> str:
     if selected.get("name"):
         lines.append(f"  <selected_product>{_xml_escape(str(selected['name']))}</selected_product>")
 
+    offices = list(dialog.get("offices") or [])
+    selected_office = dialog.get("selected_office") or {}
+    if offices:
+        lines.append("  <offices>")
+        for i, o in enumerate(offices[:10], start=1):
+            name = _xml_escape(str(o.get("name", "")))
+            lines.append(f'    <office index="{i}">{name}</office>')
+        lines.append("  </offices>")
+        lines.append(
+            "  <hint>If the user sends only a number (e.g. '1') OR a word like "
+            "'all'/'все'/'хаммаси'/'barchasi'/'hammasini' after offices were shown, call "
+            "select_office. NEVER promise 'wait a few seconds' — fetch details NOW.</hint>"
+        )
+    if selected_office.get("name"):
+        lines.append(
+            f"  <selected_office>{_xml_escape(str(selected_office['name']))}</selected_office>"
+        )
+
     if not lines:
         return ""
     return "<state>\n" + "\n".join(lines) + "\n</state>"
@@ -144,10 +164,58 @@ async def _update_dialog_from_tools(
         return dict(dialog), None
 
     if name == "find_office":
-        return dict(dialog), None
+        from app.agent.branches import search_offices
+        office_type = args.get("office_type", "")
+        query = args.get("query", "")
+        offices = (
+            await search_offices(query=query, office_types=[office_type], limit=5)
+            if office_type
+            else []
+        )
+
+        def _office_name(obj, lng: str) -> str:
+            if lng == "uz":
+                val = getattr(obj, "name_uz", None)
+                if val:
+                    return val
+            return getattr(obj, "name_ru", None) or ""
+
+        new_dialog = {
+            **_default_dialog(),
+            "flow": FLOW_SHOW_OFFICES,
+            "office_type": office_type,
+            "offices": [
+                {"name": _office_name(o, lang), "office_type": o.OFFICE_TYPE_CODE, "id": o.id}
+                for o in offices
+            ],
+            "last_lang": lang,
+        }
+        keyboard = [item["name"] for item in new_dialog["offices"]] or None
+        return new_dialog, keyboard
+
+    if name == "select_office":
+        office_name = args.get("office_name", "")
+        offices_state = list(dialog.get("offices") or [])
+        selected = None
+        norm = (office_name or "").strip().lower()
+        if norm.isdigit():
+            idx = int(norm) - 1
+            if 0 <= idx < len(offices_state):
+                selected = offices_state[idx]
+        else:
+            for it in offices_state:
+                if norm and norm in (it.get("name") or "").lower():
+                    selected = it
+                    break
+        new_dialog = {
+            **dialog,
+            "flow": FLOW_OFFICE_DETAIL,
+            "selected_office": selected,
+        }
+        return new_dialog, None
 
     if name == "get_office_types_info":
-        return dict(dialog), None
+        return {**_default_dialog(), "last_lang": lang}, None
 
     if name == "get_currency_info":
         return dict(dialog), None

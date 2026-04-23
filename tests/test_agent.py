@@ -412,9 +412,9 @@ class TestFaqToolsRegistered:
         assert "back_to_product_list" not in names
 
     def test_tool_count_trimmed(self):
-        """Consolidated tool set should be 12 tools (was 15)."""
+        """Consolidated tool set should be 13 tools (select_office added in 2026-04)."""
         from app.agent.tools import _FAQ_TOOLS
-        assert len(_FAQ_TOOLS) == 12
+        assert len(_FAQ_TOOLS) == 13
 
 
 class TestToolGetOfficeTypesInfo:

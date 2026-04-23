@@ -429,6 +429,79 @@ async def faq_lookup(
 
 
 @lc_tool
+async def select_office(
+    office_name: str,
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
+    """Show full details of an office the user selected from the previously-shown list.
+    Returns pre-formatted HTML — pass AS-IS, do NOT rephrase, do NOT promise to fetch later.
+
+    EXAMPLES (after find_office returned offices [1. KIA Axmad Donish, 2. NRG Iroteka, 3. Olamavto]):
+    - "1" → select_office(office_name="KIA Axmad Donish")
+    - "первый" / "birinchisi" → select_office(office_name="KIA Axmad Donish")
+    - "KIA Axmad Donish" → select_office(office_name="KIA Axmad Donish")
+    - "все" / "хаммаси" / "barchasi" / "all" / "hammasini" → select_office(office_name="all")
+
+    Use ONLY when find_office was just called and the user picks one (or asks for all details).
+    """
+    lang = _lang_from_state(state)
+    dialog = (state or {}).get("dialog") or {}
+    offices_state = list(dialog.get("offices") or [])
+    if not offices_state:
+        return at("office_not_found", lang)
+
+    from app.agent.branches import format_branch_card, format_branches_list
+    from app.db.models import Filial, SalesOffice, SalesPoint
+    from app.db.session import get_session
+    from sqlalchemy import select as sql_select
+
+    _MODEL = {"filial": Filial, "sales_office": SalesOffice, "sales_point": SalesPoint}
+
+    async def _fetch(items):
+        out = []
+        async with get_session() as session:
+            for item in items:
+                model = _MODEL.get(item.get("office_type"))
+                if not model:
+                    continue
+                obj = (
+                    await session.execute(sql_select(model).where(model.id == item.get("id")))
+                ).scalar_one_or_none()
+                if obj:
+                    out.append(obj)
+        return out
+
+    norm = (office_name or "").strip().lower()
+    if norm in ("all", "все", "всё", "хаммаси", "barchasi", "hammasini", "hammasi"):
+        objs = await _fetch(offices_state)
+        return format_branches_list(objs, lang) if objs else at("office_not_found", lang)
+
+    if norm.isdigit():
+        idx = int(norm) - 1
+        if 0 <= idx < len(offices_state):
+            objs = await _fetch([offices_state[idx]])
+            return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+
+    _ORDINALS = {
+        "первый": 0, "первое": 0, "первая": 0, "first": 0, "birinchisi": 0, "birinchi": 0,
+        "второй": 1, "второе": 1, "вторая": 1, "second": 1, "ikkinchisi": 1, "ikkinchi": 1,
+        "третий": 2, "третье": 2, "третья": 2, "third": 2, "uchinchisi": 2, "uchinchi": 2,
+        "четвертый": 3, "четвёртый": 3, "fourth": 3, "to'rtinchisi": 3,
+        "пятый": 4, "fifth": 4, "beshinchisi": 4,
+    }
+    if norm in _ORDINALS and _ORDINALS[norm] < len(offices_state):
+        objs = await _fetch([offices_state[_ORDINALS[norm]]])
+        return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+
+    matched_items = [it for it in offices_state if norm in (it.get("name") or "").lower()]
+    if matched_items:
+        objs = await _fetch([matched_items[0]])
+        return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+
+    return at("office_not_found_in_list", lang)
+
+
+@lc_tool
 async def request_operator(
     reason: str = "",
     state: Annotated[dict, InjectedState] = None,
@@ -463,6 +536,7 @@ _FAQ_TOOLS = [
     greeting_response,
     thanks_response,
     find_office,
+    select_office,
     get_office_types_info,
     get_currency_info,
     show_credit_menu,

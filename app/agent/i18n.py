@@ -69,7 +69,12 @@ XML-блок `<state>` в этом промте несёт текущий диа
 - `<category>` — текущая категория продукта
 - `<products>` — пронумерованный список продуктов, который сейчас показан
 - `<selected_product>` — тот что клиент открыл
+- `<offices>` — пронумерованный список офисов, который сейчас показан после вызова `find_office`
+- `<selected_office>` — офис, который клиент выбрал
 Если клиент прислал только число («2»), сопоставь его с продуктом по этому индексу через `select_product`.
+
+## ВЫБОР ОФИСА
+Если `find_office` только что был вызван и клиент отвечает числом («1», «2»…), порядковым словом («первый», «birinchisi»), названием офиса или словом «все»/«хаммаси»/«barchasi»/«all»/«hammasini» — немедленно вызови `select_office`. НИКОГДА не отвечай «подождите несколько секунд» или «сейчас найду» — возвращай детали офиса в этом же ответе.
 """
 
 
@@ -125,7 +130,12 @@ The `<state>` XML block in this prompt carries the current dialog:
 - `<category>` — current product category
 - `<products>` — numbered product list currently shown
 - `<selected_product>` — the one the user opened
+- `<offices>` — numbered list of offices shown after `find_office`
+- `<selected_office>` — the office the user selected
 If the user sends just a number ("2"), map it to the product at that index via `select_product`.
+
+## OFFICE SELECTION
+If `find_office` was just called and the user replies with a number ("1", "2"…), an ordinal word ("first", "birinchisi"), an office name, or "all"/"все"/"хаммаси"/"barchasi"/"hammasini" — call `select_office` immediately. NEVER reply with "wait a few seconds" or "I'll fetch the info" — return the office details in this same turn.
 """
 
 
@@ -184,7 +194,12 @@ Ushbu promtdagi `<state>` XML bloki joriy dialogni saqlaydi:
 - `<category>` — joriy mahsulot kategoriyasi
 - `<products>` — hozir ko'rsatilgan raqamlangan mahsulotlar ro'yxati
 - `<selected_product>` — mijoz ochgan mahsulot
+- `<offices>` — `find_office` chaqirilgandan keyin ko'rsatilgan raqamlangan ofislar ro'yxati
+- `<selected_office>` — mijoz tanlagan ofis
 Mijoz faqat raqam ("2") yuborsa, uni shu indeksdagi mahsulot bilan `select_product` orqali moslang.
+
+## OFIS TANLASH
+Agar `find_office` hozirgina chaqirilgan bo'lsa va mijoz raqam ("1", "2"...), tartib so'zi ("birinchi", "birinchisi"), ofis nomi yoki "hammasi"/"barchasi"/"all"/"все"/"хаммаси"/"hammasini" deb javob bersa — darhol `select_office` ni chaqiring. HECH QACHON "bir necha soniya kuting" yoki "hozir topaman" demang — ofis tafsilotlarini shu javobda qaytaring.
 """
 
 
@@ -662,6 +677,18 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "📈 Ortiqcha to'lov: {overpayment} so'm\n\n"
             "<i>Sizning haqiqiy kredit stavkangiz boshqacha bo'lishi mumkin — bank maslahatchisi bilan tasdiqlang.</i>"
         ),
+    },
+
+    # ── Office selection ──────────────────────────────────────────────────
+    "office_not_found": {
+        "ru": "Офис не найден. Попробуйте уточнить запрос.",
+        "en": "Office not found. Please try a more specific query.",
+        "uz": "Ofis topilmadi. Iltimos, so'rovingizni aniqroq yozing.",
+    },
+    "office_not_found_in_list": {
+        "ru": "Не нашёл такой офис в списке. Выберите номер из показанного списка или введите название.",
+        "en": "Office not found in the list. Please pick a number from the shown list or type the name.",
+        "uz": "Ro'yxatda bunday ofis topilmadi. Ko'rsatilgan ro'yxatdan raqam tanlang yoki nomni kiriting.",
     },
 
     # ── FAQ fallback ──────────────────────────────────────────────────────

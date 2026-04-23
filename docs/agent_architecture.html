@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Architecture · complex-agent-api</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-elev: #161a21;
+    --bg-elev-2: #1c222b;
+    --border: #2a313c;
+    --border-soft: #222832;
+    --text: #e7ecf3;
+    --text-dim: #9aa4b2;
+    --text-faint: #6b7482;
+    --accent: #7aa2f7;
+    --accent-2: #bb9af7;
+    --accent-green: #9ece6a;
+    --accent-orange: #ff9e64;
+    --accent-red: #f7768e;
+    --accent-cyan: #7dcfff;
+    --accent-yellow: #e0af68;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* layout */
+  .wrap {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    min-height: 100vh;
+  }
+  aside {
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    padding: 28px 20px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  main {
+    padding: 48px 56px 120px;
+    max-width: 1100px;
+  }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; }
+    main { padding: 32px 20px 80px; }
+  }
+
+  /* sidebar nav */
+  .logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+  }
+  .logo::before { content: "▸ "; color: var(--accent-2); }
+  .project {
+    font-weight: 600;
+    font-size: 16px;
+    margin-bottom: 24px;
+    color: var(--text);
+  }
+  nav ul { list-style: none; padding: 0; margin: 0; }
+  nav > ul > li { margin-bottom: 14px; }
+  nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    display: block;
+    padding: 4px 0;
+    border-left: 2px solid transparent;
+    padding-left: 10px;
+    margin-left: -10px;
+    transition: color .15s, border-color .15s;
+  }
+  nav a:hover { color: var(--text); border-left-color: var(--accent); }
+  nav .section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-faint);
+    margin: 20px 0 6px;
+    font-weight: 600;
+  }
+  nav ul ul { margin-left: 8px; margin-top: 4px; }
+  nav ul ul a { font-size: 12px; color: var(--text-faint); }
+
+  /* headings */
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    letter-spacing: -0.5px;
+  }
+  h1 .sub { color: var(--text-faint); font-weight: 400; font-size: 18px; }
+  .lede {
+    color: var(--text-dim);
+    margin: 0 0 48px;
+    font-size: 16px;
+    max-width: 780px;
+  }
+  h2 {
+    font-size: 24px;
+    font-weight: 700;
+    margin: 64px 0 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: -0.3px;
+  }
+  h2::before {
+    content: "§";
+    color: var(--accent);
+    margin-right: 10px;
+    font-weight: 400;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 32px 0 10px;
+    color: var(--text);
+  }
+  h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 18px 0 8px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  p { margin: 0 0 12px; color: var(--text); }
+
+  /* code + file refs */
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--bg-elev);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-soft);
+    color: var(--accent-cyan);
+  }
+  .path {
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 0.88em;
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(122, 162, 247, 0.3);
+  }
+  .path:hover { border-bottom-style: solid; }
+  pre {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+
+  /* lifecycle stages */
+  .lifecycle {
+    position: relative;
+    margin: 24px 0;
+    padding-left: 48px;
+  }
+  .lifecycle::before {
+    content: "";
+    position: absolute;
+    left: 20px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: linear-gradient(to bottom,
+      var(--accent-cyan) 0%,
+      var(--accent) 30%,
+      var(--accent-2) 60%,
+      var(--accent-green) 100%);
+    border-radius: 1px;
+  }
+  .stage {
+    position: relative;
+    margin: 0 0 28px;
+    padding: 16px 20px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: border-color .2s;
+  }
+  .stage:hover { border-color: var(--accent); }
+  .stage::before {
+    content: attr(data-num);
+    position: absolute;
+    left: -43px;
+    top: 14px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--bg-elev-2);
+    border: 2px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .stage h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .stage h3 .tag {
+    font-size: 10px;
+    font-family: var(--mono);
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--bg-elev-2);
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+  .stage.entry h3 .tag { background: rgba(125, 207, 255, 0.15); color: var(--accent-cyan); }
+  .stage.llm h3 .tag { background: rgba(187, 154, 247, 0.15); color: var(--accent-2); }
+  .stage.graph h3 .tag { background: rgba(122, 162, 247, 0.15); color: var(--accent); }
+  .stage.db h3 .tag { background: rgba(224, 175, 104, 0.15); color: var(--accent-yellow); }
+  .stage.output h3 .tag { background: rgba(158, 206, 106, 0.15); color: var(--accent-green); }
+  .stage p { margin: 4px 0; font-size: 14px; color: var(--text-dim); }
+  .stage ul { margin: 6px 0 0; padding-left: 20px; }
+  .stage li { color: var(--text-dim); font-size: 14px; margin-bottom: 4px; }
+
+  /* diagram card */
+  .diagram {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    margin: 24px 0 36px;
+    text-align: center;
+  }
+  .diagram svg { max-width: 100%; height: auto; }
+  .diagram-caption {
+    margin-top: 16px;
+    color: var(--text-faint);
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  /* module grid */
+  .modules { display: grid; gap: 16px; margin: 20px 0; }
+  .module {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+  }
+  .module-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .module-name {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .module-role {
+    font-size: 12px;
+    color: var(--text-faint);
+    text-align: right;
+  }
+  .module-desc { color: var(--text-dim); font-size: 14px; margin-bottom: 10px; }
+  .module-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 4px;
+  }
+  .module-list li {
+    font-size: 13px;
+    color: var(--text);
+    padding-left: 16px;
+    position: relative;
+  }
+  .module-list li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: var(--accent-2);
+    font-size: 11px;
+    top: 1px;
+  }
+  .module-list code { font-size: 12px; padding: 1px 5px; }
+
+  /* file tree */
+  .tree {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 28px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.9;
+    margin: 20px 0 32px;
+    overflow-x: auto;
+  }
+  .tree .dir { color: var(--accent-yellow); font-weight: 600; }
+  .tree .file { color: var(--text); }
+  .tree .comment { color: var(--text-faint); font-style: italic; }
+  .tree a { color: inherit; text-decoration: none; }
+  .tree a:hover .file { color: var(--accent); }
+
+  /* notes block */
+  .notes {
+    background: linear-gradient(135deg, rgba(187, 154, 247, 0.08), rgba(122, 162, 247, 0.08));
+    border: 1px solid rgba(187, 154, 247, 0.25);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 24px 0;
+  }
+  .notes h3 { margin-top: 0; color: var(--accent-2); }
+  .notes ol { padding-left: 20px; margin: 0; }
+  .notes li { margin-bottom: 10px; color: var(--text); }
+  .notes li strong { color: var(--accent-2); }
+
+  /* callout */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--bg-elev);
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .callout.warn { border-left-color: var(--accent-orange); }
+  .callout.warn strong { color: var(--accent-orange); }
+
+  /* footer */
+  footer {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  /* selection */
+  ::selection { background: rgba(122, 162, 247, 0.35); color: white; }
+
+  /* scrollbar */
+  aside::-webkit-scrollbar, pre::-webkit-scrollbar, .tree::-webkit-scrollbar { width: 8px; height: 8px; }
+  aside::-webkit-scrollbar-track, pre::-webkit-scrollbar-track, .tree::-webkit-scrollbar-track { background: transparent; }
+  aside::-webkit-scrollbar-thumb, pre::-webkit-scrollbar-thumb, .tree::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<aside>
+  <div class="logo">complex-agent-api</div>
+  <div class="project">Architecture of <code style="color:inherit; background:none; border:none; padding:0">app/agent/</code></div>
+  <nav>
+    <div class="section-title">Содержание</div>
+    <ul>
+      <li><a href="#overview">Обзор</a></li>
+      <li><a href="#graph">Схема графа</a></li>
+      <li>
+        <a href="#lifecycle">Жизненный цикл запроса</a>
+        <ul>
+          <li><a href="#stage-1">1 · Telegram webhook</a></li>
+          <li><a href="#stage-2">2 · ChatService</a></li>
+          <li><a href="#stage-3">3 · AgentClient</a></li>
+          <li><a href="#stage-4">4 · Agent._ainvoke</a></li>
+          <li><a href="#stage-5">5 · Lang detect</a></li>
+          <li><a href="#stage-6">6 · SystemMessage</a></li>
+          <li><a href="#stage-7">7 · BotState</a></li>
+          <li><a href="#stage-8">8 · PII masking</a></li>
+          <li><a href="#stage-9">9 · Graph.ainvoke</a></li>
+          <li><a href="#stage-10">10 · node_router</a></li>
+          <li><a href="#stage-11">11 · node_faq</a></li>
+          <li><a href="#stage-12">12 · node_calc_flow</a></li>
+          <li><a href="#stage-13">13 · node_human_mode</a></li>
+          <li><a href="#stage-14">14 · _finalize_turn</a></li>
+          <li><a href="#stage-15">15 · AgentTurnResult</a></li>
+          <li><a href="#stage-16">16 · Telegram reply</a></li>
+        </ul>
+      </li>
+      <li><a href="#tree">Дерево модуля</a></li>
+      <li><a href="#modules">Справочник файлов</a></li>
+      <li><a href="#notes">Замечания</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main>
+
+<h1>Agent Architecture <span class="sub">· полный гайд</span></h1>
+<p class="lede">
+  Что происходит внутри <code>app/agent/</code> от момента, когда клиент отправил сообщение,
+  до момента, когда бот ответил. Включая LangGraph, детекцию языка, PII-маскирование,
+  инструменты LLM и checkpointing.
+</p>
+
+<!-- ========================================================== -->
+<h2 id="overview">Обзор</h2>
+<p>
+  Агент построен на <strong>LangGraph</strong> — state-machine из 4 узлов
+  (<code>router</code>, <code>faq</code>, <code>calc_flow</code>, <code>human_mode</code>).
+  LLM — <code>ChatOpenAI</code> из langchain-openai. Состояние сохраняется между turn'ами
+  через checkpointer (Postgres в проде, Memory в dev). Язык пользователя детектится
+  отдельным маленьким LLM-вызовом (или regex fast-path) до запуска графа. Вся персистентность —
+  через SQLAlchemy async.
+</p>
+
+<div class="callout">
+  <strong>Главный принцип:</strong> LLM не определяет интент прямо — он видит 12 инструментов
+  (<code>find_office</code>, <code>get_products</code>, <code>faq_lookup</code>, …) и сам выбирает,
+  какой вызвать. Router только разводит <em>режим</em> (калькулятор / оператор / FAQ).
+</div>
+
+<!-- ========================================================== -->
+<h2 id="graph">Схема графа</h2>
+<div class="diagram">
+  <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LangGraph">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7aa2f7"/>
+      </marker>
+      <linearGradient id="routerGrad" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="#7aa2f7" stop-opacity="0.25"/>
+        <stop offset="1" stop-color="#7aa2f7" stop-opacity="0.08"/>
+      </linearGradient>
+      <linearGradient id="faqGrad" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="#bb9af7" stop-opacity="0.25"/>
+        <stop offset="1" stop-color="#bb9af7" stop-opacity="0.08"/>
+      </linearGradient>
+      <linearGradient id="calcGrad" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="#e0af68" stop-opacity="0.25"/>
+        <stop offset="1" stop-color="#e0af68" stop-opacity="0.08"/>
+      </linearGradient>
+      <linearGradient id="humanGrad" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="#f7768e" stop-opacity="0.25"/>
+        <stop offset="1" stop-color="#f7768e" stop-opacity="0.08"/>
+      </linearGradient>
+    </defs>
+
+    <!-- START -->
+    <circle cx="60" cy="170" r="18" fill="#1c222b" stroke="#9ece6a" stroke-width="2"/>
+    <text x="60" y="175" font-family="ui-monospace, monospace" font-size="11" fill="#9ece6a" text-anchor="middle" font-weight="700">START</text>
+
+    <!-- router -->
+    <rect x="170" y="130" width="150" height="80" rx="10" fill="url(#routerGrad)" stroke="#7aa2f7" stroke-width="2"/>
+    <text x="245" y="162" font-family="-apple-system, sans-serif" font-size="14" fill="#7aa2f7" text-anchor="middle" font-weight="700">node_router</text>
+    <text x="245" y="183" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">Command(goto=…)</text>
+
+    <!-- faq -->
+    <rect x="470" y="30" width="190" height="80" rx="10" fill="url(#faqGrad)" stroke="#bb9af7" stroke-width="2"/>
+    <text x="565" y="62" font-family="-apple-system, sans-serif" font-size="14" fill="#bb9af7" text-anchor="middle" font-weight="700">node_faq</text>
+    <text x="565" y="82" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">LLM + 12 tools</text>
+    <text x="565" y="97" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">≤3 tool-call rounds</text>
+
+    <!-- calc -->
+    <rect x="470" y="130" width="190" height="80" rx="10" fill="url(#calcGrad)" stroke="#e0af68" stroke-width="2"/>
+    <text x="565" y="162" font-family="-apple-system, sans-serif" font-size="14" fill="#e0af68" text-anchor="middle" font-weight="700">node_calc_flow</text>
+    <text x="565" y="182" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">calc_step → lead_step</text>
+    <text x="565" y="197" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">PDF · save Lead</text>
+
+    <!-- human -->
+    <rect x="470" y="230" width="190" height="80" rx="10" fill="url(#humanGrad)" stroke="#f7768e" stroke-width="2"/>
+    <text x="565" y="262" font-family="-apple-system, sans-serif" font-size="14" fill="#f7768e" text-anchor="middle" font-weight="700">node_human_mode</text>
+    <text x="565" y="282" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">interrupt() · pause</text>
+    <text x="565" y="297" font-family="ui-monospace, monospace" font-size="10" fill="#9aa4b2" text-anchor="middle">resume via Command</text>
+
+    <!-- END -->
+    <circle cx="720" cy="170" r="18" fill="#1c222b" stroke="#f7768e" stroke-width="2"/>
+    <text x="720" y="174" font-family="ui-monospace, monospace" font-size="11" fill="#f7768e" text-anchor="middle" font-weight="700">END</text>
+
+    <!-- arrows -->
+    <line x1="78" y1="170" x2="168" y2="170" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <path d="M 320 155 C 400 155, 400 70, 468 70" stroke="#bb9af7" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 320 170 L 468 170" stroke="#e0af68" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 320 185 C 400 185, 400 270, 468 270" stroke="#f7768e" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <path d="M 660 70 C 695 70, 700 150, 718 165" stroke="#bb9af7" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 660 170 L 702 170" stroke="#e0af68" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 660 270 C 695 270, 700 190, 718 175" stroke="#f7768e" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- labels on arrows -->
+    <text x="400" y="105" font-family="ui-monospace, monospace" font-size="10" fill="#bb9af7" text-anchor="middle">goto="faq"</text>
+    <text x="400" y="165" font-family="ui-monospace, monospace" font-size="10" fill="#e0af68" text-anchor="middle">goto="calc_flow"</text>
+    <text x="400" y="240" font-family="ui-monospace, monospace" font-size="10" fill="#f7768e" text-anchor="middle">goto="human_mode"</text>
+  </svg>
+  <div class="diagram-caption">
+    Маршрутизация — через <code>Command(goto=...)</code>, а не conditional_edges.
+    Каждый узел возвращает <code>Command(update={...})</code> и LangGraph атомарно обновляет state.
+  </div>
+</div>
+
+<!-- ========================================================== -->
+<h2 id="lifecycle">Жизненный цикл запроса</h2>
+<p>16 стадий от Telegram до ответа. Номера на левой шкале соответствуют вертикальному порядку выполнения.</p>
+
+<div class="lifecycle">
+
+  <div class="stage entry" id="stage-1" data-num="1">
+    <h3>Telegram webhook → aiogram <span class="tag">entry</span></h3>
+    <p>
+      Webhook попадает в <code>handle_text()</code>
+      (<a class="path" href="../app/bot/handlers/commands.py#L536">commands.py:536</a>).
+      Substring-шорткаты убраны — любой произвольный текст идёт прямо в агент.
+      Только нажатия кнопок меню (<code>action == CURRENCY_RATES</code> и т.д.) обрабатываются на уровне handler'а.
+    </p>
+  </div>
+
+  <div class="stage db" id="stage-2" data-num="2">
+    <h3>ChatService.handle_user_message <span class="tag">db</span></h3>
+    <ul>
+      <li><a class="path" href="../app/services/chat_service.py#L201">chat_service.py:201-204</a> — получить/создать <code>ChatSession</code>, обновить <code>last_activity</code>.</li>
+      <li><a class="path" href="../app/services/chat_service.py#L205">chat_service.py:205-210</a> — записать user-сообщение в БД.</li>
+      <li><a class="path" href="../app/services/chat_service.py#L241">chat_service.py:241-254</a> — вызвать <code>agent_client.send_message()</code> с таймаутом, замер latency.</li>
+    </ul>
+  </div>
+
+  <div class="stage entry" id="stage-3" data-num="3">
+    <h3>AgentClient → Agent.send_message <span class="tag">wrapper</span></h3>
+    <p>
+      <a class="path" href="../app/services/agent_client.py">agent_client.py</a> — тонкая обёртка,
+      форвардит в <a class="path" href="../app/agent/agent.py#L94">agent.py:94</a>.
+    </p>
+  </div>
+
+  <div class="stage graph" id="stage-4" data-num="4">
+    <h3>Agent._ainvoke — загрузка state <span class="tag">graph</span></h3>
+    <ul>
+      <li><a class="path" href="../app/agent/agent.py#L53">agent.py:53</a> — <code>config = {"configurable": {"thread_id": session_id}}</code>.</li>
+      <li><a class="path" href="../app/agent/agent.py#L54">agent.py:54</a> — <code>_aload_existing_state()</code> достаёт prior state из checkpointer.</li>
+      <li><a class="path" href="../app/agent/agent.py#L55">agent.py:55</a> — извлечь <code>dialog</code> или <code>_default_dialog()</code>.</li>
+    </ul>
+  </div>
+
+  <div class="stage llm" id="stage-5" data-num="5">
+    <h3>Детекция языка · lang_detect.detect_language <span class="tag">llm</span></h3>
+    <ul>
+      <li><a class="path" href="../app/agent/lang_detect.py#L209">lang_detect.py:209</a> — <code>_should_skip_detection</code>: если &lt;2 символа или нет букв → вернуть fallback.</li>
+      <li><a class="path" href="../app/agent/lang_detect.py#L212">lang_detect.py:212</a> — <strong>fast-path</strong>: regex на uz-Cyrillic (ў/қ/ғ/ҳ) + <code>_UZ_MORPHOLOGY_RE</code> (олмокчи, рахмат, менга, <code>\w+сизме</code>…) → сразу <code>"uz"</code>.</li>
+      <li><a class="path" href="../app/agent/lang_detect.py#L216">lang_detect.py:216-224</a> — иначе LLM-детектор (gpt-4o-mini, <code>LANG_DETECTOR_MODEL</code>) с PII-маскировкой на входе.</li>
+    </ul>
+    <p>Результат пишется в <code>state["lang"]</code> и <code>dialog["last_lang"]</code>.</p>
+  </div>
+
+  <div class="stage llm" id="stage-6" data-num="6">
+    <h3>Свежий SystemMessage под язык <span class="tag">llm</span></h3>
+    <ul>
+      <li><a class="path" href="../app/agent/agent.py#L65">agent.py:65</a> — <code>get_system_policy(detected_lang)</code> берёт per-language промпт.</li>
+      <li><a class="path" href="../app/agent/agent.py#L66">agent.py:66-70</a> — первый <code>SystemMessage</code> в <code>messages</code> заменяется на свежий.</li>
+    </ul>
+    <p>Без этого язык инструкций «замораживался» бы в checkpointer — при смене языка пользователем промпт оставался бы старым.</p>
+  </div>
+
+  <div class="stage graph" id="stage-7" data-num="7">
+    <h3>Сборка BotState <span class="tag">graph</span></h3>
+    <p>
+      <a class="path" href="../app/agent/agent.py#L72">agent.py:72-85</a> — строится <code>BotState</code> со всеми полями:
+      <code>messages</code>, <code>last_user_text</code>, <code>answer</code>, <code>human_mode</code>,
+      <code>keyboard_options</code>, <code>dialog</code>, <code>lang</code>, <code>session_id</code>,
+      <code>user_id</code>, <code>show_operator_button</code>, <code>token_usage</code>.
+    </p>
+  </div>
+
+  <div class="stage llm" id="stage-8" data-num="8">
+    <h3>PII-маскирование <span class="tag">llm</span></h3>
+    <p>Применяется в двух точках:</p>
+    <ul>
+      <li><a class="path" href="../app/agent/lang_detect.py#L223">lang_detect.py:223</a> — перед детектором.</li>
+      <li><a class="path" href="../app/agent/nodes/helpers.py#L37">nodes/helpers.py:37</a> — в <code>_finalize_turn</code> перед записью в историю.</li>
+    </ul>
+    <p>
+      Паттерны (<a class="path" href="../app/agent/pii_masker.py">pii_masker.py</a>):
+      EMAIL → IBAN (UZ…) → PHONE (+998) → CARD (16) → PINFL (14) → PASSPORT (2+7).
+      Идемпотентно. Даты и ИНН не трогаются (чтобы не ломать суммы/сроки).
+    </p>
+  </div>
+
+  <div class="stage graph" id="stage-9" data-num="9">
+    <h3>Graph.ainvoke → node_router <span class="tag">graph</span></h3>
+    <p>
+      <a class="path" href="../app/agent/agent.py#L86">agent.py:86</a> — <code>self._graph.ainvoke(state_in, config=config)</code>.
+      Граф собран в <a class="path" href="../app/agent/graph.py">graph.py</a>.
+    </p>
+  </div>
+
+  <div class="stage graph" id="stage-10" data-num="10">
+    <h3>node_router · маршрутизация <span class="tag">graph</span></h3>
+    <ul>
+      <li><a class="path" href="../app/agent/nodes/router.py#L19">router.py:19-20</a> — <code>human_mode=True</code> → <code>Command(goto="human_mode")</code>.</li>
+      <li><a class="path" href="../app/agent/nodes/router.py#L22">router.py:22-25</a> — <code>lead_step</code> set или <code>flow==FLOW_CALC</code> → <code>calc_flow</code>.</li>
+      <li><a class="path" href="../app/agent/nodes/router.py#L27">router.py:27-46</a> — кнопка «Рассчитать» + <code>FLOW_PRODUCT_DETAIL</code> + выбранный продукт → <code>calc_flow</code>.</li>
+      <li><a class="path" href="../app/agent/nodes/router.py#L48">router.py:48</a> — иначе → <code>faq</code>.</li>
+    </ul>
+  </div>
+
+  <div class="stage llm" id="stage-11" data-num="11">
+    <h3>node_faq · LLM + 12 tools (≤3 раунда) <span class="tag">llm</span></h3>
+    <ul>
+      <li><a class="path" href="../app/agent/nodes/faq.py#L220">faq.py:220-221</a> — <code>_normalize_user_text</code>: collapse whitespace, trim <code>!?..;:</code>, limit 2000.</li>
+      <li><a class="path" href="../app/agent/nodes/faq.py#L228">faq.py:228-244</a> — per-language system policy + XML со state + trim до <code>MAX_DIALOG_MESSAGES=12</code>.</li>
+      <li>
+        <a class="path" href="../app/agent/nodes/faq.py#L252">faq.py:252-273</a> — цикл до 3 раундов:
+        <ol style="margin:6px 0 0">
+          <li><code>llm_with_tools.ainvoke(loop_msgs)</code> — bind_tools(<code>_FAQ_TOOLS</code>).</li>
+          <li><code>accumulate_usage()</code> — копим токены.</li>
+          <li>Если <code>tool_calls</code> пусто → финальный текст, выход.</li>
+          <li>Иначе <code>ToolNode(_FAQ_TOOLS).ainvoke(...)</code> выполняет все вызовы, результаты в <code>loop_msgs</code>.</li>
+        </ol>
+      </li>
+      <li><a class="path" href="../app/agent/nodes/faq.py#L274">faq.py:274-280</a> — catch на <code>APIError/TimeoutError/JSONDecodeError</code>: fallback <code>_faq_lookup()</code>.</li>
+      <li><a class="path" href="../app/agent/nodes/faq.py#L287">faq.py:287</a> — <code>_update_dialog_from_tools()</code> обновляет dialog по последнему tool_call.</li>
+    </ul>
+  </div>
+
+  <div class="stage graph" id="stage-12" data-num="12">
+    <h3>node_calc_flow · расчёт + захват контакта <span class="tag">graph</span></h3>
+    <p><strong>calc_step:</strong> <code>extract_calc_value()</code> (<a class="path" href="../app/agent/calc_extractor.py">calc_extractor.py</a>) — LLM-парсинг числа или side-question; clamp к ограничениям продукта; следующий невыполненный вопрос; финал — PDF-график (кредит) или текст (вклад).</p>
+    <p><strong>lead_step:</strong> <code>offer → name → phone</code>. На <code>phone</code> вызывается <code>_save_lead_async()</code> → запись <code>Lead</code> в БД, dialog сбрасывается.</p>
+  </div>
+
+  <div class="stage graph" id="stage-13" data-num="13">
+    <h3>node_human_mode · interrupt <span class="tag">graph</span></h3>
+    <p>
+      <a class="path" href="../app/agent/nodes/human_mode.py#L11">human_mode.py:11</a> — <code>langgraph_interrupt(...)</code> приостанавливает граф.
+      <code>Agent.resume_human_mode()</code> передаёт <code>Command(resume=operator_reply)</code>.
+    </p>
+  </div>
+
+  <div class="stage output" id="stage-14" data-num="14">
+    <h3>_finalize_turn · оформление ответа <span class="tag">output</span></h3>
+    <ul>
+      <li>Маскировка user-текста (или явный токен <code>[PHONE]/[NAME]</code> для lead_step).</li>
+      <li>Добавление <code>HumanMessage + AIMessage</code> в messages, trim до <code>MAX_DIALOG_MESSAGES</code>.</li>
+      <li><code>fallback_streak</code>: если ≥3 или <code>_is_operator_request()</code> → <code>show_operator_button=True</code>.</li>
+      <li>Возврат dict с <code>messages/answer/dialog/keyboard/show_operator_button/token_usage</code>.</li>
+    </ul>
+  </div>
+
+  <div class="stage output" id="stage-15" data-num="15">
+    <h3>Пост-граф → AgentTurnResult <span class="tag">output</span></h3>
+    <p>
+      <a class="path" href="../app/agent/agent.py#L87">agent.py:87-92</a> — выход графа оборачивается в
+      <code>AgentTurnResult(text, keyboard_options, show_operator_button, token_usage)</code>.
+    </p>
+  </div>
+
+  <div class="stage output" id="stage-16" data-num="16">
+    <h3>ChatService persist + Telegram reply <span class="tag">output</span></h3>
+    <p>
+      <a class="path" href="../app/services/chat_service.py#L274">chat_service.py:274-295</a> — парсинг маркера <code>[[PDF:...]]</code>,
+      запись assistant-сообщения с latency и token_usage, возврат <code>AgentReply</code>.
+    </p>
+    <p>Aiogram-handler отправляет <code>text + flow_keyboard + operator_button</code> пользователю.</p>
+  </div>
+
+</div>
+
+<!-- ========================================================== -->
+<h2 id="tree">Дерево модуля <code>app/agent/</code></h2>
+<pre class="tree">
+<span class="dir">app/agent/</span>
+├── <a href="#mod-agent"><span class="file">agent.py</span></a>              <span class="comment"># Agent class — entry point, send_message()</span>
+├── <a href="#mod-graph"><span class="file">graph.py</span></a>              <span class="comment"># StateGraph(router → faq|calc_flow|human_mode → END)</span>
+├── <a href="#mod-state"><span class="file">state.py</span></a>              <span class="comment"># BotState TypedDict + AgentTurnResult</span>
+├── <a href="#mod-llm"><span class="file">llm.py</span></a>                <span class="comment"># ChatOpenAI factory + token usage/cost</span>
+├── <a href="#mod-tools"><span class="file">tools.py</span></a>              <span class="comment"># 12 @lc_tool functions + _FAQ_TOOLS list</span>
+├── <a href="#mod-constants"><span class="file">constants.py</span></a>          <span class="comment"># CREDIT_SECTION_MAP, flow/step names, VALID_LANGS</span>
+├── <a href="#mod-i18n"><span class="file">i18n.py</span></a>               <span class="comment"># Per-language system policy + UI strings</span>
+├── <a href="#mod-intent"><span class="file">intent.py</span></a>             <span class="comment"># Rule-based intent helpers (_is_greeting, _is_calc_trigger…)</span>
+├── <a href="#mod-products"><span class="file">products.py</span></a>           <span class="comment"># Load/format/match products from DB</span>
+├── <a href="#mod-calc"><span class="file">calc_extractor.py</span></a>     <span class="comment"># LLM-based numeric extraction for calculator</span>
+├── <a href="#mod-parsers"><span class="file">parsers.py</span></a>            <span class="comment"># Response parsing utilities</span>
+├── <a href="#mod-ckpt"><span class="file">checkpointer.py</span></a>       <span class="comment"># memory | postgres async checkpointer</span>
+├── <a href="#mod-lang"><span class="file">lang_detect.py</span></a>        <span class="comment"># fast-path regex + LLM detector</span>
+├── <a href="#mod-pii"><span class="file">pii_masker.py</span></a>         <span class="comment"># PII regex masker (EMAIL/IBAN/PHONE/CARD/PINFL/PASSPORT)</span>
+└── <span class="dir">nodes/</span>
+    ├── <a href="#mod-router"><span class="file">router.py</span></a>         <span class="comment"># node_router — routes to faq/calc_flow/human_mode</span>
+    ├── <a href="#mod-faq"><span class="file">faq.py</span></a>            <span class="comment"># node_faq — LLM with tool-calling (≤3 rounds)</span>
+    ├── <a href="#mod-calcflow"><span class="file">calc_flow.py</span></a>      <span class="comment"># node_calc_flow — calculator + lead capture</span>
+    ├── <a href="#mod-human"><span class="file">human_mode.py</span></a>     <span class="comment"># node_human_mode — interrupt() for operator handoff</span>
+    └── <a href="#mod-helpers"><span class="file">helpers.py</span></a>        <span class="comment"># _finalize_turn, _save_lead_async</span>
+</pre>
+
+<!-- ========================================================== -->
+<h2 id="modules">Справочник файлов</h2>
+
+<div class="modules">
+
+  <div class="module" id="mod-agent">
+    <div class="module-header">
+      <div class="module-name">agent.py</div>
+      <div class="module-role">главный класс<br>entry point</div>
+    </div>
+    <div class="module-desc">Класс <code>Agent</code>, инкапсулирующий граф и жизненный цикл state.</div>
+    <ul class="module-list">
+      <li><code>Agent.setup(backend, url)</code> — async-checkpointer (Postgres/Memory).</li>
+      <li><code>Agent._ainvoke(...)</code> — детекция языка, загрузка prior state, свежий SystemMessage, сборка BotState, <code>graph.ainvoke</code>.</li>
+      <li><code>Agent.send_message(...)</code> — публичный API.</li>
+      <li><code>Agent.resume_human_mode(...)</code> — <code>Command(resume=...)</code> после interrupt.</li>
+      <li><code>Agent.sync_history(...)</code> — синхронизация истории из внешнего источника.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-graph">
+    <div class="module-header">
+      <div class="module-name">graph.py</div>
+      <div class="module-role">LangGraph · compile</div>
+    </div>
+    <div class="module-desc">Построение и компиляция <code>StateGraph</code>.</div>
+    <ul class="module-list">
+      <li><code>build_graph(checkpointer, store)</code> — 4 узла: <code>router → [faq|calc_flow|human_mode] → END</code>.</li>
+      <li>Маршрутизация — <code>Command(goto=...)</code>, а не <code>add_conditional_edges</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-state">
+    <div class="module-header">
+      <div class="module-name">state.py</div>
+      <div class="module-role">types · схема</div>
+    </div>
+    <div class="module-desc">TypedDict и dataclass для структуры состояния диалога.</div>
+    <ul class="module-list">
+      <li><code>BotState</code> — <code>messages, last_user_text, answer, human_mode, keyboard_options, dialog, lang, _route, session_id, user_id, show_operator_button, token_usage</code>.</li>
+      <li><code>AgentTurnResult</code> — финальная структура ответа.</li>
+      <li><code>_default_dialog()</code> — initializer для <code>dialog</code> dict.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-llm">
+    <div class="module-header">
+      <div class="module-name">llm.py</div>
+      <div class="module-role">LLM factory + токены</div>
+    </div>
+    <div class="module-desc">ChatOpenAI instance, подсчёт токенов, расчёт стоимости.</div>
+    <ul class="module-list">
+      <li><code>_get_chat_openai()</code> — кэшированный ChatOpenAI (поддержка <code>reasoning_effort</code> для gpt-5, responses API).</li>
+      <li><code>extract_text_content</code>, <code>extract_token_usage</code> — нормализация разных форматов ответа.</li>
+      <li><code>accumulate_usage</code>, <code>finalize_usage</code>, <code>calculate_cost</code> — учёт по <code>_MODEL_PRICING</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-tools">
+    <div class="module-header">
+      <div class="module-name">tools.py</div>
+      <div class="module-role">12 tools · LLM API</div>
+    </div>
+    <div class="module-desc">12 <code>@lc_tool</code>-инструментов в <code>_FAQ_TOOLS</code>. Все, кому нужен dialog, объявляют <code>state: Annotated[dict, InjectedState] = None</code> — <code>ToolNode</code> инжектит state, параметр скрыт от LLM.</div>
+    <ul class="module-list">
+      <li><code>greeting_response()</code> — привет + меню.</li>
+      <li><code>thanks_response()</code> — «пожалуйста».</li>
+      <li><code>find_office(office_type, query)</code> — филиалы/офисы.</li>
+      <li><code>get_office_types_info()</code> — объяснение типов офисов.</li>
+      <li><code>get_currency_info()</code> — курсы ЦБ.</li>
+      <li><code>show_credit_menu()</code> — меню типов кредита.</li>
+      <li><code>get_products(category)</code> — список продуктов.</li>
+      <li><code>select_product(product_name)</code> — детали продукта (3-tier fuzzy).</li>
+      <li><code>start_calculator()</code> — переход в calc_flow.</li>
+      <li><code>custom_loan_calculator(amount, term, downpayment)</code> — расчёт с фикс. ставкой.</li>
+      <li><code>faq_lookup(query)</code> — поиск в FAQ-базе.</li>
+      <li><code>request_operator(reason)</code> — передача оператору.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-constants">
+    <div class="module-header">
+      <div class="module-name">constants.py</div>
+      <div class="module-role">константы · маппинги</div>
+    </div>
+    <div class="module-desc">Конфигурационные константы: языки, категории, пороги.</div>
+    <ul class="module-list">
+      <li><code>VALID_LANGS = ("ru","en","uz")</code>, <code>FALLBACK_STREAK_THRESHOLD=3</code>.</li>
+      <li>Flow: <code>FLOW_SHOW_PRODUCTS</code>, <code>FLOW_PRODUCT_DETAIL</code>, <code>FLOW_CALC</code>.</li>
+      <li>Шаги калькулятора: <code>STEP_AMOUNT/TERM/DOWNPAYMENT</code>.</li>
+      <li><code>CREDIT_SECTION_MAP</code> — <code>category → section_name</code> в БД.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-i18n">
+    <div class="module-header">
+      <div class="module-name">i18n.py</div>
+      <div class="module-role">переводы · промпты</div>
+    </div>
+    <div class="module-desc">Локализация (ru/en/uz) для системного промпта и UI строк.</div>
+    <ul class="module-list">
+      <li><code>get_system_policy(lang)</code> — длинный per-language промпт.</li>
+      <li><code>at(key, lang, **kwargs)</code> — локализованные строки с подстановкой.</li>
+      <li><code>get_calc_questions</code>, <code>get_credit_menu_buttons</code>, <code>get_main_menu_buttons</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-intent">
+    <div class="module-header">
+      <div class="module-name">intent.py</div>
+      <div class="module-role">rule-based intent</div>
+    </div>
+    <div class="module-desc">Regex/substring-хелперы распознавания интентов.</div>
+    <ul class="module-list">
+      <li><code>_is_greeting</code>, <code>_is_thanks</code>, <code>_is_operator_request</code>.</li>
+      <li><code>_is_calc_trigger(text)</code> — кнопка «Рассчитать» (только &lt;40 символов).</li>
+      <li><code>_is_recalculate</code>, <code>_looks_like_question</code>, <code>_detect_product_category</code>.</li>
+      <li><code>_is_currency_question</code> — требует явных USD/EUR/валют (не ловит «курс» как подстроку).</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-products">
+    <div class="module-header">
+      <div class="module-name">products.py</div>
+      <div class="module-role">продукты · БД + форматирование</div>
+    </div>
+    <div class="module-desc">Загрузка и форматирование банковских продуктов.</div>
+    <ul class="module-list">
+      <li><code>_get_products_by_category(category)</code> — загрузка из БД, агрегация, <code>rate_matrix/rate_schedule</code>.</li>
+      <li><code>_find_product_by_name(name, products)</code> — fuzzy-поиск.</li>
+      <li><code>_format_product_list_text</code>, <code>_format_product_card</code> — HTML-форматтеры.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-calc">
+    <div class="module-header">
+      <div class="module-name">calc_extractor.py</div>
+      <div class="module-role">LLM parse · numbers</div>
+    </div>
+    <div class="module-desc">LLM-извлечение числовых значений из ответа пользователя.</div>
+    <ul class="module-list">
+      <li><code>extract_calc_value(...)</code> → <code>{"type":"value"/"question", "value":..., "_usage":...}</code>.</li>
+      <li><code>extract_prefill_from_history(...)</code> — pre-fill calc_slots из истории.</li>
+      <li><code>extract_updated_value(...)</code> — detect «поменяй сумму на X».</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-parsers">
+    <div class="module-header">
+      <div class="module-name">parsers.py</div>
+      <div class="module-role">utils · no-LLM</div>
+    </div>
+    <div class="module-desc">Утилиты парсинга строк/ответов (чистый Python).</div>
+  </div>
+
+  <div class="module" id="mod-ckpt">
+    <div class="module-header">
+      <div class="module-name">checkpointer.py</div>
+      <div class="module-role">persistence · LangGraph</div>
+    </div>
+    <div class="module-desc">Инициализация async checkpointer для persistence LangGraph state.</div>
+    <ul class="module-list">
+      <li><code>_create_async_checkpointer(backend, url)</code>:
+        <ul>
+          <li><code>auto/postgres</code> → <code>AsyncPostgresSaver</code> из <code>DATABASE_URL</code>.</li>
+          <li>иначе → <code>MemorySaver</code>.</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-lang">
+    <div class="module-header">
+      <div class="module-name">lang_detect.py</div>
+      <div class="module-role">детекция языка</div>
+    </div>
+    <div class="module-desc">Детекция языка пользователя один раз per turn <em>до</em> запуска графа.</div>
+    <ul class="module-list">
+      <li><code>detect_language(text, fallback)</code> — главный entry.</li>
+      <li><code>_should_skip_detection</code>, <code>_fast_path_detect</code> (uz-Cyrillic + morphology regex), <code>_normalize_detector_output</code>.</li>
+      <li><code>_DETECTOR_SYSTEM_PROMPT</code> — DECISION ORDER: «русская грамматика перевешивает общую банковскую лексику».</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-pii">
+    <div class="module-header">
+      <div class="module-name">pii_masker.py</div>
+      <div class="module-role">PII · regex masker</div>
+    </div>
+    <div class="module-desc">Regex-замена PII на токены перед отправкой в OpenAI.</div>
+    <ul class="module-list">
+      <li><code>mask_pii(text)</code> — последовательно:
+        EMAIL → IBAN → PHONE (+998) → CARD (16) → PINFL (14) → PASSPORT (2+7).</li>
+      <li>Идемпотентно (токены не матчат паттерны). Даты и ИНН не трогаются.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-router">
+    <div class="module-header">
+      <div class="module-name">nodes/router.py</div>
+      <div class="module-role">роутер · <code>Command(goto)</code></div>
+    </div>
+    <div class="module-desc">Минимальная маршрутизация на основе state.</div>
+    <ul class="module-list">
+      <li><code>node_router(state)</code> возвращает <code>Command(goto=..., update=...)</code>.</li>
+      <li>4 ветки: <code>human_mode / calc_flow (lead или flow=calc) / calc_flow (кнопка «Рассчитать») / faq</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-faq">
+    <div class="module-header">
+      <div class="module-name">nodes/faq.py</div>
+      <div class="module-role">LLM + tools · ≤3 раунда</div>
+    </div>
+    <div class="module-desc">Главный FAQ-узел. LLM видит 12 инструментов и выбирает действие.</div>
+    <ul class="module-list">
+      <li>Нормализация текста, XML со state в system prompt, trim истории до 12 сообщений.</li>
+      <li>Loop ≤3 раза: <code>llm.ainvoke → tool_calls → ToolNode.ainvoke → results</code>.</li>
+      <li>Fallback: <code>_faq_lookup</code> из <code>app/utils/faq_tools.py</code> на APIError/timeout.</li>
+      <li><code>_update_dialog_from_tools</code> — обновление dialog по последнему tool_call.</li>
+      <li><code>_reattach_keyboard</code> — context-appropriate кнопки (по flow).</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-calcflow">
+    <div class="module-header">
+      <div class="module-name">nodes/calc_flow.py</div>
+      <div class="module-role">калькулятор · lead</div>
+    </div>
+    <div class="module-desc">Двухфазный flow: calc_step (сбор параметров) → lead_step (захват контактов).</div>
+    <ul class="module-list">
+      <li><code>_handle_calc_step</code> — extract value → clamp → следующий вопрос → результат (PDF/текст).</li>
+      <li><code>_handle_lead_step</code> — <code>offer → name → phone</code>, <code>_save_lead_async()</code> в БД.</li>
+      <li>Helpers: <code>_lookup_credit_rate</code>, <code>_lookup_deposit_rate</code>, <code>_clamp_term</code>, <code>_clamp_downpayment</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-human">
+    <div class="module-header">
+      <div class="module-name">nodes/human_mode.py</div>
+      <div class="module-role">оператор · interrupt</div>
+    </div>
+    <div class="module-desc">Прерывание графа для ввода оператора.</div>
+    <ul class="module-list">
+      <li><code>node_human_mode_turn(state)</code> — <code>langgraph_interrupt(...)</code>, возврат пустого answer.</li>
+      <li>Resume: <code>Agent.resume_human_mode()</code> → <code>Command(resume=operator_reply)</code>.</li>
+    </ul>
+  </div>
+
+  <div class="module" id="mod-helpers">
+    <div class="module-header">
+      <div class="module-name">nodes/helpers.py</div>
+      <div class="module-role">утилиты · finalize</div>
+    </div>
+    <div class="module-desc">Вспомогательные функции для финализации turn и persistence.</div>
+    <ul class="module-list">
+      <li><code>_finalize_turn(state, answer, dialog, keyboard, is_fallback, mask_user_text)</code> — PII-mask, append messages, trim, fallback_streak, show_operator_button.</li>
+      <li><code>_save_lead_async(data)</code> — создание <code>Lead</code> в БД.</li>
+    </ul>
+  </div>
+
+</div>
+
+<!-- ========================================================== -->
+<h2 id="notes">Замечания и гоча</h2>
+<div class="notes">
+  <ol>
+    <li><strong>Свежий SystemMessage каждый turn</strong> в <code>_ainvoke</code> — без этого <code>lang</code> «замораживался» бы в checkpointer, и смена языка пользователем не применялась бы.</li>
+    <li><strong>Fast-path в lang_detect</strong> экономит LLM-вызов и устраняет главный класс ошибок (uz в русских буквах → ru).</li>
+    <li>
+      <strong>PII внутри node_faq.</strong> Двойная защита: детектор + <code>_finalize_turn</code>. Но пользовательский текст
+      <em>не маскируется</em> перед <code>HumanMessage(content=normalized_text or user_text)</code>
+      на <a class="path" href="../app/agent/nodes/faq.py#L240">faq.py:240</a> — PII потенциально уходит в основной LLM в рамках turn'а
+      (маскируется только в истории после <code>_finalize_turn</code>). Стоит проверить, критично ли.
+    </li>
+    <li><strong>Tool-call loop ≤3 раундов</strong> — защита от «заклинивания» LLM; выход по timeout с <code>is_fallback=True</code> и увеличением <code>fallback_streak</code>.</li>
+    <li><strong>Operator button</strong> автоматически показывается после 3 подряд fallback'ов (<code>FALLBACK_STREAK_THRESHOLD</code>) или при явном запросе оператора.</li>
+    <li><strong>Checkpointer <code>auto</code></strong> тихо падает на <code>MemorySaver</code> если Postgres недоступен — в проде стоит явно пинать <code>LANGGRAPH_CHECKPOINT_BACKEND=postgres</code>, иначе reboot = потеря state.</li>
+    <li><strong>Router <code>_is_calc_trigger</code></strong> — только строки &lt;40 символов; длинные сообщения с «рассчитать» внутри уходят в faq, LLM сам решит через <code>start_calculator()</code>.</li>
+    <li><strong>Telegram router</strong> теперь не имеет substring-фолбэков — весь произвольный текст идёт в агент. Кнопки меню (<code>action == CURRENCY_RATES</code> и т.д.) обрабатываются на уровне handler'а.</li>
+  </ol>
+</div>
+
+<footer>
+  complex-agent-api · сгенерировано автоматически · LangGraph 1.0.6 · aiogram 3.x · FastAPI · SQLAlchemy async
+</footer>
+
+</main>
+</div>
+</body>
+</html>
