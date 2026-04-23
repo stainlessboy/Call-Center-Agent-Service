@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import at, get_system_policy
 from app.agent.intent import _is_operator_request
+from app.agent.pii_masker import mask_pii
 from app.agent.state import BotState
 
 _logger = _logging.getLogger(__name__)
@@ -26,10 +27,15 @@ def _finalize_turn(
     user_text = (state.get("last_user_text") or "").strip()
     lang = (dialog or {}).get("last_lang") or "ru"
     msgs = list(state.get("messages") or [SystemMessage(content=get_system_policy(lang))])
-    # mask_user_text replaces the raw input before it lands in conversation
-    # history that subsequently feeds the LLM (used for lead name/phone steps
-    # so PII never leaves the local container in OpenAI requests).
-    msgs.append(HumanMessage(content=mask_user_text if mask_user_text is not None else user_text))
+    # mask_user_text — explicit token override used by lead-name/phone steps
+    # where we know exactly what the field is. Otherwise apply the generic
+    # regex masker so volunteered PII (card, passport, IBAN, etc.) never
+    # lands in the conversation history that gets sent to OpenAI.
+    if mask_user_text is not None:
+        history_text = mask_user_text
+    else:
+        history_text = mask_pii(user_text)
+    msgs.append(HumanMessage(content=history_text))
     msgs.append(AIMessage(content=answer))
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(msgs) > _max + 1:

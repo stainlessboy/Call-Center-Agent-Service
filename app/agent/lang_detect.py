@@ -24,6 +24,7 @@ from langchain_openai import ChatOpenAI
 
 from app.agent.constants import VALID_LANGS
 from app.agent.llm import extract_text_content
+from app.agent.pii_masker import mask_pii
 
 _logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ async def detect_language(text: str, fallback: str = "ru") -> str:
     try:
         resp = await llm.ainvoke([
             SystemMessage(content=_DETECTOR_SYSTEM_PROMPT),
-            HumanMessage(content=text),
+            HumanMessage(content=mask_pii(text)),
         ])
         detected = _normalize_detector_output(extract_text_content(resp))
         if detected:

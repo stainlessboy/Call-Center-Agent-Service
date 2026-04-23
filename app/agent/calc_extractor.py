@@ -12,6 +12,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.llm import _get_chat_openai, extract_text_content, extract_token_usage
+from app.agent.pii_masker import mask_pii
 
 _log = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ async def extract_calc_value(
         ai_msg = await asyncio.wait_for(
             llm.ainvoke([
                 SystemMessage(content=system_text),
-                HumanMessage(content=user_text),
+                HumanMessage(content=mask_pii(user_text)),
             ]),
             timeout=10.0,
         )
@@ -375,18 +376,19 @@ async def extract_updated_value(
     system_tpl = _CONTEXT_UPDATE_SYSTEM_PROMPT.get(lang, _CONTEXT_UPDATE_SYSTEM_PROMPT["ru"])
 
     slots_repr = ", ".join(f"{k}={v}" for k, v in current_slots.items()) or "нет"
+    masked_user_text = mask_pii(user_text)
     system_text = system_tpl.format(
         step_description=step_desc,
         product_name=product_name,
         current_slots=slots_repr,
-        user_text=user_text,
+        user_text=masked_user_text,
     )
 
     try:
         ai_msg = await asyncio.wait_for(
             llm.ainvoke([
                 SystemMessage(content=system_text),
-                HumanMessage(content=user_text),
+                HumanMessage(content=masked_user_text),
             ]),
             timeout=10.0,
         )

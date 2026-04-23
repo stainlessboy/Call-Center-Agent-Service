@@ -10,6 +10,7 @@ from app.agent.constants import resolve_language
 from app.agent.i18n import at, get_system_policy
 from app.agent.graph import build_graph
 from app.agent.lang_detect import detect_language
+from app.agent.pii_masker import mask_pii
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
 
 _agent_logger = _logging.getLogger(__name__)
@@ -114,7 +115,7 @@ class Agent:
             if not text:
                 continue
             if role in {"user", "human"}:
-                msgs.append(HumanMessage(content=text))
+                msgs.append(HumanMessage(content=mask_pii(text)))
             elif role in {"assistant", "agent", "operator", "bot", "ai"}:
                 msgs.append(AIMessage(content=text))
         try:

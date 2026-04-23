@@ -22,6 +22,7 @@ from app.agent.llm import (
     finalize_usage,
 )
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
+from app.agent.pii_masker import mask_pii
 from app.agent.state import BotState, _default_dialog
 from app.utils.faq_tools import _faq_lookup
 from app.utils.pdf_generator import generate_amortization_pdf
@@ -334,7 +335,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                         try:
                             ai_msg = await llm.ainvoke([
                                 SystemMessage(content=at("calc_side_system", lang)),
-                                HumanMessage(content=user_text),
+                                HumanMessage(content=mask_pii(user_text)),
                             ])
                             faq_ans = extract_text_content(ai_msg).strip()
                             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
