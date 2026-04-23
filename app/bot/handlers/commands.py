@@ -100,6 +100,33 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip().lower()
 
 
+_CURRENCY_SHORTCUT_TOKENS = frozenset({
+    "курс", "курсы", "курса", "курсов", "курсу", "курсе", "курсом", "курсам", "курсах",
+    "валюта", "валюты", "валюту", "валюте", "валютой", "валют", "валютах",
+    "rate", "rates", "exchange",
+    "kurs", "kursi", "kurslar", "kurslari",
+    "valyuta", "valyutasi", "valyutalar",
+})
+
+_LANGUAGE_SHORTCUT_TOKENS = frozenset({
+    "язык", "языка", "языку", "языке", "языком", "языки",
+    "language", "languages",
+    "til", "tili", "tilni", "tilim", "tillar",
+})
+
+
+def _has_shortcut_token(lower_norm: str, tokens: frozenset[str]) -> bool:
+    """Word-level match against `tokens`.
+
+    `lower_norm` is whitespace-separated after punctuation stripping, so
+    substring collisions (e.g. Uzbek «курсатолисизме» containing «курс»)
+    cannot falsely trigger a shortcut.
+    """
+    if not lower_norm:
+        return False
+    return any(tok in tokens for tok in lower_norm.split())
+
+
 def _md_to_html(text: str) -> str:
     """Convert common Markdown formatting to Telegram-compatible HTML."""
     # Bold: **text** or __text__
@@ -686,11 +713,11 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await message.answer(header, reply_markup=kb)
         return
 
-    if action == CHANGE_LANGUAGE or "язык" in lower_norm:
+    if action == CHANGE_LANGUAGE or _has_shortcut_token(lower_norm, _LANGUAGE_SHORTCUT_TOKENS):
         await message.answer(texts["ask_language"], reply_markup=language_keyboard())
         return
 
-    if action == CURRENCY_RATES or "курс" in lower_norm:
+    if action == CURRENCY_RATES or _has_shortcut_token(lower_norm, _CURRENCY_SHORTCUT_TOKENS):
         from app.utils.cbu_rates import fetch_cbu_rates
 
         cbu_data = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
