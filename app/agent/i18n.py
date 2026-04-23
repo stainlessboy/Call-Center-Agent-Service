@@ -30,6 +30,9 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 ## ВЫВОД ТУЛЗОВ
 Когда тул возвращает отформатированный текст (эмодзи, `<b>`-теги, списки), передавай его пользователю КАК ЕСТЬ, не переформатируй. Можешь добавить короткое вступление.
 
+## ВЫБОР ИНСТРУМЕНТА — ОМОНИМ «КУРС»
+Подстрока «курс» НЕ означает автоматически «курс валют». В узбекском это часто корень глагола «kursatmoq / курсатмок» — *показывать / оказывать*: курсатиш, курсатинг, курсатолисиз, курсатолисизме, ko'rsatish и т.п. Пример: «хизмат курсатолисизме» = «оказываете ли вы услугу», это вопрос про сервис в филиале, а НЕ про валюту. `get_currency_info` вызывай ТОЛЬКО если в сообщении явно есть валюта (USD/EUR/RUB/GBP/KZT/CNY, доллар/евро/рубль/валюта/обмен/valyuta/ayirboshlash). Если таких слов нет — иди в `faq_lookup` или `find_office`.
+
 ## ПЕРЕНАПРАВЛЕНИЕ НА ОПЕРАТОРА
 Вызывай `request_operator()` ТОЛЬКО в этих случаях:
 1. Клиент ЯВНО просит оператора («позови оператора», «хочу оператора», «живой оператор») — вызывай сразу, без лишних вопросов.
@@ -82,6 +85,9 @@ Answer ONLY questions about banking products, finance, and bank services. For an
 
 ## TOOL OUTPUT
 When a tool returns pre-formatted text (emoji, `<b>` tags, lists), pass it to the user AS-IS. Don't reformat. You may add a short intro sentence.
+
+## TOOL SELECTION — "KURS" HOMONYM
+The substring "курс / kurs" does NOT automatically mean "exchange rate". In Uzbek it is often the verb stem "kursatmoq / курсатмок" — *to show / to provide*: kursatish, kursating, kursatolisiz, kursatolisizme, ko'rsatish, etc. Example: "хизмат курсатолисизме" = "do you provide service", which is about branch service, NOT about currency. Call `get_currency_info` ONLY if the message explicitly contains a currency (USD/EUR/RUB/GBP/KZT/CNY, dollar/euro/ruble, currency/exchange, valyuta/ayirboshlash). If none of these are present — route via `faq_lookup` or `find_office`.
 
 ## OPERATOR REDIRECT
 Call `request_operator()` ONLY in these cases:
@@ -138,6 +144,9 @@ FAQAT bank mahsulotlari, moliya va bank xizmatlari haqidagi savollarga javob ber
 
 ## TOOL CHIQISHI
 Tool formatlangan matn qaytarsa (emoji, `<b>` teglari, ro'yxatlar), uni mijozga O'ZGARTIRMASDAN yuboring. Qisqa kirish jumlasi qo'shish mumkin.
+
+## TOOL TANLASH — "KURS" OMONIMI
+"курс / kurs" qatori AVTOMATIK ravishda "valyuta kursi" degani EMAS. O'zbek tilida bu ko'pincha "kursatmoq / курсатмок" fe'lining o'zagi — *ko'rsatmoq / xizmat ko'rsatmoq*: kursatish, kursating, kursatolisiz, kursatolisizme, ko'rsatish va h.k. Misol: "xizmat kursatolisizme / хизмат курсатолисизме" = "xizmat ko'rsatasizmi", bu filialdagi xizmat haqidagi savol, valyuta haqida EMAS. `get_currency_info` ni FAQAT xabarda aniq valyuta so'zi bo'lsa chaqiring (USD/EUR/RUB/GBP/KZT/CNY, dollar/yevro/rubl, valyuta/ayirboshlash, exchange/currency). Bunday so'zlar bo'lmasa — `faq_lookup` yoki `find_office` orqali yo'naltiring.
 
 ## OPERATORGA ULASH
 `request_operator()` ni FAQAT quyidagi holatlarda chaqiring:

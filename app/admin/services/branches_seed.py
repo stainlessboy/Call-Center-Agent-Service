@@ -1,51 +1,27 @@
-#!/usr/bin/env python3
-"""Seed branches (filials + sales offices + sales points) from xlsx files.
+"""Seed filials / sales offices / sales points from three uploaded xlsx files.
 
-Source files (RU + UZ Latin sheets only — Cyrillic UZ is ignored):
-  scripts/Локации филиалов.xlsx           → office_type=filial
-  scripts/Локации офисов продаж.xlsx       → office_type=sales_office
-  scripts/Локации точек продаж.xlsx        → office_type=sales_point
-
-Sales offices and sales points reference their parent filial by a SHORT NAME
+Sales offices and sales points reference their parent filial by a short name
 that does not always exactly match the filial's full name — we use fuzzy
 matching (difflib) with normalized names to resolve the link.
 """
 from __future__ import annotations
 
-import argparse
-import asyncio
 import difflib
 import logging
 import re
-import sys
 from pathlib import Path
 from typing import Optional
 
 import openpyxl
 from sqlalchemy import delete
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from app.db.models import Filial, SalesOffice, SalesPoint
+from app.db.session import get_session
 
-from app.db.models import Filial, SalesOffice, SalesPoint  # noqa: E402
-from app.db.session import get_session  # noqa: E402
+log = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-log = logging.getLogger("seed_branches")
-
-SCRIPTS_DIR = ROOT / "scripts"
 SHEET_RU = "Рус"
 SHEET_UZ = "Узб (латиница)"
-
-FILIALS_FILE = SCRIPTS_DIR / "Локации филиалов.xlsx"
-OFFICES_FILE = SCRIPTS_DIR / "Локации офисов продаж.xlsx"
-POINTS_FILE = SCRIPTS_DIR / "Локации точек продаж.xlsx"
-
-
-# ---------------------------------------------------------------------------
-# Name normalization for fuzzy parent lookup
-# ---------------------------------------------------------------------------
 
 _STRIP_PREFIXES_RE = re.compile(r"\b(ЦБУ|BXM|БХМ)\b", re.IGNORECASE)
 _NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
@@ -53,7 +29,6 @@ _WS_RE = re.compile(r"\s+")
 
 
 def _normalize(s: Optional[str]) -> str:
-    """Lowercase, strip ЦБУ/BXM prefix, quotes and punctuation for fuzzy match."""
     if not s:
         return ""
     s = _STRIP_PREFIXES_RE.sub(" ", s)
@@ -61,10 +36,6 @@ def _normalize(s: Optional[str]) -> str:
     s = _WS_RE.sub(" ", s).strip().lower()
     return s
 
-
-# ---------------------------------------------------------------------------
-# XLSX readers — each returns list of dicts with RU + UZ fields merged by row
-# ---------------------------------------------------------------------------
 
 def _read_sheet_rows(path: Path, sheet_name: str) -> list[tuple]:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -84,12 +55,10 @@ def _strip(v) -> Optional[str]:
     return s or None
 
 
-def _load_filials() -> list[dict]:
-    """Read filials xlsx. Columns: №, Наименование ЦБУ, Адрес, Ориентир, Локация."""
-    ru_rows = _read_sheet_rows(FILIALS_FILE, SHEET_RU)
-    uz_rows = _read_sheet_rows(FILIALS_FILE, SHEET_UZ)
+def _load_filials(path: Path) -> list[dict]:
+    ru_rows = _read_sheet_rows(path, SHEET_RU)
+    uz_rows = _read_sheet_rows(path, SHEET_UZ)
 
-    # Skip empty + header row
     def _data_rows(rows):
         out = []
         for r in rows:
@@ -119,17 +88,15 @@ def _load_filials() -> list[dict]:
     return items
 
 
-def _load_sales_offices() -> list[dict]:
-    """Columns: ЦБУ (филиал), Название, Регион, Адрес."""
-    ru_rows = _read_sheet_rows(OFFICES_FILE, SHEET_RU)
-    uz_rows = _read_sheet_rows(OFFICES_FILE, SHEET_UZ)
+def _load_sales_offices(path: Path) -> list[dict]:
+    ru_rows = _read_sheet_rows(path, SHEET_RU)
+    uz_rows = _read_sheet_rows(path, SHEET_UZ)
 
     def _data_rows(rows):
         out = []
         for r in rows:
             if not any(c for c in r):
                 continue
-            # header has 'ЦБУ (филиал)' or 'BXM (filial)' in column A
             if r[0] and str(r[0]).startswith(("ЦБУ", "BXM", "БХМ")) and ("филиал" in str(r[0]).lower() or "filial" in str(r[0]).lower()):
                 continue
             out.append(r)
@@ -142,7 +109,7 @@ def _load_sales_offices() -> list[dict]:
     for idx, ru_row in enumerate(ru):
         uz_row = uz[idx] if idx < len(uz) else (None,) * len(ru_row)
         items.append({
-            "parent_ref_ru": _strip(ru_row[0]),  # for fuzzy match against filial name
+            "parent_ref_ru": _strip(ru_row[0]),
             "name_ru": _strip(ru_row[1]),
             "name_uz": _strip(uz_row[1]),
             "region_ru": _strip(ru_row[2]),
@@ -154,10 +121,9 @@ def _load_sales_offices() -> list[dict]:
     return items
 
 
-def _load_sales_points() -> list[dict]:
-    """Columns: №, Название ЦБУ (к которому привязана), Название точки, Адрес."""
-    ru_rows = _read_sheet_rows(POINTS_FILE, SHEET_RU)
-    uz_rows = _read_sheet_rows(POINTS_FILE, SHEET_UZ)
+def _load_sales_points(path: Path) -> list[dict]:
+    ru_rows = _read_sheet_rows(path, SHEET_RU)
+    uz_rows = _read_sheet_rows(path, SHEET_UZ)
 
     def _data_rows(rows):
         out = []
@@ -186,14 +152,9 @@ def _load_sales_points() -> list[dict]:
     return items
 
 
-# ---------------------------------------------------------------------------
-# Parent-filial resolution
-# ---------------------------------------------------------------------------
-
 def _resolve_parent(
     ref: Optional[str], filial_index: dict[str, int], cutoff: float = 0.6
 ) -> Optional[int]:
-    """Fuzzy-match `ref` against normalized filial names → filial.id."""
     if not ref:
         return None
     key = _normalize(ref)
@@ -206,26 +167,24 @@ def _resolve_parent(
     return None
 
 
-# ---------------------------------------------------------------------------
-# Main seed flow
-# ---------------------------------------------------------------------------
-
-async def _seed(replace: bool) -> None:
-    filials_data = _load_filials()
-    offices_data = _load_sales_offices()
-    points_data = _load_sales_points()
+async def _seed(
+    filials_path: Path,
+    offices_path: Path,
+    points_path: Path,
+    replace: bool,
+) -> None:
+    filials_data = _load_filials(filials_path)
+    offices_data = _load_sales_offices(offices_path)
+    points_data = _load_sales_points(points_path)
 
     async with get_session() as session:
         if replace:
             log.info("--replace: deleting all rows from filials/sales_offices/sales_points")
-            # Order matters — FK cascade will delete dependents, but we delete
-            # explicitly for clarity. Filial cascades via ORM relationship too.
             await session.execute(delete(SalesPoint))
             await session.execute(delete(SalesOffice))
             await session.execute(delete(Filial))
             await session.flush()
 
-        # 1) Insert filials first — we need their ids
         filial_objs: list[Filial] = []
         for d in filials_data:
             if not d.get("name_ru") or not d.get("address_ru"):
@@ -251,7 +210,6 @@ async def _seed(replace: bool) -> None:
         log.info("inserted %d filials, building parent-index with %d keys",
                  len(filial_objs), len(filial_index))
 
-        # 2) Sales offices
         office_objs: list[SalesOffice] = []
         for d in offices_data:
             if not d.get("name_ru") or not d.get("address_ru"):
@@ -269,7 +227,6 @@ async def _seed(replace: bool) -> None:
         session.add_all(office_objs)
         log.info("inserted %d sales_offices", len(office_objs))
 
-        # 3) Sales points
         point_objs: list[SalesPoint] = []
         for d in points_data:
             if not d.get("name_ru") or not d.get("address_ru"):
@@ -286,19 +243,3 @@ async def _seed(replace: bool) -> None:
         log.info("inserted %d sales_points", len(point_objs))
 
         await session.commit()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed branches from xlsx files.")
-    parser.add_argument(
-        "--replace",
-        action="store_true",
-        help="Delete all existing branches before inserting.",
-    )
-    args = parser.parse_args()
-    asyncio.run(_seed(args.replace))
-    log.info("Seed completed.")
-
-
-if __name__ == "__main__":
-    main()

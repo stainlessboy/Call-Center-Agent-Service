@@ -70,14 +70,6 @@
             Импорт из Excel-файла: кредиты, вклады, карты.
             <br>Этапы: Excel &rarr; JSON &rarr; БД.
           </p>
-          {% if products_xlsx %}
-          <div class="mb-2">
-            <span class="badge bg-azure-lt">
-              <i class="fa-solid fa-file-excel me-1"></i>
-              {{ products_xlsx }}
-            </span>
-          </div>
-          {% endif %}
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="products">
             <div class="mb-3">
@@ -99,9 +91,9 @@
               <small class="form-hint">Перезаписать — удалить старые и загрузить новые. Дополнить — добавить к существующим.</small>
             </div>
             <div class="mb-3">
-              <label class="form-label">Загрузить новый файл (необязательно)</label>
-              <input type="file" name="products_file" class="form-control" accept=".xlsx,.xls">
-              <small class="form-hint">Или будет использован текущий файл из scripts/</small>
+              <label class="form-label">Excel-файл продуктов (обязательно)</label>
+              <input type="file" name="products_file" class="form-control" accept=".xlsx,.xls" required>
+              <small class="form-hint">Листы: «Кредитные продукты», «Некредитные продукты».</small>
             </div>
             <button type="submit" class="btn btn-primary w-100"
                     onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
@@ -128,14 +120,6 @@
             <br>Поддержка языков: RU, EN, UZ.
             <br>Языки определяются по названиям листов.
           </p>
-          {% if faq_xlsx %}
-          <div class="mb-2">
-            <span class="badge bg-azure-lt">
-              <i class="fa-solid fa-file-excel me-1"></i>
-              {{ faq_xlsx }}
-            </span>
-          </div>
-          {% endif %}
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="faq">
             <div class="mb-3">
@@ -156,9 +140,9 @@
               </div>
             </div>
             <div class="mb-3">
-              <label class="form-label">Загрузить новый файл (необязательно)</label>
-              <input type="file" name="faq_file" class="form-control" accept=".xlsx,.xls">
-              <small class="form-hint">Или будет использован текущий FAQ.xlsx</small>
+              <label class="form-label">Excel-файл FAQ (обязательно)</label>
+              <input type="file" name="faq_file" class="form-control" accept=".xlsx,.xls" required>
+              <small class="form-hint">Названия листов — коды языков: «RU», «EN», «UZ».</small>
             </div>
             <button type="submit" class="btn btn-primary w-100"
                     onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
@@ -185,25 +169,6 @@
             точки продаж в автосалонах. Листы <code>Рус</code> и
             <code>Узб (латиница)</code>.
           </p>
-          {% if filials_xlsx or offices_xlsx or points_xlsx %}
-          <div class="mb-3 d-flex flex-wrap gap-1">
-            {% if filials_xlsx %}
-            <span class="badge bg-azure-lt" title="Текущий файл филиалов">
-              <i class="fa-solid fa-file-excel me-1"></i>{{ filials_xlsx }}
-            </span>
-            {% endif %}
-            {% if offices_xlsx %}
-            <span class="badge bg-azure-lt" title="Текущий файл офисов продаж">
-              <i class="fa-solid fa-file-excel me-1"></i>{{ offices_xlsx }}
-            </span>
-            {% endif %}
-            {% if points_xlsx %}
-            <span class="badge bg-azure-lt" title="Текущий файл точек продаж">
-              <i class="fa-solid fa-file-excel me-1"></i>{{ points_xlsx }}
-            </span>
-            {% endif %}
-          </div>
-          {% endif %}
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="branches">
             <div class="mb-3">
@@ -226,18 +191,18 @@
             </div>
             <div class="mb-2">
               <label class="form-label small mb-1">🏦 Филиалы (ЦБУ) xlsx</label>
-              <input type="file" name="filials_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+              <input type="file" name="filials_file" class="form-control form-control-sm" accept=".xlsx,.xls" required>
             </div>
             <div class="mb-2">
               <label class="form-label small mb-1">🏪 Офисы продаж xlsx</label>
-              <input type="file" name="offices_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+              <input type="file" name="offices_file" class="form-control form-control-sm" accept=".xlsx,.xls" required>
             </div>
             <div class="mb-3">
               <label class="form-label small mb-1">🚗 Точки продаж xlsx</label>
-              <input type="file" name="points_file" class="form-control form-control-sm" accept=".xlsx,.xls">
+              <input type="file" name="points_file" class="form-control form-control-sm" accept=".xlsx,.xls" required>
             </div>
             <small class="form-hint d-block mb-2">
-              Каждый файл опционален — если не загрузить, будет использован текущий из <code>scripts/</code>.
+              Все три файла обязательны — каждый раз загружайте актуальную версию.
             </small>
             <button type="submit" class="btn btn-primary w-100"
                     onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">

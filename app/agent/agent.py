@@ -59,9 +59,19 @@ class Agent:
         detected_lang = await detect_language(user_text, fallback=resolve_language(dialog))
         dialog["last_lang"] = detected_lang
 
+        # Refresh SystemMessage every turn: picks up i18n.py edits and follows
+        # language switches mid-session. Without this the first-turn prompt
+        # gets frozen into the checkpoint forever.
+        fresh_system = SystemMessage(content=get_system_policy(detected_lang))
+        prior = list(existing.get("messages") or [])
+        if prior and isinstance(prior[0], SystemMessage):
+            prior[0] = fresh_system
+        else:
+            prior = [fresh_system, *prior]
+
         state_in: BotState = {
             "last_user_text": user_text,
-            "messages": list(existing.get("messages") or [SystemMessage(content=get_system_policy(detected_lang))]),
+            "messages": prior,
             "answer": "",
             "human_mode": human_mode,
             "keyboard_options": None,

@@ -1,10 +1,18 @@
-"""Admin view: seed/import data from Excel files into the database."""
+"""Admin view: seed/import data from Excel files into the database.
+
+All source files are uploaded via the admin form every time — nothing is
+persisted on disk between imports. Intermediate JSON manifests used by the
+product pipeline are written to a temporary directory and cleaned up after
+the seed completes.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import shutil
+import tempfile
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,36 +21,25 @@ from starlette.requests import Request
 
 _logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_SCRIPTS_DIR = _PROJECT_ROOT / "scripts"
-_DEFAULT_PRODUCTS_XLSX = _SCRIPTS_DIR / "AI CHAT INFO.xlsx"
-_DEFAULT_FAQ_XLSX = _SCRIPTS_DIR / "FAQ (3 языка).xlsx"
-_FALLBACK_FAQ_XLSX = _SCRIPTS_DIR / "FAQ.xlsx"
-_MANIFEST_PATH = _PROJECT_ROOT / "app" / "data" / "ai_chat_info.json"
-
-# Branch xlsx sources (must match paths hardcoded in scripts/seed_branches.py)
-_BRANCH_FILIALS_XLSX = _SCRIPTS_DIR / "Локации филиалов.xlsx"
-_BRANCH_OFFICES_XLSX = _SCRIPTS_DIR / "Локации офисов продаж.xlsx"
-_BRANCH_POINTS_XLSX = _SCRIPTS_DIR / "Локации точек продаж.xlsx"
-
 
 # ---------------------------------------------------------------------------
-# Helpers: run seed logic in-process (not subprocess) for reliability
+# Product pipeline: xlsx → JSON manifest → DB
 # ---------------------------------------------------------------------------
 
-def _run_export_json(xlsx_path: Path) -> dict[str, Any]:
-    """Run export_ai_chat_info_json logic and return stats."""
-    from scripts.export_ai_chat_info_json import _parse_sheet, _build_split_manifest
+def _run_export_json(xlsx_path: Path, work_dir: Path) -> tuple[Path, int]:
+    """Parse Excel into a manifest + split JSON files under `work_dir`.
 
-    import json
-    from datetime import datetime, timezone
+    Returns (manifest_path, section_count).
+    """
+    from app.admin.services.products_excel import _parse_sheet, _build_split_manifest
 
     workbook = {
         "credit_products": _parse_sheet(xlsx_path, "Кредитные продукты"),
         "noncredit_products": _parse_sheet(xlsx_path, "Некредитные продукты"),
     }
-    split_dir = _MANIFEST_PATH.parent / "ai_chat_info"
-    split_manifest = _build_split_manifest(workbook, split_dir, _MANIFEST_PATH.parent)
+    manifest_path = work_dir / "ai_chat_info.json"
+    split_dir = work_dir / "ai_chat_info"
+    split_manifest = _build_split_manifest(workbook, split_dir, work_dir)
 
     result = {
         "source_file": str(xlsx_path),
@@ -50,30 +47,28 @@ def _run_export_json(xlsx_path: Path) -> dict[str, Any]:
         "format_version": 2,
         "layout": split_manifest,
     }
-    _MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _MANIFEST_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    section_count = sum(len(v) for v in split_manifest.values())
-    return {"sections": section_count, "manifest": str(_MANIFEST_PATH)}
+    manifest_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path, sum(len(v) for v in split_manifest.values())
 
 
-async def _run_seed_credits(replace: bool) -> tuple[int, int]:
-    from scripts.seed_credit_product_offers import _seed
-    return await _seed(_MANIFEST_PATH, replace=replace)
+async def _run_seed_credits(manifest_path: Path, replace: bool) -> tuple[int, int]:
+    from app.admin.services.credit_seed import _seed
+    return await _seed(manifest_path, replace=replace)
 
 
-async def _run_seed_deposits(replace: bool) -> tuple[int, int]:
-    from scripts.seed_deposit_product_offers import _seed
-    return await _seed(_MANIFEST_PATH, replace=replace)
+async def _run_seed_deposits(manifest_path: Path, replace: bool) -> tuple[int, int]:
+    from app.admin.services.deposit_seed import _seed
+    return await _seed(manifest_path, replace=replace)
 
 
-async def _run_seed_cards(replace: bool) -> tuple[int, int]:
-    from scripts.seed_card_product_offers import _seed
-    return await _seed(_MANIFEST_PATH, replace=replace)
+async def _run_seed_cards(manifest_path: Path, replace: bool) -> tuple[int, int]:
+    from app.admin.services.card_seed import _seed
+    return await _seed(manifest_path, replace=replace)
 
 
 async def _run_seed_faq(xlsx_path: Path, replace: bool) -> dict[str, Any]:
-    from scripts.import_faq_xlsx import _extract_multilingual_items, _import_items
+    from app.admin.services.faq_import import _extract_multilingual_items, _import_items
+
     items = await asyncio.to_thread(_extract_multilingual_items, xlsx_path, None, None, None)
     await _import_items(items, replace=replace, dry_run=False)
     lang_counts = {
@@ -84,15 +79,19 @@ async def _run_seed_faq(xlsx_path: Path, replace: bool) -> dict[str, Any]:
     return {"inserted": len(items), "languages": lang_counts}
 
 
-async def _run_seed_branches(replace: bool) -> dict[str, int]:
-    """Run branches seed and return per-table row counts from the DB."""
+async def _run_seed_branches(
+    filials_path: Path,
+    offices_path: Path,
+    points_path: Path,
+    replace: bool,
+) -> dict[str, int]:
     from sqlalchemy import func, select
 
+    from app.admin.services.branches_seed import _seed
     from app.db.models import Filial, SalesOffice, SalesPoint
     from app.db.session import get_session
-    from scripts.seed_branches import _seed
 
-    await _seed(replace=replace)
+    await _seed(filials_path, offices_path, points_path, replace=replace)
     async with get_session() as session:
         counts: dict[str, int] = {}
         for model, key in (
@@ -103,6 +102,21 @@ async def _run_seed_branches(replace: bool) -> dict[str, int]:
             result = await session.execute(select(func.count()).select_from(model))
             counts[key] = int(result.scalar() or 0)
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Form helpers
+# ---------------------------------------------------------------------------
+
+async def _save_upload(form_field: Any, dest: Path) -> int:
+    """Write an UploadFile's bytes to `dest`. Returns the byte count."""
+    contents = await form_field.read()
+    dest.write_bytes(contents)
+    return len(contents)
+
+
+def _has_upload(upload: Any) -> bool:
+    return bool(upload) and hasattr(upload, "filename") and bool(upload.filename)
 
 
 # ---------------------------------------------------------------------------
@@ -118,18 +132,12 @@ class SeedAdmin(BaseView):
         return await self.templates.TemplateResponse(
             request,
             "seed.html",
-            context={
-                "results": None,
-                "products_xlsx": _DEFAULT_PRODUCTS_XLSX.name if _DEFAULT_PRODUCTS_XLSX.exists() else None,
-                "faq_xlsx": _DEFAULT_FAQ_XLSX.name if _DEFAULT_FAQ_XLSX.exists() else (_FALLBACK_FAQ_XLSX.name if _FALLBACK_FAQ_XLSX.exists() else None),
-            },
+            context={"results": None},
         )
 
     @expose("/seed", methods=["POST"])
     async def seed_action(self, request: Request):
         form = await request.form()
-        # Note: the UploadFile objects in form are only valid during this
-        # request, so we must read/save them before rendering the response.
         action = form.get("action", "")
         results: list[dict[str, Any]] = []
 
@@ -153,14 +161,7 @@ class SeedAdmin(BaseView):
         return await self.templates.TemplateResponse(
             request,
             "seed.html",
-            context={
-                "results": results,
-                "products_xlsx": _DEFAULT_PRODUCTS_XLSX.name if _DEFAULT_PRODUCTS_XLSX.exists() else None,
-                "faq_xlsx": _DEFAULT_FAQ_XLSX.name if _DEFAULT_FAQ_XLSX.exists() else (_FALLBACK_FAQ_XLSX.name if _FALLBACK_FAQ_XLSX.exists() else None),
-                "filials_xlsx": _BRANCH_FILIALS_XLSX.name if _BRANCH_FILIALS_XLSX.exists() else None,
-                "offices_xlsx": _BRANCH_OFFICES_XLSX.name if _BRANCH_OFFICES_XLSX.exists() else None,
-                "points_xlsx": _BRANCH_POINTS_XLSX.name if _BRANCH_POINTS_XLSX.exists() else None,
-            },
+            context={"results": results},
         )
 
     # ── Products: export JSON + seed credits/deposits/cards ──────────────
@@ -168,95 +169,48 @@ class SeedAdmin(BaseView):
     async def _seed_products(self, form: Any) -> list[dict]:
         results: list[dict] = []
         replace = form.get("mode") == "replace"
-        mode_label = "Перезапись" if replace else "Дополнение"
-        results.append({"label": "Режим", "status": "ok", "detail": mode_label})
+        results.append({"label": "Режим", "status": "ok", "detail": "Перезапись" if replace else "Дополнение"})
 
-        # Determine xlsx path: uploaded file or default
-        xlsx_path = _DEFAULT_PRODUCTS_XLSX
         upload = form.get("products_file")
-        if upload and hasattr(upload, "filename") and upload.filename:
-            # Save uploaded file to scripts/
-            dest = _SCRIPTS_DIR / upload.filename
-            contents = await upload.read()
-            dest.write_bytes(contents)
-            xlsx_path = dest
-            # Also overwrite the default location so future seeds use it
-            if dest.name != _DEFAULT_PRODUCTS_XLSX.name:
-                shutil.copy2(dest, _DEFAULT_PRODUCTS_XLSX)
-            results.append({
-                "label": "Загрузка файла",
-                "status": "ok",
-                "detail": f"Файл '{upload.filename}' загружен ({len(contents):,} байт)",
-            })
-
-        if not xlsx_path.exists():
+        if not _has_upload(upload):
             results.append({
                 "label": "Файл продуктов",
                 "status": "error",
-                "detail": f"Файл не найден: {xlsx_path.name}",
+                "detail": "Загрузите xlsx-файл через форму — дефолтного больше нет.",
             })
             return results
 
-        # Step 1: Export JSON
-        try:
-            export_stats = await asyncio.to_thread(_run_export_json, xlsx_path)
+        with tempfile.TemporaryDirectory(prefix="seed_products_") as tmp:
+            work_dir = Path(tmp)
+            xlsx_path = work_dir / upload.filename
+            size = await _save_upload(upload, xlsx_path)
             results.append({
-                "label": "Экспорт Excel → JSON",
+                "label": "Загрузка файла",
                 "status": "ok",
-                "detail": f"Секций: {export_stats['sections']}",
-            })
-        except Exception as exc:
-            results.append({
-                "label": "Экспорт Excel → JSON",
-                "status": "error",
-                "detail": str(exc),
-            })
-            return results
-
-        # Step 2: Seed credits
-        try:
-            inserted, skipped = await _run_seed_credits(replace)
-            results.append({
-                "label": "Кредитные продукты",
-                "status": "ok",
-                "detail": f"Добавлено: {inserted}, пропущено: {skipped}",
-            })
-        except Exception as exc:
-            results.append({
-                "label": "Кредитные продукты",
-                "status": "error",
-                "detail": str(exc),
+                "detail": f"'{upload.filename}' загружен ({size:,} байт)",
             })
 
-        # Step 3: Seed deposits
-        try:
-            inserted, skipped = await _run_seed_deposits(replace)
-            results.append({
-                "label": "Депозитные продукты",
-                "status": "ok",
-                "detail": f"Добавлено: {inserted}, пропущено: {skipped}",
-            })
-        except Exception as exc:
-            results.append({
-                "label": "Депозитные продукты",
-                "status": "error",
-                "detail": str(exc),
-            })
+            try:
+                manifest_path, sections = await asyncio.to_thread(_run_export_json, xlsx_path, work_dir)
+                results.append({"label": "Excel → JSON", "status": "ok", "detail": f"Секций: {sections}"})
+            except Exception as exc:
+                results.append({"label": "Excel → JSON", "status": "error", "detail": str(exc)})
+                return results
 
-        # Step 4: Seed cards
-        try:
-            inserted, skipped = await _run_seed_cards(replace)
-            results.append({
-                "label": "Карточные продукты",
-                "status": "ok",
-                "detail": f"Добавлено: {inserted}, пропущено: {skipped}",
-            })
-        except Exception as exc:
-            results.append({
-                "label": "Карточные продукты",
-                "status": "error",
-                "detail": str(exc),
-            })
+            for label, runner in (
+                ("Кредитные продукты", _run_seed_credits),
+                ("Депозитные продукты", _run_seed_deposits),
+                ("Карточные продукты", _run_seed_cards),
+            ):
+                try:
+                    inserted, skipped = await runner(manifest_path, replace)
+                    results.append({
+                        "label": label,
+                        "status": "ok",
+                        "detail": f"Добавлено: {inserted}, пропущено: {skipped}",
+                    })
+                except Exception as exc:
+                    results.append({"label": label, "status": "error", "detail": str(exc)})
 
         return results
 
@@ -265,46 +219,38 @@ class SeedAdmin(BaseView):
     async def _seed_faq(self, form: Any) -> list[dict]:
         results: list[dict] = []
         replace = form.get("mode") == "replace"
-        mode_label = "Перезапись" if replace else "Дополнение"
-        results.append({"label": "Режим", "status": "ok", "detail": mode_label})
+        results.append({"label": "Режим", "status": "ok", "detail": "Перезапись" if replace else "Дополнение"})
 
-        xlsx_path = _DEFAULT_FAQ_XLSX if _DEFAULT_FAQ_XLSX.exists() else _FALLBACK_FAQ_XLSX
         upload = form.get("faq_file")
-        if upload and hasattr(upload, "filename") and upload.filename:
-            dest = _SCRIPTS_DIR / upload.filename
-            contents = await upload.read()
-            dest.write_bytes(contents)
-            xlsx_path = dest
-            results.append({
-                "label": "Загрузка файла",
-                "status": "ok",
-                "detail": f"Файл '{upload.filename}' загружен ({len(contents):,} байт)",
-            })
-
-        if not xlsx_path.exists():
+        if not _has_upload(upload):
             results.append({
                 "label": "Файл FAQ",
                 "status": "error",
-                "detail": f"Файл не найден: {xlsx_path.name}",
+                "detail": "Загрузите xlsx-файл через форму — дефолтного больше нет.",
             })
             return results
 
-        try:
-            faq_result = await _run_seed_faq(xlsx_path, replace)
-            lang_info = ", ".join(
-                f"{lang.upper()}: {cnt}" for lang, cnt in faq_result["languages"].items() if cnt
-            )
+        with tempfile.TemporaryDirectory(prefix="seed_faq_") as tmp:
+            xlsx_path = Path(tmp) / upload.filename
+            size = await _save_upload(upload, xlsx_path)
             results.append({
-                "label": "FAQ",
+                "label": "Загрузка файла",
                 "status": "ok",
-                "detail": f"Добавлено: {faq_result['inserted']} записей. Языки: {lang_info}",
+                "detail": f"'{upload.filename}' загружен ({size:,} байт)",
             })
-        except Exception as exc:
-            results.append({
-                "label": "FAQ",
-                "status": "error",
-                "detail": str(exc),
-            })
+
+            try:
+                faq_result = await _run_seed_faq(xlsx_path, replace)
+                lang_info = ", ".join(
+                    f"{lang.upper()}: {cnt}" for lang, cnt in faq_result["languages"].items() if cnt
+                )
+                results.append({
+                    "label": "FAQ",
+                    "status": "ok",
+                    "detail": f"Добавлено: {faq_result['inserted']} записей. Языки: {lang_info}",
+                })
+            except Exception as exc:
+                results.append({"label": "FAQ", "status": "error", "detail": str(exc)})
 
         return results
 
@@ -313,62 +259,47 @@ class SeedAdmin(BaseView):
     async def _seed_branches(self, form: Any) -> list[dict]:
         results: list[dict] = []
         replace = form.get("mode") == "replace"
-        mode_label = "Перезапись" if replace else "Дополнение"
-        results.append({"label": "Режим", "status": "ok", "detail": mode_label})
+        results.append({"label": "Режим", "status": "ok", "detail": "Перезапись" if replace else "Дополнение"})
 
-        # Save any uploaded xlsx files over the default scripts/*.xlsx paths
-        # so seed_branches.py picks them up
-        for form_field, dest_path in (
-            ("filials_file", _BRANCH_FILIALS_XLSX),
-            ("offices_file", _BRANCH_OFFICES_XLSX),
-            ("points_file", _BRANCH_POINTS_XLSX),
-        ):
-            upload = form.get(form_field)
-            if upload and hasattr(upload, "filename") and upload.filename:
-                contents = await upload.read()
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                dest_path.write_bytes(contents)
-                results.append({
-                    "label": f"Загрузка {dest_path.name}",
-                    "status": "ok",
-                    "detail": f"Файл '{upload.filename}' сохранён ({len(contents):,} байт)",
-                })
-
-        # Verify all 3 source files are present
-        missing = [p.name for p in (
-            _BRANCH_FILIALS_XLSX, _BRANCH_OFFICES_XLSX, _BRANCH_POINTS_XLSX,
-        ) if not p.exists()]
+        uploads = {key: form.get(key) for key in ("filials_file", "offices_file", "points_file")}
+        missing = [key for key, up in uploads.items() if not _has_upload(up)]
         if missing:
             results.append({
                 "label": "Файлы филиалов",
                 "status": "error",
-                "detail": f"Не найдены: {', '.join(missing)}. Загрузите их через форму.",
+                "detail": f"Нужно загрузить все 3 xlsx через форму. Отсутствуют: {', '.join(missing)}.",
             })
             return results
 
-        try:
-            counts = await _run_seed_branches(replace)
-            results.append({
-                "label": "Филиалы (ЦБУ)",
-                "status": "ok",
-                "detail": f"В базе: {counts['filials']}",
-            })
-            results.append({
-                "label": "Офисы продаж",
-                "status": "ok",
-                "detail": f"В базе: {counts['sales_offices']}",
-            })
-            results.append({
-                "label": "Точки продаж",
-                "status": "ok",
-                "detail": f"В базе: {counts['sales_points']}",
-            })
-        except Exception as exc:
-            _logger.exception("Seed branches failed")
-            results.append({
-                "label": "Импорт филиалов",
-                "status": "error",
-                "detail": f"{type(exc).__name__}: {exc}",
-            })
+        with tempfile.TemporaryDirectory(prefix="seed_branches_") as tmp:
+            work_dir = Path(tmp)
+            paths: dict[str, Path] = {}
+            for key, upload in uploads.items():
+                dest = work_dir / upload.filename
+                size = await _save_upload(upload, dest)
+                paths[key] = dest
+                results.append({
+                    "label": f"Загрузка {upload.filename}",
+                    "status": "ok",
+                    "detail": f"{size:,} байт",
+                })
+
+            try:
+                counts = await _run_seed_branches(
+                    paths["filials_file"], paths["offices_file"], paths["points_file"], replace
+                )
+                for label, key in (
+                    ("Филиалы (ЦБУ)", "filials"),
+                    ("Офисы продаж", "sales_offices"),
+                    ("Точки продаж", "sales_points"),
+                ):
+                    results.append({"label": label, "status": "ok", "detail": f"В базе: {counts[key]}"})
+            except Exception as exc:
+                _logger.exception("Seed branches failed")
+                results.append({
+                    "label": "Импорт филиалов",
+                    "status": "error",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                })
 
         return results

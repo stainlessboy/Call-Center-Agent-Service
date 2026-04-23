@@ -1,19 +1,12 @@
-#!/usr/bin/env python3
+"""Seed CreditProductOffer rows from a JSON manifest (product pipeline stage 2)."""
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import delete
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.db.models import CreditProductOffer
 from app.db.session import get_session
@@ -66,14 +59,6 @@ INCOME_TYPE_MAP: Dict[str, str] = {
     "official": "official",
     "no_official": "no_official",
 }
-
-
-def _is_blank(value: object) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str) and not value.strip():
-        return True
-    return False
 
 
 def _clean(value: object) -> str:
@@ -146,8 +131,6 @@ def _parse_term_range_months(text: str) -> Tuple[Optional[int], Optional[int]]:
     if not any(token in lower for token in term_tokens):
         return None, None
 
-    # Exclude percent fragments, otherwise lines like "До 24 месяцев — 29 %"
-    # would pollute term parsing with rate values.
     cleaned = re.sub(r"\d+(?:[.,]\d+)?\s*%", "", text)
     nums = _extract_numbers(cleaned)
     if not nums:
@@ -249,7 +232,6 @@ def _parse_rate_lines(
         income_in_line = _detect_income_type(line)
         if income_in_line:
             current_income = income_in_line
-            # heading-only line without numbers
             if not re.search(r"\d", line):
                 continue
 
@@ -453,34 +435,3 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
             inserted += 1
         await session.commit()
     return inserted, skipped
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Seed normalized credit product offers from app/data/ai_chat_info JSON files."
-    )
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=Path("app/data/ai_chat_info.json"),
-        help="Path to ai_chat_info manifest JSON",
-    )
-    parser.add_argument(
-        "--replace",
-        action="store_true",
-        help="Delete existing credit_product_offers rows before insert",
-    )
-    args = parser.parse_args()
-
-    manifest = args.manifest.resolve()
-    if not manifest.exists():
-        raise SystemExit(f"Manifest not found: {manifest}")
-    if not args.replace:
-        raise SystemExit("Use --replace for deterministic reseed.")
-
-    inserted, skipped = asyncio.run(_seed(manifest_path=manifest, replace=args.replace))
-    print(f"Done. Inserted: {inserted}, skipped: {skipped}")
-
-
-if __name__ == "__main__":
-    main()

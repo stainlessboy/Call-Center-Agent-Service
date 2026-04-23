@@ -115,13 +115,21 @@ async def find_office(
 
     EXAMPLES:
     - "где ближайший филиал?" → find_office(office_type="filial", query="")
+    - "покажи все филиалы" / "дай информацию по филиалам" / "список филиалов" /
+      "филиалы банка" → find_office(office_type="filial", query="")
     - "филиал в Андижане" → find_office(office_type="filial", query="Андижан")
     - "мне нужен счёт для юрлица в Ташкенте" → find_office(office_type="filial", query="Ташкент")
     - "где мини-офис в Самарканде" → find_office(office_type="sales_office", query="Самарканд")
     - "авто кредит в KIA Андижан" → find_office(office_type="sales_point", query="KIA Andijon")
     - "BYD Tashkent" → find_office(office_type="sales_point", query="BYD Tashkent")
-    - "where is the nearest branch" → find_office(office_type="filial", query="")
-    - "Toshkentdagi filial" → find_office(office_type="filial", query="Toshkent")
+    - "where is the nearest branch" / "show me all branches" / "list of branches"
+      → find_office(office_type="filial", query="")
+    - "Toshkentdagi filial" / "barcha filiallar" / "filiallar ro'yxati"
+      → find_office(office_type="filial", query="")
+
+    IMPORTANT: vague "all branches / показать филиалы" messages DO call this tool
+    with `query=""` — do NOT ask the user to clarify. The tool returns up to 5
+    offices by default; the user can then narrow down by city.
 
     PARAMETERS:
       office_type: one of "filial" / "sales_office" / "sales_point".
@@ -154,10 +162,33 @@ async def get_currency_info(
 ) -> str:
     """Get the latest currency exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
 
+    HARD RULE: call ONLY if the message contains at least ONE of these explicit
+    currency tokens (case-insensitive, as a whole word or stem):
+      USD, EUR, RUB, GBP, KZT, CNY, UZS,
+      доллар, евро, рубль/рубл, фунт, тенге, юань, сум/сўм/so'm,
+      валюта, валют, обмен, обменник, конверт,
+      currency, exchange, convert,
+      valyuta, ayirboshlash, almashtirish, narx (only if next to a currency name).
+    If NONE of the above tokens are present in the user's message — DO NOT call
+    this tool. Route the message through `faq_lookup` or `find_office` instead.
+
     EXAMPLES:
     - "курс доллара" / "сколько сейчас евро" / "обменный курс" → get_currency_info()
-    - "USD rate today" → get_currency_info()
-    - "dollar narxi" → get_currency_info()
+    - "какой сегодня курс валют" → get_currency_info()
+    - "USD rate today" / "exchange rate" → get_currency_info()
+    - "dollar narxi" / "valyuta kursi qancha" → get_currency_info()
+
+    CRITICAL ANTI-PATTERN — DO NOT call in these cases:
+    - The substring "курс" appears INSIDE a different Uzbek word.
+      Uzbek verb stem `kursatmoq / курсатмок` means "to show / to provide".
+      Inflected forms include: курсатиш, курсатинг, курсатолисиз,
+      курсатолисизме, курсатиб, курсатади, ko'rsatish, ko'rsatib.
+      Example: "Филиалларингда навбатсиз хизмат курсатолисизме"
+        = "Do you provide queue-free service in your branches?"
+        → THIS IS NOT ABOUT CURRENCY. Call faq_lookup("навбатсиз хизмат").
+    - "курс кредита / курс обучения / курс лекций" — these are not exchange rates.
+    - Any message about service, branches, schedule, hours, products — no
+      currency token present, so this tool MUST NOT be called.
     """
     from app.utils.cbu_rates import fetch_cbu_rates
 
@@ -381,6 +412,8 @@ async def faq_lookup(
     - "как обновить паспорт в приложении" → faq_lookup(query="обновить паспорт в приложении")
     - "можно ли досрочно погасить кредит" → faq_lookup(query="досрочное погашение кредита")
     - "как заблокировать карту" → faq_lookup(query="блокировка карты")
+    - "есть ли обслуживание без очереди в филиалах" → faq_lookup(query="обслуживание без очереди")
+    - "Филиалларингда навбатсиз хизмат курсатолисизме" → faq_lookup(query="навбатсиз хизмат")
     - "how to change phone number" → faq_lookup(query="change phone number")
     - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
 

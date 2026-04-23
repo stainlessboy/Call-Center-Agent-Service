@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -69,31 +66,6 @@ async def _load_faq_items(language: str | None = None) -> list[dict[str, str]]:
         if q and a:
             items.append({"q": str(q), "a": str(a)})
     return items
-
-
-@lru_cache(maxsize=1)
-def _load_builtin_faq_alias_items() -> tuple[dict[str, Any], ...]:
-    try:
-        path = Path(__file__).resolve().parents[1] / "data" / "faq.json"
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        items = raw.get("items") if isinstance(raw, dict) else None
-        if not isinstance(items, list):
-            return tuple()
-        parsed: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            q = str(item.get("q") or "").strip()
-            a = str(item.get("a") or "").strip()
-            aliases_raw = item.get("aliases") or []
-            aliases = [str(x).strip() for x in aliases_raw if str(x).strip()] if isinstance(aliases_raw, list) else []
-            if not q or not a:
-                continue
-            parsed.append({"q": q, "a": a, "aliases": aliases})
-        return tuple(parsed)
-    except Exception:
-        logger.exception("Failed to load builtin FAQ aliases")
-        return tuple()
 
 
 async def _load_credit_product_offers() -> list[dict[str, Any]]:

@@ -1269,20 +1269,20 @@ class TestBranchesI18n:
 
 class TestSeedBranchesFuzzyMatching:
     def test_normalize_strips_tsbu_and_punctuation(self):
-        from scripts.seed_branches import _normalize
+        from app.admin.services.branches_seed import _normalize
         assert _normalize('ЦБУ "Андижан"') == "андижан"
         assert _normalize("BXM 'Andijon'") == "andijon"
         assert _normalize("  Самарканд  ") == "самарканд"
 
     def test_resolve_parent_exact_match(self):
-        from scripts.seed_branches import _resolve_parent
+        from app.admin.services.branches_seed import _resolve_parent
         index = {"андижан": 1, "самарканд": 2, "автотранспорт": 13}
         assert _resolve_parent("Андижан", index) == 1
         assert _resolve_parent('ЦБУ "Самарканд"', index) == 2
 
     def test_resolve_parent_fuzzy_match_variants(self):
         """Real-world: 'Автотранспортный' (sales_office) ↔ 'Автотранспорт' (filial)."""
-        from scripts.seed_branches import _resolve_parent
+        from app.admin.services.branches_seed import _resolve_parent
         index = {"автотранспорт": 13, "джизак": 4}
         assert _resolve_parent("Автотранспортный", index) == 13
         # Кириллические варианты написания (Жиззах ↔ Джизак) — fuzzy cutoff=0.6
@@ -1290,7 +1290,7 @@ class TestSeedBranchesFuzzyMatching:
         assert _resolve_parent("Жиззах", index) in (4, None)  # allow None if too different
 
     def test_resolve_parent_no_match_returns_none(self):
-        from scripts.seed_branches import _resolve_parent
+        from app.admin.services.branches_seed import _resolve_parent
         index = {"андижан": 1}
         assert _resolve_parent("Мурманск", index) is None
         assert _resolve_parent("", index) is None

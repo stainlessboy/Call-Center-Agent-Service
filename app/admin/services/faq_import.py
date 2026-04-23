@@ -1,16 +1,9 @@
-#!/usr/bin/env python3
+"""Parse FAQ xlsx files and import into the FaqItem table."""
 from __future__ import annotations
 
-import argparse
-import asyncio
 import re
-import sys
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from openpyxl import load_workbook
 from sqlalchemy import delete
@@ -253,47 +246,3 @@ async def _import_items(items: List[dict[str, Optional[str]]], replace: bool, dr
             await session.execute(delete(FaqItem))
         session.add_all([FaqItem(**item) for item in items])
         await session.commit()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Import FAQ items from an .xlsx file into the database.")
-    parser.add_argument("path", type=Path, help="Path to FAQ .xlsx file")
-    parser.add_argument("--sheet", type=str, help="Sheet name (defaults to auto-detect all language sheets)")
-    parser.add_argument("--lang", type=str, choices=["ru", "en", "uz"], help="Language code for single-sheet import")
-    parser.add_argument("--replace", action="store_true", help="Delete existing FAQ items before import")
-    parser.add_argument("--limit", type=int, help="Import only first N rows per sheet (for testing)")
-    parser.add_argument("--dry-run", action="store_true", help="Parse and report rows without writing to DB")
-    args = parser.parse_args()
-
-    if not args.path.exists():
-        raise SystemExit(f"File not found: {args.path}")
-
-    items = _extract_multilingual_items(args.path, args.sheet, args.lang, args.limit)
-    print(f"Parsed {len(items)} FAQ rows from {args.path}")
-    if items:
-        filled_counts = {
-            "ru": sum(1 for item in items if item.get("question_ru") and item.get("answer_ru")),
-            "en": sum(1 for item in items if item.get("question_en") and item.get("answer_en")),
-            "uz": sum(1 for item in items if item.get("question_uz") and item.get("answer_uz")),
-        }
-        print("Filled languages:", ", ".join(f"{lang}={count}" for lang, count in sorted(filled_counts.items())))
-        print("Sample:")
-        for item in items[:3]:
-            print(f"- [ru] Q: {item.get('question_ru')}")
-            print(f"      A: {item.get('answer_ru')}")
-            if item.get("question_en"):
-                print(f"  [en] Q: {item.get('question_en')}")
-                print(f"      A: {item.get('answer_en')}")
-            if item.get("question_uz"):
-                print(f"  [uz] Q: {item.get('question_uz')}")
-                print(f"      A: {item.get('answer_uz')}")
-    if args.dry_run:
-        print("Dry-run mode: no changes were written to the database.")
-        return
-
-    asyncio.run(_import_items(items, args.replace, args.dry_run))
-    print("Import complete.")
-
-
-if __name__ == "__main__":
-    main()

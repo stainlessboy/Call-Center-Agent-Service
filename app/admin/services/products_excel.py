@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
+"""Parse the AI CHAT INFO.xlsx workbook into a JSON manifest + split files.
+
+The manifest + split JSON files serve as the intermediate layer between the
+uploaded Excel and the per-category seed services (credits/deposits/cards).
+"""
 from __future__ import annotations
 
-import argparse
-import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -85,7 +86,6 @@ def _parse_sheet(path: Path, sheet_name: str) -> Dict[str, Any]:
             i += 1
             continue
 
-        # find header row
         i += 1
         while i < len(rows_raw) and all(_is_blank(v) for v in rows_raw[i]):
             i += 1
@@ -134,6 +134,8 @@ def _build_split_manifest(
     split_dir: Path,
     manifest_base_dir: Path,
 ) -> Dict[str, Dict[str, str]]:
+    import json
+
     split_dir.mkdir(parents=True, exist_ok=True)
     for stale in split_dir.glob("*.json"):
         stale.unlink()
@@ -170,45 +172,3 @@ def _build_split_manifest(
                 section_path = str(out_path)
             manifest.setdefault(sheet_key, {})[section_name] = section_path
     return manifest
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Export AI CHAT INFO.xlsx into JSON.")
-    parser.add_argument("path", type=Path, help="Path to AI CHAT INFO.xlsx")
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=Path("app/data/ai_chat_info.json"),
-        help="Output JSON path (default: app/data/ai_chat_info.json)",
-    )
-    parser.add_argument(
-        "--split-dir",
-        type=Path,
-        default=Path("app/data/ai_chat_info"),
-        help="Directory for split section JSON files (default: app/data/ai_chat_info)",
-    )
-    args = parser.parse_args()
-
-    if not args.path.exists():
-        raise SystemExit(f"File not found: {args.path}")
-
-    workbook = {
-        "credit_products": _parse_sheet(args.path, "Кредитные продукты"),
-        "noncredit_products": _parse_sheet(args.path, "Некредитные продукты"),
-    }
-    split_manifest = _build_split_manifest(workbook, args.split_dir, args.out.parent)
-    result = {
-        "source_file": str(args.path),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "format_version": 2,
-        "layout": split_manifest,
-    }
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {args.out}")
-    print(f"Wrote split sections to {args.split_dir}")
-
-
-if __name__ == "__main__":
-    main()

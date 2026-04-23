@@ -1,19 +1,12 @@
-#!/usr/bin/env python3
+"""Seed CardProductOffer rows from a JSON manifest."""
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from sqlalchemy import delete
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.db.models import CardProductOffer
 from app.db.session import get_session
@@ -203,21 +196,3 @@ async def _seed(manifest_path: Path, replace: bool) -> tuple[int, int]:
             inserted += 1
         await session.commit()
     return inserted, skipped
-
-
-def main() -> None:
-    p = argparse.ArgumentParser(description="Seed normalized card offers from ai_chat_info manifest.")
-    p.add_argument("--manifest", type=Path, default=Path("app/data/ai_chat_info.json"))
-    p.add_argument("--replace", action="store_true")
-    args = p.parse_args()
-    manifest = args.manifest.resolve()
-    if not manifest.exists():
-        raise SystemExit(f"Manifest not found: {manifest}")
-    if not args.replace:
-        raise SystemExit("Use --replace for deterministic reseed.")
-    inserted, skipped = asyncio.run(_seed(manifest, args.replace))
-    print(f"Done. Inserted: {inserted}, skipped: {skipped}")
-
-
-if __name__ == "__main__":
-    main()

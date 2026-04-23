@@ -213,9 +213,8 @@ LLM получает историю сообщений + системный пр
 3. Для каждого FAQ вычисляет similarity:
    - Полное вхождение → 1.0
    - Иначе: `SequenceMatcher ratio + token set overlap`
-4. Также проверяет builtin FAQ из `app/data/faq.json` (алиасы)
-5. Если `best_score ≥ 0.62` → возвращает ответ
-6. Иначе → `None` (fallback)
+4. Если `best_score ≥ 0.62` → возвращает ответ
+5. Иначе → `None` (fallback)
 
 ---
 
@@ -313,13 +312,15 @@ complex-agent-api/
 │   ├── admin/
 │   │   ├── views.py            # SQLAdmin ModelView (9 классов)
 │   │   ├── auth.py             # Авторизация (env-based)
-│   │   └── setup.py            # Инициализация SQLAdmin
+│   │   ├── setup.py            # Инициализация SQLAdmin
+│   │   ├── seed_view.py        # /admin/seed — форма загрузки xlsx
+│   │   └── services/           # Парсинг xlsx + сид в БД
 │   └── utils/
 │       ├── faq_tools.py        # FAQ similarity search
 │       ├── pdf_generator.py    # Аннуитетный PDF-график
 │       ├── text_utils.py       # Нормализация, стемминг
 │       └── data_loaders.py     # Async загрузчики из БД
-├── scripts/                    # Seed-скрипты
+├── scripts/                    # chat_cli.py — локальный REPL для агента
 ├── tests/                      # Тесты
 ├── nginx/                      # Конфиги nginx
 ├── .github/workflows/
@@ -387,12 +388,15 @@ nano .env
 
 ```bash
 alembic upgrade head
-
-python scripts/seed_credit_product_offers.py --replace
-python scripts/seed_deposit_product_offers.py --replace
-python scripts/seed_card_product_offers.py --replace
-python scripts/import_faq_xlsx.py "scripts/FAQ.xlsx" --replace
 ```
+
+Продукты / FAQ / филиалы загружаются через админку:
+
+1. Запусти приложение (см. ниже).
+2. Зайди в `/admin/seed` (логин — `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
+3. Загрузи в форме актуальные xlsx-файлы (продукты, FAQ, три файла по филиалам).
+
+CLI seed-скрипты удалены — админ-форма теперь единственная точка входа для сида.
 
 ### 5. Запустить
 
@@ -715,7 +719,7 @@ elif category == "insurance":
 
 **Шаг 6.** Добавить вопросы калькулятора если нужны (в `AGENT_TEXTS` → `calc_questions`).
 
-**Шаг 7.** Создать seed-скрипт в `scripts/`.
+**Шаг 7.** Добавить сервис сида в `app/admin/services/` (парсинг Excel → запись в БД) и подключить его из `app/admin/seed_view.py`.
 
 LLM сам будет направлять запросы на `get_products(category="insurance")`.
 
@@ -758,12 +762,10 @@ if dialog.get("flow") == "my_feature":
 
 ### Добавление новых FAQ
 
-```bash
-# Из Excel файла (вопрос + ответ на 3 языках)
-python scripts/import_faq_xlsx.py "scripts/FAQ.xlsx" --replace
+- Из Excel: `/admin/seed` → форма «FAQ» → загрузить xlsx (листы `RU`/`EN`/`UZ`).
+- Или вручную: `https://agent-bot.uz/admin/` → FaqItems → Create.
 
-# Или через SQLAdmin: https://agent-bot.uz/admin/ → FaqItems → Create
-```
+Внутри: логика парсинга лежит в `app/admin/services/faq_import.py`.
 
 ### Добавление переводов
 

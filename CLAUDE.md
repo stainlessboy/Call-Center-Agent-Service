@@ -21,12 +21,9 @@ alembic revision -m "description" --autogenerate  # after model changes
 # Start the app (uvicorn on APP_HOST:APP_PORT, default 0.0.0.0:8001)
 python3 main.py
 
-# Seed product data
-python3 scripts/seed_credit_product_offers.py --replace
-python3 scripts/seed_deposit_product_offers.py --replace
-python3 scripts/seed_card_product_offers.py --replace
-python3 scripts/import_faq_xlsx.py "scripts/FAQ.xlsx" --replace
-python3 scripts/seed_branches.py
+# Seed product data, FAQ, and branches:
+#   open http://127.0.0.1:8001/admin/seed and upload the xlsx files via the form.
+# CLI seed scripts were removed — admin form is the only entry point now.
 
 # Run tests
 python3 -m pytest tests/test_agent.py -v
@@ -79,7 +76,15 @@ app/
 │   ├── auth.py               # Env-based authentication backend
 │   ├── setup.py              # SQLAdmin initialization and mounting
 │   ├── dashboard_view.py     # Custom admin dashboard
-│   └── dashboard_data.py     # Dashboard data queries
+│   ├── dashboard_data.py     # Dashboard data queries
+│   ├── seed_view.py          # /admin/seed — upload xlsx → DB
+│   └── services/             # Excel parsing + DB seeding (called by seed_view.py)
+│       ├── products_excel.py # AI CHAT INFO.xlsx → JSON manifest
+│       ├── credit_seed.py    # JSON → CreditProductOffer
+│       ├── deposit_seed.py   # JSON → DepositProductOffer
+│       ├── card_seed.py      # JSON → CardProductOffer
+│       ├── faq_import.py     # FAQ xlsx → FaqItem
+│       └── branches_seed.py  # 3 xlsx → Filial/SalesOffice/SalesPoint
 ├── api/
 │   └── fastapi_app.py        # FastAPI app, webhook, /operator/send, inactivity watcher
 ├── bot/
@@ -102,11 +107,10 @@ app/
 │   ├── models.py             # SQLAlchemy ORM models
 │   ├── session.py            # Async session factory
 │   └── alembic/              # Alembic migrations
-├── config.py                 # Dataclass settings with @lru_cache get_settings()
-└── data/ai_chat_info/        # Product data JSON files
+└── config.py                 # Dataclass settings with @lru_cache get_settings()
 
 chat-middleware-mock/          # Mock middleware for testing
-scripts/                       # Seed and import scripts
+scripts/                       # Dev tools (chat_cli.py — local agent REPL)
 tests/                         # pytest tests
 templates/                     # Jinja2 templates (dashboard, sqladmin)
 nginx/                         # Nginx config for production
@@ -246,7 +250,7 @@ Important optional:
 4. Add loading logic to `_get_products_by_category()` in `app/agent/products.py`
 5. Add translations in `app/agent/i18n.py`
 6. Add data loader to `app/utils/data_loaders.py` if needed
-7. Create seed script in `scripts/`
+7. Add a seeding service in `app/admin/services/` (parses Excel → writes to DB) and wire it from `app/admin/seed_view.py`
 8. The LLM will automatically route to `get_products(category)` — no intent registration needed
 
 ## Adding New Tools
@@ -269,5 +273,5 @@ Important optional:
 ### Custom Commands (`.claude/commands/`)
 - `/test` — run project tests
 - `/migrate` — create and apply Alembic migrations
-- `/seed` — run all seed scripts
+- `/seed` — prints instructions for seeding via `/admin/seed` (no CLI scripts)
 - `/check` — syntax check all Python files
