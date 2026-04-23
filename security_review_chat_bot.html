@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>AsakaBank Telegram-консультант — взаимодействие с OpenAI и обработка персональных данных</title>
+<style>
+  :root {
+    --text: #1f2328;
+    --muted: #6b7280;
+    --line: #d0d7de;
+    --bg: #ffffff;
+    --panel: #f6f8fa;
+    --ok: #1a7f37;
+    --ok-bg: #dafbe1;
+    --warn: #9a6700;
+    --warn-bg: #fff8c5;
+    --danger: #cf222e;
+    --danger-bg: #ffebe9;
+    --info: #0969da;
+    --info-bg: #ddf4ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 24px 80px;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  main { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 20px; margin: 36px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 20px 0 8px; }
+  p, ul, ol { margin: 8px 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  code, pre { font-family: var(--mono); font-size: 13px; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px; }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+  .subtitle { color: var(--muted); margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .callout {
+    border-left: 4px solid var(--info);
+    background: var(--info-bg);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    margin: 12px 0;
+  }
+  .callout.ok { border-color: var(--ok); background: var(--ok-bg); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.danger { border-color: var(--danger); background: var(--danger-bg); }
+  .callout b { display: block; margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  td.ok { color: var(--ok); font-weight: 600; }
+  td.warn { color: var(--warn); font-weight: 600; }
+  td.danger { color: var(--danger); font-weight: 600; }
+  .flow {
+    font-family: var(--mono);
+    white-space: pre;
+    background: var(--panel);
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+  .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 12px;
+    background: #eff6fc; color: #0550ae;
+    padding: 2px 8px; border-radius: 10px; margin: 0 4px 2px 0;
+  }
+  .tag.danger { background: var(--danger-bg); color: var(--danger); }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .footnote { color: var(--muted); font-size: 13px; }
+  .toc { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 18px; margin: 12px 0 24px; }
+  .toc ol { margin: 4px 0; }
+  .hl-pii { background: #ffebe9; padding: 0 2px; border-radius: 2px; }
+  .hl-tok { background: var(--panel); border: 1px dashed #b1bac4; padding: 0 3px; border-radius: 2px; }
+  .hl-ok { background: #dafbe1; padding: 0 2px; border-radius: 2px; }
+  @media print { body { padding: 16px; } .toc { page-break-after: always; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>AsakaBank Telegram-консультант</h1>
+<p class="subtitle">Взаимодействие с OpenAI и обработка персональных данных клиентов</p>
+<p class="meta">Документ для Службы информационной безопасности · AsakaBank · 23 апреля 2026</p>
+
+<div class="callout ok">
+  <b>TL;DR</b>
+  Сервис — Telegram-бот для консультирования клиентов по банковским продуктам (FAQ, подбор кредитов/вкладов/карт, калькулятор платежей, передача оператору).
+  В OpenAI <b>не передаются</b>: ФИО, паспортные данные, ПИНФЛ, ИНН, номера телефонов клиентов, номера карт и счетов, балансы, СМС-коды, пароли.
+  Системный промпт <b>запрещает</b> агенту запрашивать любые персональные данные — для операций, требующих верификации,
+  агент обязан передать клиента живому оператору через тулзу <code>request_operator(reason="identity_required")</code>.
+  Контактные данные лида (имя, телефон), которые клиент вводит после расчёта в калькуляторе, перед попаданием
+  в историю диалога <b>маскируются</b> на токены <code>[NAME]</code> и <code>[PHONE]</code> и в OpenAI уходят уже в обезличенном виде.
+  Сырые имя и телефон сохраняются в локальной PostgreSQL только в таблице <code>leads</code>, инфраструктура полностью
+  размещена в Узбекистане.
+</div>
+
+<div class="toc">
+  <b>Содержание</b>
+  <ol>
+    <li><a href="#what">Что делает сервис</a></li>
+    <li><a href="#flow">Схема движения данных</a></li>
+    <li><a href="#legal">Правовая база</a></li>
+    <li><a href="#inventory">Что уходит в OpenAI и что нет</a></li>
+    <li><a href="#prompt">Защитные меры в системном промпте</a></li>
+    <li><a href="#masking">Маскирование PII в lead-форме</a></li>
+    <li><a href="#operator">Передача оператору при идентификации</a></li>
+    <li><a href="#example">Живой пример: как лид попадает (или не попадает) в OpenAI</a></li>
+    <li><a href="#storage">Что хранится локально в Узбекистане</a></li>
+    <li><a href="#audit">Аудит и наблюдаемость</a></li>
+    <li><a href="#code">Ссылки на код</a></li>
+  </ol>
+</div>
+
+<h2 id="what">1. Что делает сервис</h2>
+<p>
+  Telegram-бот AsakaBank работает как первая линия консультаций для клиентов. Архитектура:
+  <span class="tag">aiogram</span> (Telegram) +
+  <span class="tag">FastAPI</span> (вебхук) +
+  <span class="tag">LangGraph</span> (оркестрация ИИ-агента) +
+  <span class="tag">SQLAlchemy + PostgreSQL</span> (БД).
+  Используется модель OpenAI <code>gpt-4o-mini</code> по умолчанию (настраивается через переменную окружения <code>OPENAI_MODEL</code>).
+</p>
+<p>
+  Бот выполняет следующие задачи:
+</p>
+<ul>
+  <li><b>FAQ</b> — отвечает на типовые вопросы о продуктах банка из базы знаний (импортирована из Excel).</li>
+  <li><b>Подбор продуктов</b> — показывает пользователю ипотеку, автокредит, микрозайм, образовательный кредит, вклады, дебетовые/валютные карты.</li>
+  <li><b>Калькулятор</b> — детерминированно рассчитывает ежемесячные платежи и доход по вкладу, генерирует PDF-график амортизации.</li>
+  <li><b>Лид-форма</b> — после расчёта предлагает клиенту перезвон, собирает имя и телефон, сохраняет в таблицу <code>leads</code>.</li>
+  <li><b>Передача оператору</b> — для операций, требующих верификации личности (блокировка карты, смена пароля, проверка баланса и т. п.) и при явной просьбе клиента.</li>
+  <li><b>Гибридный режим</b> — оператор может «забрать» сессию и общаться с клиентом напрямую, ИИ при этом не отвечает.</li>
+</ul>
+<p>
+  Модель LLM здесь работает <b>как «маршрутизатор и формулятор ответов»</b>: она выбирает, какой инструмент вызвать
+  (например, <code>get_products(category="mortgage")</code> или <code>faq_lookup(query=...)</code>), и формулирует
+  человеческий текст по результату. Все денежные расчёты, поиск по FAQ, сопоставление продуктов и валидация условий
+  выполняются <b>детерминированным кодом</b>, не моделью.
+</p>
+
+<h2 id="flow">2. Схема движения данных</h2>
+<div class="flow">┌─────────────┐   1. Сообщение клиента          ┌────────────────────────────────┐
+│   Клиент    │ ──────────────────────────────▶ │ Telegram Bot API               │
+│ (Telegram)  │                                 │ (внешний сервис, Telegram)     │
+└─────────────┘                                 └──────────────┬─────────────────┘
+                                                               │ webhook
+                                                               ▼
+                                       ┌─────────────────────────────────────┐
+                                       │ FastAPI (Docker, Uzbekistan)        │
+                                       │ POST /telegram/webhook              │
+                                       │ ↳ aiogram Dispatcher                │
+                                       │ ↳ ChatService.handle_user_message() │
+                                       └──────────────┬──────────────────────┘
+                                                      │
+                       ┌──────────────────────────────┼──────────────────────────────┐
+                       │ 2a. Сохранить                │ 2b. Передать в LangGraph     │
+                       │     сырое сообщение в БД     │     агент (только если       │
+                       │                              │     human_mode == False)     │
+                       ▼                              ▼
+            ┌─────────────────────┐      ┌─────────────────────────────────┐
+            │ PostgreSQL (в РУз)  │      │ LangGraph: router → faq │       │
+            │  · users            │      │           calc_flow │ human     │
+            │  · chat_sessions    │      └─────────────┬───────────────────┘
+            │  · messages (raw)   │                    │
+            │  · leads (raw)      │     3. Слой подготовки промпта (наш код)
+            │  · checkpoints      │     ┌──────────────┴───────────────────┐
+            └─────────────────────┘     │ · обрезка истории до 12          │
+            Все данные клиента          │ · маскирование PII в lead-step   │
+            остаются в Узбекистане      │   ([NAME], [PHONE])              │
+                                        │ · добавление dialog state в XML  │
+                                        │ · добавление system prompt       │
+                                        └──────────────┬───────────────────┘
+                                                       │
+                                  4. Запрос с обезличенным контекстом
+                                                       ▼
+                                       ┌─────────────────────────────────────┐
+                                       │   OpenAI API (внешний, США)         │
+                                       │   gpt-4o-mini                       │
+                                       │   ─ system policy                   │
+                                       │   ─ dialog state XML                │
+                                       │   ─ history (без PII лида)          │
+                                       │   ─ tool results (FAQ, продукты)    │
+                                       └──────────────┬──────────────────────┘
+                                                      │
+                                  5. Ответ модели (текст или вызов тулзы)
+                                                      ▼
+                                       ┌─────────────────────────────────────┐
+                                       │ Наш код: применить тулзу,           │
+                                       │ при необходимости — повторно вызвать│
+                                       │ OpenAI (макс 3 раунда), сохранить   │
+                                       │ ответ в БД, отправить в Telegram    │
+                                       └──────────────┬──────────────────────┘
+                                                      │
+                                                      ▼
+                                                 Клиент</div>
+
+<p>
+  <b>Маскирование</b> применяется в одной точке — функции <code>_finalize_turn()</code> в
+  <code>app/agent/nodes/helpers.py</code>. Она вызывается из узла <code>node_calc_flow</code> с явным параметром
+  <code>mask_user_text="[NAME]"</code> или <code>mask_user_text="[PHONE]"</code> на шагах сбора имени и телефона
+  лида. Это единственное место, где сырая реплика клиента подменяется токеном перед попаданием в историю диалога,
+  откуда она потом ушла бы в OpenAI.
+</p>
+
+<h2 id="legal">3. Правовая база</h2>
+<ul>
+  <li><b>Закон Республики Узбекистан «О банках и банковской деятельности», ст. 39</b> — банковской тайной являются
+      сведения об операциях, счетах и вкладах клиентов, позволяющие идентифицировать конкретного клиента. В OpenAI
+      такие сведения не передаются: нет ни идентификатора клиента (ПИНФЛ, паспорт, ФИО), ни номеров счетов/карт,
+      ни сведений о реальных операциях клиента.</li>
+  <li><b>Закон Республики Узбекистан «О персональных данных» — ЗРУ-547, ст. 27-1</b> — требование локализации
+      баз данных, содержащих персональные данные граждан Узбекистана, на территории Республики Узбекистан.
+      Все базы данных сервиса (PostgreSQL, чекпоинты LangGraph) размещены в контейнерах внутри инфраструктуры
+      банка в РУз. Сырые персональные данные (имя/телефон лида) хранятся только в этих локальных базах.</li>
+</ul>
+<p>
+  <b>Подход сервиса:</b> в OpenAI не передаётся ни одного прямого идентификатора клиента и ни одного
+  персонального данного. Контактные данные лида (имя, телефон) перед отправкой в OpenAI подменяются на
+  обезличенные токены <code>[NAME]</code> и <code>[PHONE]</code>. Системный промпт явно запрещает
+  ИИ-агенту запрашивать у клиента какие-либо персональные данные.
+</p>
+
+<h2 id="inventory">4. Что уходит в OpenAI и что нет</h2>
+
+<table>
+  <thead>
+    <tr><th style="width:36%">Категория данных</th><th style="width:18%">В OpenAI?</th><th>Механизм</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ФИО клиента</td>
+      <td class="ok">НЕТ</td>
+      <td>Бот никогда не запрашивает ФИО — это запрещено системным промптом
+          (см. раздел <a href="#prompt">5</a>). Если клиент введёт ФИО на шаге лид-формы
+          «Как вас зовут?» — оно <b>маскируется</b> на токен <code>[NAME]</code> перед попаданием в историю
+          диалога (см. раздел <a href="#masking">6</a>).</td>
+    </tr>
+    <tr>
+      <td>Номер телефона</td>
+      <td class="ok">НЕТ</td>
+      <td>Аналогично ФИО: бот не запрашивает телефон в свободном диалоге, а на шаге лид-формы
+          «Укажите ваш номер телефона» введённое значение <b>маскируется</b> на токен <code>[PHONE]</code>.</td>
+    </tr>
+    <tr>
+      <td>Паспорт, ПИНФЛ, ИНН, дата рождения, адрес</td>
+      <td class="ok">НЕТ</td>
+      <td>Бот никогда не запрашивает эти данные. Системный промпт обязывает агента передать клиента
+          оператору через <code>request_operator(reason="identity_required")</code> для любой операции,
+          требующей такой информации.</td>
+    </tr>
+    <tr>
+      <td>Номера карт, счетов, IBAN, балансы</td>
+      <td class="ok">НЕТ</td>
+      <td>Сервис не имеет интеграций с АБС/процессингом, физически не имеет доступа к балансам и реквизитам
+          клиента. Любая операция со счётом передаётся оператору.</td>
+    </tr>
+    <tr>
+      <td>СМС-коды, пароли, ПИН-коды, кодовые слова</td>
+      <td class="ok">НЕТ</td>
+      <td>Запрещены системным промптом. Если клиент сам пришлёт такие данные — агент обязан не повторять
+          их в ответе и сразу переключить на оператора.</td>
+    </tr>
+    <tr>
+      <td>Telegram <code>user_id</code>, <code>username</code>, <code>first_name</code></td>
+      <td class="ok">НЕТ</td>
+      <td>Telegram-метаданные сохраняются в локальной таблице <code>users</code> для технической идентификации
+          сессий, но <b>не попадают</b> в массив <code>messages</code>, который отправляется в OpenAI
+          (см. <code>app/agent/agent.py</code>).</td>
+    </tr>
+    <tr>
+      <td>История сообщений диалога</td>
+      <td class="warn">ЧАСТИЧНО</td>
+      <td>Передаются последние 12 сообщений (настраивается через <code>MAX_DIALOG_MESSAGES</code>).
+          Сообщения, в которых клиент мог ввести имя/телефон в lead-форме, <b>уже замаскированы</b>
+          на <code>[NAME]</code>/<code>[PHONE]</code> до попадания в эту историю.</td>
+    </tr>
+    <tr>
+      <td>Текст вопросов клиента (FAQ, выбор продукта)</td>
+      <td class="warn">ДА</td>
+      <td>Свободный текст пользователя («какие у вас вклады?», «хочу ипотеку на 5 лет») передаётся в
+          OpenAI — это необходимо для понимания запроса. Системный промпт обязывает агента не запрашивать
+          PII в таких вопросах.</td>
+    </tr>
+    <tr>
+      <td>Финансовые параметры калькулятора (сумма, срок, первоначальный взнос)</td>
+      <td class="warn">ДА</td>
+      <td>Числа передаются в OpenAI для парсинга (отделить «50 млн» от «50 000 000»). Сами по себе
+          числа без идентификатора клиента <b>не образуют банковской тайны</b> и <b>не являются ПД</b>:
+          невозможно сопоставить «10 миллионов на 5 лет» с конкретным человеком, имея только это число.</td>
+    </tr>
+    <tr>
+      <td>Названия продуктов банка, ставки, условия</td>
+      <td class="ok">ДА</td>
+      <td>Публичная информация о продуктах AsakaBank. Передаётся через результаты тулз
+          <code>get_products()</code>, <code>select_product()</code>.</td>
+    </tr>
+    <tr>
+      <td>FAQ-ответы из базы знаний</td>
+      <td class="ok">ДА</td>
+      <td>Публичная база знаний о продуктах. Передаётся в контекст через тулзу <code>faq_lookup()</code>.</td>
+    </tr>
+    <tr>
+      <td>Информация о филиалах (адреса, часы)</td>
+      <td class="ok">ДА</td>
+      <td>Публичная информация. Передаётся через тулзу <code>find_office()</code>.</td>
+    </tr>
+    <tr>
+      <td>Системный промпт + dialog state в XML</td>
+      <td class="ok">ДА</td>
+      <td>Текст инструкций для агента (роль, политика, правила) и текущее состояние диалога
+          (<code>flow</code>, <code>category</code>, выбранный продукт). Не содержит PII.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="prompt">5. Защитные меры в системном промпте</h2>
+
+<p>
+  Системный промпт ИИ-агента (<code>app/agent/i18n.py</code>) содержит отдельный обязательный раздел,
+  запрещающий запрашивать у клиента любые персональные данные. Раздел продублирован в трёх языковых
+  версиях промпта (русский, английский, узбекский), каждая из которых отправляется в OpenAI в зависимости
+  от языка клиента.
+</p>
+
+<h3>5.1. Русская версия — раздел «ПЕРСОНАЛЬНЫЕ ДАННЫЕ КЛИЕНТА»</h3>
+<pre>## ПЕРСОНАЛЬНЫЕ ДАННЫЕ КЛИЕНТА — СТРОГИЙ ЗАПРЕТ
+НИКОГДА не запрашивай у клиента и не предлагай ему прислать: ФИО, паспортные
+данные, ПИНФЛ, ИНН, дату рождения, адрес, номер телефона, номер карты или
+счёта, баланс, кодовое слово, пароль, ПИН-код, СМС-код, реквизиты документов.
+
+Если для решения вопроса нужны такие данные — НЕ собирай их сам, вызови
+`request_operator(reason="identity_required")` и сообщи клиенту, что специалист
+поможет с верификацией.
+
+Если клиент сам присылает такие данные — НЕ повторяй их в ответе, не
+подтверждай и не запрашивай дополнительно. Сразу переключай на оператора через
+`request_operator(reason="identity_required")`.
+
+Контактные данные (имя, телефон) для перезвона запрашиваются ТОЛЬКО встроенной
+формой после расчёта в калькуляторе — ты в этом процессе не участвуешь и сам
+имя/телефон никогда не спрашиваешь.</pre>
+
+<h3>5.2. Раздел «ПЕРЕНАПРАВЛЕНИЕ НА ОПЕРАТОРА»</h3>
+<p>В дополнение, существующий раздел промпта явно перечисляет операции, требующие верификации:</p>
+<pre>Вызывай `request_operator()` ТОЛЬКО в этих случаях:
+1. Клиент ЯВНО просит оператора («позови оператора», «хочу оператора»,
+   «живой оператор») — вызывай сразу, без лишних вопросов.
+2. Клиент просит операцию, требующую верификации личности (блок/разблок
+   карты, смена телефона/пароля, перевод денег, проверка счёта) — вызывай с
+   `reason="identity_required"`.
+3. Не можешь понять клиента после 2-3 попыток переспросить — вызывай с
+   `reason="unclear_message"`.</pre>
+
+<div class="callout ok">
+  <b>Эффект для ИБ</b>
+  Любая ситуация, в которой банковская операция требует подтверждения личности клиента,
+  отправляет диалог к живому оператору без сбора PII со стороны ИИ. Промпт обязывает
+  модель НЕ повторять PII даже если клиент прислал его сам — это снижает риск утечки
+  через ответ модели.
+</div>
+
+<h2 id="masking">6. Маскирование PII в lead-форме</h2>
+
+<p>
+  Лид-форма — единственное место в боте, где клиента просят указать имя и телефон. Это происходит
+  <b>после</b> того, как клиент рассчитал параметры кредита/вклада в калькуляторе и согласился на
+  обратный звонок («Да, позвоните мне»).
+</p>
+
+<h3>6.1. Поток lead capture</h3>
+<div class="flow">[Калькулятор завершён, показан результат]
+        │
+        │ "Хотите, чтобы менеджер связался с вами для оформления?"
+        │ Клиент: ✅ Да, позвоните мне
+        ▼
+[lead_step = "name"]
+   Бот: "Как вас зовут?"
+   Клиент: "<span class="hl-pii">Иван Петров</span>"
+        │
+        │ ┌─────────────────────────────────────────────────────┐
+        │ │ В БД (leads.contact_name): "<span class="hl-pii">Иван Петров</span>" (сырое)        │
+        │ │ В dialog["lead_slots"]["name"]: "<span class="hl-pii">Иван Петров</span>" (в памяти) │
+        │ │ В messages → OpenAI:           "<span class="hl-tok">[NAME]</span>"  ← МАСКИРУЕТСЯ │
+        │ └─────────────────────────────────────────────────────┘
+        ▼
+[lead_step = "phone"]
+   Бот: "Укажите ваш номер телефона:"
+   Клиент: "<span class="hl-pii">+998 90 123 45 67</span>"
+        │
+        │ ┌─────────────────────────────────────────────────────┐
+        │ │ В БД (leads.contact_phone): "<span class="hl-pii">+998 90 123 45 67</span>" (сырое)│
+        │ │ В messages → OpenAI:        "<span class="hl-tok">[PHONE]</span>" ← МАСКИРУЕТСЯ   │
+        │ └─────────────────────────────────────────────────────┘
+        ▼
+[lead saved]
+   Бот: "✅ Отлично! Менеджер свяжется с вами в ближайшее время."</div>
+
+<h3>6.2. Реализация маскирования</h3>
+<p>
+  Функция <code>_finalize_turn()</code> в <code>app/agent/nodes/helpers.py</code> формирует обновлённый
+  массив сообщений диалога. Она принимает опциональный параметр <code>mask_user_text</code>: если он задан,
+  в качестве <code>HumanMessage</code> добавляется именно это значение, а не сырое сообщение клиента:
+</p>
+<pre>def _finalize_turn(
+    state: BotState,
+    answer: str,
+    dialog: dict,
+    keyboard_options: Optional[List[str]] = None,
+    *,
+    is_fallback: bool = False,
+    mask_user_text: Optional[str] = None,
+) -> dict:
+    user_text = (state.get("last_user_text") or "").strip()
+    lang = (dialog or {}).get("last_lang") or "ru"
+    msgs = list(state.get("messages") or [SystemMessage(content=get_system_policy(lang))])
+    # mask_user_text replaces the raw input before it lands in conversation
+    # history that subsequently feeds the LLM (used for lead name/phone steps
+    # so PII never leaves the local container in OpenAI requests).
+    msgs.append(HumanMessage(content=mask_user_text if mask_user_text is not None else user_text))
+    msgs.append(AIMessage(content=answer))</pre>
+
+<p>
+  Узел <code>node_calc_flow</code> в <code>app/agent/nodes/calc_flow.py</code> вызывает эту функцию с явным
+  параметром на шагах сбора имени и телефона:
+</p>
+<pre>if lead_step == "name":
+    lead_slots = dict(dialog.get("lead_slots") or {})
+    lead_slots["name"] = user_text  # сырое имя в локальную память диалога
+    new_dialog = {**dialog, "lead_step": "phone", "lead_slots": lead_slots}
+    return _finalize_turn(
+        state, at("lead_ask_phone", lang), new_dialog,
+        mask_user_text="<span class="hl-tok">[NAME]</span>"  # ← в OpenAI уйдёт токен, не имя
+    )
+
+if lead_step == "phone":
+    lead_slots = dict(dialog.get("lead_slots") or {})
+    lead_slots["phone"] = user_text  # сырой телефон в локальную память диалога
+    try:
+        await _save_lead_async({  # сырое значение → в локальную таблицу leads
+            ...
+            "name": lead_slots.get("name", ""),
+            "phone": lead_slots.get("phone", user_text),
+        })
+        return _finalize_turn(
+            state, at("lead_saved", lang), _default_dialog(),
+            mask_user_text="<span class="hl-tok">[PHONE]</span>"  # ← в OpenAI уйдёт токен
+        )</pre>
+
+<h3>6.3. Что важно понимать про разделение «БД vs OpenAI»</h3>
+<table>
+  <thead>
+    <tr><th style="width:34%">Слой</th><th style="width:33%">Что хранит</th><th>Где находится</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>PostgreSQL, таблица <code>leads</code></td>
+      <td><span class="hl-pii">Сырые имя и телефон</span> клиента</td>
+      <td class="ok">Локально, контейнер в РУз</td>
+    </tr>
+    <tr>
+      <td>PostgreSQL, таблица <code>messages</code></td>
+      <td>Сырой текст всех сообщений (нужен оператору при подключении и для разбора инцидентов)</td>
+      <td class="ok">Локально, контейнер в РУз</td>
+    </tr>
+    <tr>
+      <td>LangGraph state в памяти процесса</td>
+      <td><code>dialog["lead_slots"]</code> с сырыми данными — на время одного запроса</td>
+      <td class="ok">Локально, RAM воркера</td>
+    </tr>
+    <tr>
+      <td>LangGraph checkpoints (если включён <code>postgres</code> backend)</td>
+      <td><b>Замаскированные</b> сообщения (<code>[NAME]</code>, <code>[PHONE]</code>)
+          + <code>dialog["lead_slots"]</code> с сырыми значениями</td>
+      <td class="ok">Локально, та же PostgreSQL</td>
+    </tr>
+    <tr>
+      <td>Запрос в OpenAI API</td>
+      <td>Только <b>замаскированные</b> сообщения <code>[NAME]</code>, <code>[PHONE]</code></td>
+      <td class="warn">Внешний сервис (OpenAI, США)</td>
+    </tr>
+  </tbody>
+</table>
+<p class="footnote">
+  Сырые имя и телефон нужны оператору для перезвона клиенту — они физически не могут быть удалены.
+  Маскирование применяется именно перед границей «наша инфраструктура → внешний сервис OpenAI».
+</p>
+
+<h2 id="operator">7. Передача оператору при идентификации</h2>
+
+<p>
+  Если клиент запрашивает операцию, требующую верификации личности (например, «заблокируйте мою карту»,
+  «какой у меня баланс», «смените мне пароль»), ИИ-агент обязан вызвать тулзу <code>request_operator</code>
+  с параметром <code>reason="identity_required"</code>. Это:
+</p>
+<ol>
+  <li>Возвращает клиенту фиксированное локализованное сообщение «Для выполнения этой операции необходима
+      идентификация. Сейчас подключу вас к специалисту».</li>
+  <li>Помечает сессию в БД флагом <code>show_operator_button = True</code> — на стороне Telegram-бота
+      появляется кнопка «Связаться с оператором».</li>
+  <li>При нажатии кнопки сессия переходит в <code>human_mode = True</code> — все последующие сообщения
+      клиента сохраняются в БД, <b>но не передаются в OpenAI</b>. Отвечает живой оператор.</li>
+</ol>
+
+<p>Сама тулза получает только <b>короткий тег</b> причины, без свободного текста:</p>
+<pre>@lc_tool
+async def request_operator(
+    reason: str = "",
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
+    """Transfer the user to a live operator.
+    reason: short tag — "identity_required" / "unclear_message" / "user_request".
+    """
+    ...
+    if "identity" in reason.lower():
+        return at("operator_identity_required", lang)</pre>
+
+<div class="callout ok">
+  <b>Эффект для ИБ</b>
+  Параметр <code>reason</code> — это короткий технический тег (<code>identity_required</code>,
+  <code>unclear_message</code>, <code>user_request</code>), а не свободный текст с описанием запроса.
+  Соответственно, <b>описание операции клиента не уходит в OpenAI повторно</b> через тулзу.
+</div>
+
+<h2 id="example">8. Живой пример: как лид попадает (или не попадает) в OpenAI</h2>
+
+<h3>8.1. Сценарий</h3>
+<p>Клиент рассчитывает ипотеку, соглашается на перезвон, вводит имя и телефон, после чего задаёт ещё один вопрос.</p>
+
+<h3>8.2. Сообщения, которые накапливаются в <code>state["messages"]</code></h3>
+<p>До маскирования (как было бы без правки):</p>
+<pre>SystemMessage:  "## РОЛЬ\nТы опытный консультант банка..."
+HumanMessage:   "хочу ипотеку"
+AIMessage:      "Вот наши ипотечные программы: ..."
+HumanMessage:   "1"
+AIMessage:      "Ипотека «Стандарт»: ставка от 18%..."
+HumanMessage:   "рассчитать"
+AIMessage:      "Какую сумму кредита планируете взять?"
+HumanMessage:   "500 миллионов"
+AIMessage:      "На какой срок?"
+HumanMessage:   "10 лет"
+AIMessage:      "Первоначальный взнос (в %)?"
+HumanMessage:   "30"
+AIMessage:      "[график платежей]\n\nХотите, чтобы менеджер связался с вами?"
+HumanMessage:   "да"
+AIMessage:      "Как вас зовут?"
+HumanMessage:   "<span class="hl-pii">Иван Петров</span>"          ← БЫЛО БЫ ТАК БЕЗ ФИКСА
+AIMessage:      "Укажите ваш номер телефона:"
+HumanMessage:   "<span class="hl-pii">+998 90 123 45 67</span>"   ← БЫЛО БЫ ТАК БЕЗ ФИКСА
+AIMessage:      "✅ Отлично! Менеджер свяжется с вами..."
+HumanMessage:   "а у вас есть автокредит?"   ← клиент задаёт новый вопрос</pre>
+
+<p>После применения маскирования (текущее поведение):</p>
+<pre>SystemMessage:  "## РОЛЬ\nТы опытный консультант банка..."
+HumanMessage:   "хочу ипотеку"
+AIMessage:      "Вот наши ипотечные программы: ..."
+...
+HumanMessage:   "да"
+AIMessage:      "Как вас зовут?"
+HumanMessage:   "<span class="hl-tok">[NAME]</span>"               ← ЗАМАСКИРОВАНО
+AIMessage:      "Укажите ваш номер телефона:"
+HumanMessage:   "<span class="hl-tok">[PHONE]</span>"              ← ЗАМАСКИРОВАНО
+AIMessage:      "✅ Отлично! Менеджер свяжется с вами..."
+HumanMessage:   "а у вас есть автокредит?"</pre>
+
+<p>
+  Когда клиент задаёт новый вопрос «а у вас есть автокредит?», LLM получает всю историю —
+  но имя «Иван Петров» и телефон «+998 90 123 45 67» в этой истории <b>уже заменены на
+  <code>[NAME]</code>/<code>[PHONE]</code></b> и в OpenAI не уходят.
+</p>
+
+<h3>8.3. Что при этом сохранено в локальной БД</h3>
+<pre>┌─────────────────────────────────────────────────────────────────┐
+│ Таблица leads (PostgreSQL, локально в РУз)                      │
+├─────────────────────────────────────────────────────────────────┤
+│ id                : 12345                                        │
+│ session_id        : "abc-def-..."                                │
+│ telegram_user_id  : 123456789                                    │
+│ product_category  : "mortgage"                                   │
+│ product_name      : "Ипотека «Стандарт»"                         │
+│ amount            : 500000000                                    │
+│ term_months       : 120                                          │
+│ rate_pct          : 18.0                                         │
+│ contact_name      : "<span class="hl-pii">Иван Петров</span>"            ← СЫРОЕ                │
+│ contact_phone     : "<span class="hl-pii">+998 90 123 45 67</span>"      ← СЫРОЕ                │
+│ created_at        : 2026-04-23 14:32:11                          │
+└─────────────────────────────────────────────────────────────────┘</pre>
+
+<div class="callout ok">
+  <b>Ключевой принцип</b>
+  Сырые ПД клиента доступны менеджеру AsakaBank для перезвона (для этого их и собирали)
+  и хранятся <b>только</b> в инфраструктуре банка в Узбекистане. Внешний сервис OpenAI
+  не получает ни имени, ни телефона клиента — только обезличенные токены.
+</div>
+
+<h2 id="storage">9. Что хранится локально в Узбекистане</h2>
+
+<table>
+  <thead>
+    <tr><th style="width:25%">Компонент</th><th style="width:35%">Где размещён</th><th>Что хранит</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>PostgreSQL 16</td>
+      <td>Docker-контейнер в РУз (см. <code>docker-compose.yml</code>)</td>
+      <td>Все данные сервиса: <code>users</code>, <code>chat_sessions</code>, <code>messages</code> (сырой текст),
+          <code>leads</code> (сырые имя/телефон), <code>credit_product_offers</code>, <code>deposit_product_offers</code>,
+          <code>card_product_offers</code>, <code>faq_items</code>, <code>branches</code>, чекпоинты LangGraph</td>
+    </tr>
+    <tr>
+      <td>FastAPI + LangGraph (Python)</td>
+      <td>Docker-контейнер в РУз</td>
+      <td>Бизнес-логика, обработка вебхуков, оркестрация агента. Состояние диалога — в памяти процесса
+          и в чекпоинтах PostgreSQL.</td>
+    </tr>
+    <tr>
+      <td>SQLAdmin панель (<code>/admin</code>)</td>
+      <td>Тот же контейнер FastAPI</td>
+      <td>Веб-интерфейс для операторов и администраторов. Аутентификация через ENV
+          (<code>ADMIN_USERNAME</code>/<code>ADMIN_PASSWORD</code>).</td>
+    </tr>
+    <tr>
+      <td>nginx (опционально)</td>
+      <td>Контейнер в РУз</td>
+      <td>Reverse proxy, TLS termination для вебхука Telegram.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Внешние зависимости сервиса:</p>
+<ul>
+  <li><b>Telegram Bot API</b> — для приёма сообщений клиентов и отправки ответов. Это требование платформы;
+      переписка с клиентом физически проходит через серверы Telegram.</li>
+  <li><b>OpenAI API</b> — единственный внешний ИИ-сервис. Передаются обезличенные данные согласно
+      разделу <a href="#inventory">4</a>.</li>
+  <li><b>ЦБ Узбекистана</b> — публичный API курсов валют (<code>cbu.uz</code>), без передачи каких-либо данных клиента.</li>
+</ul>
+
+<h2 id="audit">10. Аудит и наблюдаемость</h2>
+
+<table>
+  <thead>
+    <tr><th style="width:35%">Что логируется</th><th>Где</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Все сообщения клиента и бота (полный текст)</td>
+      <td>Таблица <code>messages</code> в локальной PostgreSQL</td>
+    </tr>
+    <tr>
+      <td>Использование токенов OpenAI и стоимость каждого вызова</td>
+      <td>Поле <code>messages.llm_usage</code> (модель, prompt_tokens, completion_tokens, cost_usd)</td>
+    </tr>
+    <tr>
+      <td>Лиды (имя, телефон, продукт, расчётные параметры)</td>
+      <td>Таблица <code>leads</code></td>
+    </tr>
+    <tr>
+      <td>Состояние сессии (human_mode, оператор, последний контакт)</td>
+      <td>Таблица <code>chat_sessions</code></td>
+    </tr>
+    <tr>
+      <td>Снапшоты состояния LangGraph (если включён postgres backend)</td>
+      <td>Таблицы LangGraph checkpointer в той же PostgreSQL</td>
+    </tr>
+    <tr>
+      <td>Технические логи приложения (ошибки, запуск/остановка)</td>
+      <td>Stdout контейнера (собираются Docker-логами)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <b>Важно про чекпоинты LangGraph</b>
+  При <code>LANGGRAPH_CHECKPOINT_BACKEND=postgres</code> в чекпоинты сохраняется массив <code>messages</code>,
+  где имя/телефон лида уже замаскированы (<code>[NAME]</code>/<code>[PHONE]</code>). Сырые значения сохраняются
+  только в таблице <code>leads</code> и в <code>dialog["lead_slots"]</code> (которое тоже попадает в чекпоинт,
+  но физически находится только в локальной БД).
+</div>
+
+<h2 id="code">11. Ссылки на код</h2>
+
+<table>
+  <thead>
+    <tr><th style="width:42%">Файл</th><th>Что содержит</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>app/agent/i18n.py</code></td>
+      <td>Системные промпты (RU/EN/UZ) — содержат раздел «ПЕРСОНАЛЬНЫЕ ДАННЫЕ КЛИЕНТА — СТРОГИЙ ЗАПРЕТ»</td>
+    </tr>
+    <tr>
+      <td><code>app/agent/nodes/helpers.py</code> → <code>_finalize_turn()</code></td>
+      <td>Точка маскирования: параметр <code>mask_user_text</code> подменяет сырую реплику клиента
+          на токен перед добавлением в историю диалога</td>
+    </tr>
+    <tr>
+      <td><code>app/agent/nodes/calc_flow.py</code> → <code>_handle_lead_step()</code></td>
+      <td>Сбор имени/телефона лида. Вызывает <code>_finalize_turn(..., mask_user_text="[NAME]")</code>
+          и <code>mask_user_text="[PHONE]"</code> на соответствующих шагах</td>
+    </tr>
+    <tr>
+      <td><code>app/agent/nodes/faq.py</code></td>
+      <td>Основной узел вызова OpenAI. Формирует <code>messages</code> = <code>[SystemMessage + history до 12 + state XML]</code></td>
+    </tr>
+    <tr>
+      <td><code>app/agent/nodes/human_mode.py</code></td>
+      <td>Узел гибридного режима: <code>interrupt()</code> на время ответа оператора. В этом режиме сообщения
+          клиента сохраняются в БД, но <b>не передаются в OpenAI</b></td>
+    </tr>
+    <tr>
+      <td><code>app/agent/tools.py</code> → <code>request_operator</code></td>
+      <td>Тулза перевода на оператора. Принимает только короткий тег <code>reason</code>, не свободный текст</td>
+    </tr>
+    <tr>
+      <td><code>app/agent/llm.py</code> → <code>_get_chat_openai()</code></td>
+      <td>Создаёт клиент OpenAI. Поддерживает <code>OPENAI_BASE_URL</code> для проксирования через
+          корпоративный шлюз, если потребуется</td>
+    </tr>
+    <tr>
+      <td><code>app/db/models.py</code></td>
+      <td>SQLAlchemy-модели: <code>User</code>, <code>ChatSession</code>, <code>Message</code>, <code>Lead</code>
+          (поля <code>contact_name</code>, <code>contact_phone</code>)</td>
+    </tr>
+    <tr>
+      <td><code>app/services/chat_service.py</code></td>
+      <td>Жизненный цикл сессии, сохранение сообщений в БД, гибридный режим оператора</td>
+    </tr>
+    <tr>
+      <td><code>docker-compose.yml</code></td>
+      <td>Описание контейнеров (PostgreSQL 16, приложение)</td>
+    </tr>
+    <tr>
+      <td><code>tests/test_agent.py</code></td>
+      <td>260 модульных тестов, проверяющих корректность агента, промптов и инструментов</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="footnote" style="margin-top:40px;">
+  Документ подготовлен на основе текущего состояния кодовой базы по состоянию на 23 апреля 2026.
+  Любые изменения в обработке персональных данных требуют согласования со Службой информационной
+  безопасности и обновления этого документа.
+</p>
+
+</main>
+</body>
+</html>

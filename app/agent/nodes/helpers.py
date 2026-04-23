@@ -21,11 +21,15 @@ def _finalize_turn(
     keyboard_options: Optional[List[str]] = None,
     *,
     is_fallback: bool = False,
+    mask_user_text: Optional[str] = None,
 ) -> dict:
     user_text = (state.get("last_user_text") or "").strip()
     lang = (dialog or {}).get("last_lang") or "ru"
     msgs = list(state.get("messages") or [SystemMessage(content=get_system_policy(lang))])
-    msgs.append(HumanMessage(content=user_text))
+    # mask_user_text replaces the raw input before it lands in conversation
+    # history that subsequently feeds the LLM (used for lead name/phone steps
+    # so PII never leaves the local container in OpenAI requests).
+    msgs.append(HumanMessage(content=mask_user_text if mask_user_text is not None else user_text))
     msgs.append(AIMessage(content=answer))
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(msgs) > _max + 1:

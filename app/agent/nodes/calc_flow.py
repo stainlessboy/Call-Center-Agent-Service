@@ -197,7 +197,9 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
         lead_slots = dict(dialog.get("lead_slots") or {})
         lead_slots["name"] = user_text
         new_dialog = {**dialog, "lead_step": "phone", "lead_slots": lead_slots}
-        return _finalize_turn(state, at("lead_ask_phone", lang), new_dialog)
+        return _finalize_turn(
+            state, at("lead_ask_phone", lang), new_dialog, mask_user_text="[NAME]"
+        )
 
     if lead_step == "phone":
         lead_slots = dict(dialog.get("lead_slots") or {})
@@ -216,10 +218,14 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
                 "name": lead_slots.get("name", ""),
                 "phone": lead_slots.get("phone", user_text),
             })
-            return _finalize_turn(state, at("lead_saved", lang), _default_dialog())
+            return _finalize_turn(
+                state, at("lead_saved", lang), _default_dialog(), mask_user_text="[PHONE]"
+            )
         except Exception as exc:
             _agent_logger.exception("lead save failed: %s", exc)
-            return _finalize_turn(state, at("lead_save_error", lang), _default_dialog())
+            return _finalize_turn(
+                state, at("lead_save_error", lang), _default_dialog(), mask_user_text="[PHONE]"
+            )
 
     # Unexpected lead_step value — reset
     return _finalize_turn(state, at("lead_fallback", lang), _default_dialog())
