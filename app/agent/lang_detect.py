@@ -9,6 +9,10 @@ Why a separate detector instead of asking the main LLM:
 - The main LLM's `lang` decision used to "stick" via last_lang.
 - A small dedicated prompt with no tools is faster and more reliable.
 
+Detection is LLM-only — no regex fast-paths. The prompt in
+`_DETECTOR_SYSTEM_PROMPT` encodes the full ru/en/uz decision logic,
+including the tricky "Uzbek written in Russian letters" case.
+
 Model is configurable via `LANG_DETECTOR_MODEL` env; defaults to `gpt-4o-mini`
 (regardless of OPENAI_MODEL) because we want it cheap and fast.
 """
@@ -103,6 +107,8 @@ def _get_detector_llm() -> Optional[ChatOpenAI]:
             "model": model,
             "temperature": 0,
             "max_tokens": 5,
+            "timeout": float(os.getenv("LANG_DETECTOR_TIMEOUT") or 10.0),
+            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
             "api_key": os.getenv("OPENAI_API_KEY"),
         }
         base_url = os.getenv("OPENAI_BASE_URL")
@@ -133,48 +139,6 @@ def _should_skip_detection(text: str) -> bool:
 import re as _re
 
 _TOKEN_RE = _re.compile(r"[a-z]{2,}")
-
-# Uzbek-only Cyrillic chars that do NOT exist in Russian. Their presence
-# alone is a deterministic signal → skip the LLM.
-_UZ_ONLY_CYRILLIC_RE = _re.compile(r"[ўқғҳЎҚҒҲ]")
-
-# Uzbek morphological markers when the text is in Russian letters.
-# These are regex fragments; each must match as a whole word (or with Russian
-# suffixes / punctuation around it). We deliberately avoid bare "керак" because
-# it also appears inside Russian phrases transliterated from Uzbek only.
-_UZ_MORPHOLOGY_RE = _re.compile(
-    r"\b("
-    r"ассалому|алайкум|алейкум|"
-    r"рахмат|рахмет|"
-    r"олмокчи(ман)?|бермокчи(ман)?|"
-    r"курсатолисиз(ме|ми)?|курсатолсиз|курсатинг|"
-    r"навбатсиз|"
-    r"олмок|бермок|тулаш|"
-    r"менга|сенга|сизга|"
-    r"\w+ларингда|\w+ларингиз|\w+ингизда|"
-    r"\w+мокчиман|\w+мокчимиз|\w+сизме|\w+сизми|"
-    r"\w+олисизме|\w+олисизми"
-    r")\b",
-    _re.IGNORECASE,
-)
-
-
-def _fast_path_detect(text: str) -> Optional[str]:
-    """Deterministic pre-LLM shortcuts for unambiguous Uzbek text.
-
-    Returns 'uz' if the text contains:
-    - Uzbek-only Cyrillic chars (ў, қ, ғ, ҳ), OR
-    - Clear Uzbek morphological markers in Russian letters.
-
-    Returns None otherwise (let the LLM decide between ru / en / uz-in-ru-letters).
-    """
-    if not text:
-        return None
-    if _UZ_ONLY_CYRILLIC_RE.search(text):
-        return "uz"
-    if _UZ_MORPHOLOGY_RE.search(text):
-        return "uz"
-    return None
 
 
 def _normalize_detector_output(raw: str) -> Optional[str]:
@@ -208,10 +172,6 @@ async def detect_language(text: str, fallback: str = "ru") -> str:
 
     if _should_skip_detection(text):
         return fallback
-
-    fast = _fast_path_detect(text)
-    if fast is not None:
-        return fast
 
     llm = _get_detector_llm()
     if llm is None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 from typing import Optional
 
@@ -10,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.bot.i18n import normalize_lang, t
@@ -202,7 +204,7 @@ WEBHOOK_PATH = get_settings().webhook_path
 
 
 @app.get("/health")
-async def healthcheck() -> dict:
+async def healthcheck() -> JSONResponse:
     status: dict = {"ok": True}
     # Check database connectivity
     try:
@@ -213,7 +215,27 @@ async def healthcheck() -> dict:
         status["ok"] = False
         status["db"] = False
         status["db_error"] = str(exc)
-    return status
+
+    # Checkpointer persistence probe. In environments that require a
+    # non-in-memory checkpointer (k8s / prod), refuse readiness when the
+    # agent ended up on MemorySaver — a pod in this state loses session
+    # state on restart and should be rolled rather than kept in service.
+    require_persistent = (os.getenv("REQUIRE_PERSISTENT_CHECKPOINTER") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    agent_client = getattr(app.state, "agent_client", None)
+    checkpointer = getattr(getattr(agent_client, "_agent", None), "_checkpointer", None)
+    checkpointer_type = type(checkpointer).__name__ if checkpointer is not None else None
+    status["checkpointer"] = checkpointer_type
+    if require_persistent and checkpointer_type in (None, "MemorySaver"):
+        status["ok"] = False
+        status["checkpointer_error"] = (
+            "REQUIRE_PERSISTENT_CHECKPOINTER=true but checkpointer is "
+            f"{checkpointer_type or 'uninitialized'}"
+        )
+
+    http_status = 200 if status["ok"] else 503
+    return JSONResponse(status_code=http_status, content=status)
 
 
 @app.post(WEBHOOK_PATH)

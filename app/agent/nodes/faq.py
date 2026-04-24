@@ -32,6 +32,7 @@ from app.agent.llm import (
     finalize_usage,
 )
 from app.agent.nodes.helpers import _finalize_turn
+from app.agent.pii_masker import mask_pii
 from app.agent.products import _find_product_by_name, _get_products_by_category
 from app.agent.state import BotState, _default_dialog
 from app.agent.tools import _FAQ_TOOLS
@@ -305,7 +306,7 @@ async def node_faq(state: BotState) -> dict:
         chat_msgs = [SystemMessage(content=system_content)] + existing_msgs[1:]
     else:
         chat_msgs = [SystemMessage(content=system_content)] + existing_msgs
-    chat_msgs.append(HumanMessage(content=normalized_text or user_text))
+    chat_msgs.append(HumanMessage(content=mask_pii(normalized_text or user_text)))
 
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(chat_msgs) > _max + 1:
@@ -318,9 +319,11 @@ async def node_faq(state: BotState) -> dict:
     turn_usage: dict = {}
 
     llm_with_tools = llm.bind_tools(_FAQ_TOOLS)
+    max_rounds = 3
     try:
         loop_msgs = list(chat_msgs)
-        for _ in range(3):  # max 3 tool call rounds
+        hit_limit_with_pending_tools = False
+        for round_idx in range(max_rounds):
             ai_msg = await llm_with_tools.ainvoke(loop_msgs)
             loop_msgs.append(ai_msg)
             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
@@ -339,6 +342,16 @@ async def node_faq(state: BotState) -> dict:
             tool_node = ToolNode(_FAQ_TOOLS)
             tool_results = await tool_node.ainvoke({"messages": loop_msgs, "dialog": dialog})
             loop_msgs.extend(tool_results.get("messages", []))
+
+            if round_idx == max_rounds - 1:
+                hit_limit_with_pending_tools = True
+        if hit_limit_with_pending_tools:
+            _agent_logger.warning(
+                "node_faq tool loop hit %d-round limit, session=%s last_tools=%s",
+                max_rounds,
+                state.get("session_id"),
+                [tc.get("name") for tc in tool_calls_made[-max_rounds:]],
+            )
     except (asyncio.TimeoutError, APIError, json.JSONDecodeError) as exc:
         _agent_logger.warning("node_faq LLM failed: %s", exc)
         # Fall through to FAQ lookup fallback

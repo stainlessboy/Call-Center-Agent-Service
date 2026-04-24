@@ -231,6 +231,10 @@ Important optional:
 - `OPERATOR_IDS` — comma-separated Telegram IDs allowed to act as operators
 - `OPERATOR_API_KEY` — bearer key for `/operator/send` endpoint
 - `LANGGRAPH_CHECKPOINT_BACKEND` — `memory|postgres|auto`
+- `REQUIRE_PERSISTENT_CHECKPOINTER` — `true` in prod/k8s. When set, the app fails fast at startup if the checkpointer resolves to `MemorySaver`, and `/health` returns 503 in the same condition. Without it, `auto` silently degrades to in-memory on DB outage and loses all session state on restart.
+- `OPENAI_REQUEST_TIMEOUT` — per-request timeout for the main LLM (seconds, default `15`)
+- `LANG_DETECTOR_TIMEOUT` — per-request timeout for the language detector (seconds, default `10`)
+- `OPENAI_MAX_RETRIES` — retries for all OpenAI calls (default `1`)
 - `MAX_DIALOG_MESSAGES` — message history limit (default: 12)
 - `LANG_DETECTOR_MODEL` — model used by the dedicated language detector (default: `gpt-4o-mini`)
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` (default 60)

@@ -67,6 +67,8 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
             "model": model_name,
             "temperature": 0.3,
             "max_tokens": 512,
+            "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
+            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
             "api_key": os.getenv("OPENAI_API_KEY"),
         }
         base_url = os.getenv("OPENAI_BASE_URL")

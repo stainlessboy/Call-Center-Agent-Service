@@ -264,3 +264,53 @@ class TestCombinedMessages:
         # Name "Иван Петров" survives (we don't mask names — that's the
         # system prompt's job, see security_review.html § 5).
         assert "Иван Петров" in out
+
+
+# ---------------------------------------------------------------------------
+# Integration: boundary — node_faq must NOT send raw PII to OpenAI.
+# The regression this guards: faq.py used to build
+#   HumanMessage(content=normalized_text or user_text)
+# with the unmasked user text, so volunteered card/phone numbers leaked to
+# the main LLM even though `_finalize_turn` later masked them for history.
+# ---------------------------------------------------------------------------
+class TestFaqNodePiiBoundary:
+    @pytest.mark.asyncio
+    async def test_card_not_sent_to_llm(self, monkeypatch):
+        from langchain_core.messages import AIMessage
+
+        from app.agent.nodes import faq as faq_module
+        from app.agent.state import _default_dialog
+
+        captured_messages: list = []
+
+        class _StubBoundLLM:
+            async def ainvoke(self, msgs):
+                captured_messages.extend(msgs)
+                return AIMessage(content="ok", tool_calls=[])
+
+        class _StubLLM:
+            def bind_tools(self, tools):
+                return _StubBoundLLM()
+
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: _StubLLM())
+
+        state = {
+            "last_user_text": "моя карта 1234 5678 9012 3456 заблокирована",
+            "messages": [],
+            "dialog": _default_dialog(),
+            "lang": "ru",
+            "session_id": "test",
+            "user_id": 1,
+        }
+        await faq_module.node_faq(state)
+
+        # At least one HumanMessage must reach the LLM; none of them may
+        # contain the raw card digits.
+        human_contents = [
+            m.content for m in captured_messages if m.__class__.__name__ == "HumanMessage"
+        ]
+        assert human_contents, "no HumanMessage was sent to the LLM"
+        joined = " ".join(str(c) for c in human_contents)
+        assert "1234 5678 9012 3456" not in joined
+        assert "1234567890123456" not in joined
+        assert TOKEN_CARD in joined

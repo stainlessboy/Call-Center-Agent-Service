@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Optional, Sequence
 
 
@@ -68,13 +69,32 @@ def _is_back_trigger(text: str) -> bool:
     )
 
 
+_OPERATOR_PREFIX_RE = re.compile(
+    r"\b(оператор|operator)[а-яa-z]*\b",
+    re.IGNORECASE,
+)
+
+
 def _is_operator_request(text: str) -> bool:
-    return _contains_any(text, (
-        "оператор", "живой оператор", "подключи оператора",
+    """True if the user asked to speak to a live operator.
+
+    Uses a prefix-anchored regex for "оператор" / "operator" so any
+    morphological suffix matches (оператора, оператором, операторов,
+    operatorni, operatorga, operators, …) but collisions with longer
+    words like "телеоператор" / "cooperator" are rejected because the
+    leading ``\\b`` requires a word boundary before the prefix.
+
+    Extra phrases ("live agent", "human agent", "jonli operator", …)
+    fall back to substring matching.
+    """
+    lower = text.lower()
+    if _OPERATOR_PREFIX_RE.search(lower):
+        return True
+    return _contains_any(lower, (
+        "живой оператор", "подключи оператора",
         "соедини с оператором", "хочу оператора", "позовите оператора",
-        "operator", "live agent", "human agent", "speak to human", "connect operator",
-        "операторга", "jonli operator", "operatorga", "operator bilan",
-        "operatorni chaqir", "operator kerak",
+        "live agent", "human agent", "speak to human", "connect operator",
+        "jonli operator",
     ))
 
 
