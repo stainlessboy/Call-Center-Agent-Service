@@ -40,25 +40,71 @@ Internet → Nginx (SSL) :443 → API container :8001
 
 ### Путь сообщения (полный цикл)
 
-```
-1. Пользователь отправляет сообщение в Telegram
-2. Telegram → POST /telegram/webhook → FastAPI
-3. aiogram Dispatcher → handlers/commands.py
-4. ChatService.handle_user_message():
-   a. Создаёт/находит активную сессию (ChatSession)
-   b. Сохраняет Message(role="user") в БД
-   c. Если human_mode → не отправляет в LangGraph, ждёт оператора
-   d. Иначе → вызывает AgentClient → Agent.send_message()
-5. Agent:
-   a. Загружает состояние из checkpointer (история, dialog)
-   b. Формирует BotState
-   c. graph.ainvoke(BotState) → router → faq/calc_flow/human_mode
-   d. Возвращает AgentTurnResult(text, keyboard, show_operator_button)
-6. ChatService:
-   a. Сохраняет Message(role="agent") в БД
-   b. Извлекает [[PDF:...]] маркер если есть
-   c. Возвращает ответ в Telegram с клавиатурой
-```
+Подробная трассировка одного хода — от Telegram до финального ответа.
+
+#### 1. Telegram → FastAPI
+
+`Update` приходит на `POST /telegram/webhook` ([app/api/fastapi_app.py:270-293](app/api/fastapi_app.py#L270-L293)):
+- Проверка `X-Telegram-Bot-Api-Secret-Token` (если настроен `WEBHOOK_SECRET`).
+- `Update.model_validate(...)` → `dp.feed_update(bot, update)` → aiogram-диспетчер.
+
+В режиме polling вход — тот же Dispatcher, без webhook-эндпоинта.
+
+#### 2. aiogram Dispatcher → handler
+
+`ChatServiceMiddleware` ([app/api/fastapi_app.py:80-82](app/api/fastapi_app.py#L80-L82)) инжектит `chat_service` в каждый handler. Текстовые сообщения попадают в `handle_text` ([app/bot/handlers/commands.py:636](app/bot/handlers/commands.py#L636)).
+
+Перед агентом — мета-логика, которая отвечает сама и **не доходит до LangGraph**:
+- Жёсткий лимит длины: `text[:max_message_length]`.
+- Меню-кнопки: `BACK / END_SESSION / NEW_CHAT / BRANCHES / NEAREST_BRANCH / MY_SESSIONS / CHANGE_LANGUAGE / CURRENCY_RATES`.
+- Парсинг «переключи на сессию N / UUID» (`_parse_session_switch_request`).
+
+Если ничего не сработало — путь к агенту, обёрнутый в `_with_typing` (отправляет `chat_action=typing` каждые 4 c пока агент думает).
+
+#### 3. ChatService.handle_user_message
+
+[app/services/chat_service.py:195-295](app/services/chat_service.py#L195-L295):
+1. `ensure_active_session(user.id)` — активная `ChatSession` или создаётся новая. **Её UUID становится `thread_id`** для LangGraph-чекпоинтера.
+2. `set_session_title_if_empty` — первое сообщение пользователя становится заголовком сессии.
+3. `touch_session` — обновляет `last_activity_at`.
+4. `_save_message(role="user", text=...)` — пишем входящее в БД.
+5. **Ветвление по `human_mode`**:
+   - `human_mode=True` + есть активный middleware-чат → `ChatMiddlewareClient.send_message` шлёт реплику оператору, граф не вызывается; пользователю отвечаем `"sent_to_operator"`.
+   - `human_mode=True` без middleware → всё-таки вызываем `agent_client.send_message(human_mode=True)`, чтобы `interrupt()` мог принять operator-reply из другого канала.
+   - Иначе — нормальный путь.
+6. `await asyncio.wait_for(agent_client.send_message(...), timeout=AGENT_TIMEOUT_SECONDS)`. На `TimeoutError` пишет `"agent_timeout"` в БД и возвращает `agent_unavailable`.
+7. Парсит `[[PDF:/path]]`-маркер из ответа агента → отдельное поле `pdf_path`, маркер удаляется из текста.
+8. Сохраняет `Message(role="agent", latency_ms, llm_usage)`.
+9. Возвращает `AgentReply(text, pdf_path, session_id, human_mode, keyboard_options, show_operator_button)`.
+
+#### 4. AgentClient → Agent._ainvoke
+
+[app/agent/agent.py:45-92](app/agent/agent.py#L45-L92):
+1. `config = {"configurable": {"thread_id": session_id}}`.
+2. `graph.aget_state(config)` — поднимает прежний `BotState` из чекпоинтера (Postgres / Memory).
+3. **`detect_language(user_text, fallback=...)`** — отдельный маленький LLM-вызов (`gpt-4o-mini`, `LANG_DETECTOR_TIMEOUT`) определяет ru/en/uz; пишет в `dialog["last_lang"]`.
+4. **Свежий `SystemMessage(get_system_policy(detected_lang))` каждый ход** — затирает прежний в `messages[0]`. Это даёт два эффекта: правки `agent/i18n.py` применяются без сброса сессии и язык переключается на лету посреди диалога.
+5. Сборка `state_in: BotState` (last_user_text, messages, dialog, lang, session_id, user_id, …) → `graph.ainvoke(state_in, config)`.
+6. Из `out` берёт `answer`, `keyboard_options`, `show_operator_button`, `token_usage` → `AgentTurnResult`.
+
+#### 5. LangGraph: router → одна из трёх нод → END
+
+См. секции «Роутер», «Node: FAQ», «Node: calc_flow», «Node: human_mode» ниже.
+
+#### 6. Возврат: Agent → ChatService → handle_text
+
+`handle_text` ([app/bot/handlers/commands.py:828-861](app/bot/handlers/commands.py#L828-L861)) собирает финальную клавиатуру:
+- `human_mode=True` → `human_mode_keyboard(human_mode=True)` (кнопка «вернуться к боту»).
+- `show_operator_button=True` → `human_mode_keyboard(human_mode=False)` (кнопка «оператор»).
+- Иначе если есть `keyboard_options` → `_flow_keyboard` (inline-кнопки `flow:<idx>`, лейблы извлекаются из `reply_markup` в callback'е).
+- Иначе — `chat_keyboard(lang)`.
+
+`_answer_safe` режет ответ по `TELEGRAM_SAFE_CHUNK=3800` и шлёт `parse_mode="HTML"` (Markdown преобразуется через `_md_to_html`). Если есть `pdf_path` — `answer_document(FSInputFile(...))`, потом `os.remove`.
+
+#### 7. Параллельные процессы
+
+- **Inactivity watcher** ([app/api/fastapi_app.py:33-62](app/api/fastapi_app.py#L33-L62)) каждые 60 c: закрывает сессии без активности и возвращает залипшие human-mode обратно к боту через `return_stale_human_sessions_to_bot` + `sync_human_mode_history_to_agent` (см. ниже).
+- **Health probe** (`/health`) проверяет, что чекпоинтер не `MemorySaver`, если включён `REQUIRE_PERSISTENT_CHECKPOINTER`.
 
 ---
 
@@ -127,6 +173,38 @@ LLM получает историю сообщений + системный пр
 
 После LLM-цикла `_update_dialog_from_tools()` анализирует какие инструменты были вызваны и обновляет `dialog` + `keyboard_options`.
 
+### Что происходит внутри (`node_faq`)
+
+1. **Нормализация ввода** (`_normalize_user_text`) — схлопывает пробелы, режет повторы пунктуации (`!!!`, `???`), обрезает до 2000 символов. Регистр и диакритика сохраняются.
+2. **PII-маскинг** (`mask_pii`) применяется только к `HumanMessage`, который уходит в LLM. В БД и в `messages` хранится оригинал.
+3. **Системный промпт каждый ход = `policy[lang] + <state>...</state>`**. XML-сериализация `dialog` (`_format_state_xml`) включает `flow`, `category`, `products`, `selected_product`, `offices` + хинт «если пользователь прислал только число — вызови `select_product`/`select_office` с этим индексом». Используется XML, потому что `gpt-4o-mini` парсит теги надёжнее, чем «Current state: …» свободным текстом.
+4. **Окно истории**: `[system] + последние MAX_DIALOG_MESSAGES` (по умолчанию 12). System-сообщение никогда не обрезается.
+5. **Цикл tool-calling, до 3 раундов** (`max_rounds = 3`):
+   - `llm_with_tools.ainvoke(loop_msgs)` → `AIMessage` с `tool_calls` или с финальным текстом.
+   - Если `tool_calls` пуст → берём текст как `answer`, выходим.
+   - Если есть → `ToolNode(_FAQ_TOOLS).ainvoke({"messages": ..., "dialog": dialog})` исполняет инструменты, кладёт `ToolMessage`-ответы в `loop_msgs`, идём на следующий раунд.
+   - Если упёрлись в лимит при ещё ожидающих tool-call'ах → лог `WARNING` с именами последних tool'ов.
+   - На `APIError / TimeoutError / JSONDecodeError` — fallback `_faq_lookup` по БД.
+6. **Учёт токенов**: `accumulate_usage` суммирует usage с каждого `AIMessage`, `finalize_usage` считает стоимость по модели.
+
+### Как `dialog` попадает в инструменты (InjectedState)
+
+Часть инструментов в `app/agent/tools.py` (например `select_product`, `find_office`) объявляют параметр
+
+```python
+state: Annotated[dict, InjectedState] = None
+```
+
+`ToolNode` сам подкладывает туда текущий граф-state — этот параметр **не появляется в схеме инструмента, которую видит LLM**, поэтому модель его не «угадывает» и не пытается передать. Это позволяет инструменту читать `dialog["products"] / dialog["offices"]` без глобальных contextvars.
+
+### Apply rule: ничего не меняем без tool-call
+
+После цикла `_update_dialog_from_tools(dialog, tool_calls_made, user_text, lang)` смотрит **только** на последний tool-call и решает:
+- какой `flow / category / selected_product / offices` стало;
+- какую клавиатуру переподнять (`_reattach_keyboard`).
+
+Если LLM не вызвал ни одного инструмента — `dialog` остаётся прежним, `keyboard_options` восстанавливается из текущего `flow`. То есть «свободный ответ» не разрушает состояние диалога.
+
 ### 12 инструментов (`app/agent/tools.py`)
 
 | # | Tool | Когда LLM вызывает | Параметры | Влияние на dialog |
@@ -160,49 +238,82 @@ LLM получает историю сообщений + системный пр
 
 ## Node: calc_flow (`app/agent/nodes/calc_flow.py`)
 
-Детерминистическая нода (без LLM), два подпотока:
+Детерминированная по структуре нода: переходы между шагами и финальные расчёты — обычный `if/elif`. Внутри отдельных шагов всё-таки используются маленькие LLM-вызовы (extractor'ы) для разбора пользовательского ввода — это надёжнее регулярок на «двадцать миллионов сум на 12 месяцев под 20%».
 
-### 1. calc_step — Сбор данных для расчёта
+Два подпотока:
 
-**Кредитные продукты:** сумма → срок → первоначальный взнос → PDF
-**Депозиты:** сумма → срок → текстовый расчёт
+### 1. calc_step — сбор данных для расчёта
 
-Парсеры (`app/agent/parsers.py`):
-- `_parse_amount()` — понимает "500 млн", "2 млрд", "100 тыс", "500 million"
-- `_parse_term_months()` — конвертирует "10 лет" / "36 месяцев" / "2 years"
-- `_parse_downpayment()` — проценты: "20%", "двадцать"
+**Кредитные продукты:** сумма → срок → первоначальный взнос → PDF.
+**Депозиты:** сумма → срок → текстовый расчёт.
 
-Если пользователь задаёт вопрос посреди расчёта → отвечает через LLM → переспрашивает текущий шаг.
+#### Извлечение значений (LLM-экстракторы)
 
-**PDF-генерация** (`app/utils/pdf_generator.py`):
-- Аннуитетная формула: `payment = principal × r × (1+r)^n / ((1+r)^n - 1)`
-- Таблица: месяц, ежемесячный платёж, основной долг, проценты, остаток
-- Маркер `[[PDF:/tmp/schedule_XXX.pdf]]` в ответе → ChatService извлекает и отправляет файл
+- `extract_prefill_from_history(messages, category, lang)` — на первом заходе в калькулятор вытягивает уже названные пользователем `amount` / `term_months` из недавних сообщений. Если в истории есть «мне 100 млн на 12 месяцев», шаги пропускаются.
+- `extract_calc_value(user_text, calc_step, product_name, lang, recent_messages)` — на каждом шаге классифицирует ответ: `{type: "value", value: ...}` или `{type: "question"}`.
+- `extract_updated_value(user_text, calc_step, calc_slots, ...)` — если ответ выглядит как вопрос, проверяет, не является ли он скрытым контекст-апдейтом («нет, давай 200 млн»). Если да — `type: "context_update"`, обновляет соответствующий слот.
 
-### 2. lead_step — Захват контактов
+Если шаг получил настоящий вопрос (`is_question and not parsed_value`) — отвечаем через `_faq_lookup` или короткий side-LLM (system: `at("calc_side_system", lang)`) и переспрашиваем текущий шаг.
+
+#### Ограничение значений по продукту
+
+Все значения клампятся к ограничениям продукта **до** расчёта:
+- `_clamp_term(term, product, category)`: для кредитов — к `[term_min_months, term_max_months]` из `rate_matrix`; для депозитов — к ближайшему доступному значению из `rate_schedule`.
+- `_clamp_downpayment(dp, product)`: к `[downpayment_min_pct, downpayment_max_pct]` из `rate_matrix`.
+
+Если значение скорректировано — формируется `adjustment_note` («Минимальный срок 12 мес, использую 12») и приклеивается к ответу.
+
+Дополнительно, если у продукта `term_min == term_max` или `downpayment_min == downpayment_max` — соответствующий вопрос не задаётся, слот заполняется автоматически.
+
+#### Подбор ставки
+
+- `_lookup_credit_rate(product, calc_slots)` — перебирает `rate_matrix`, ищет запись, в чьи диапазоны попадают введённые `term_months` и `downpayment`, выбирает `rate_min_pct`. Fallback: минимум по матрице.
+- `_lookup_deposit_rate(product, calc_slots)` — ищет в `rate_schedule` запись с тем же `term_months` (предпочтение `currency=UZS`). Fallback: ближайший срок.
+
+Если матрицы нет вовсе — берётся `rate_min_pct / rate_pct` продукта или константа `DEFAULT_CUSTOM_LOAN_RATE_PCT` (по умолчанию 20.0).
+
+#### PDF-генерация (только для кредитов)
+
+`generate_amortization_pdf(...)` запускается через `asyncio.to_thread` ([app/utils/pdf_generator.py](app/utils/pdf_generator.py)):
+- Аннуитетная формула: `payment = principal × r × (1+r)^n / ((1+r)^n - 1)`.
+- Таблица: месяц, ежемесячный платёж, основной долг, проценты, остаток.
+- Маркер `[[PDF:/tmp/schedule_XXX.pdf]]` в ответе → `ChatService` извлекает путь и отдельно отправляет файл документом, потом удаляет с диска.
+
+Депозит не генерирует PDF — выводится текстом через `at("deposit_result", lang, ...)`.
+
+### 2. lead_step — захват контактов
 
 После расчёта бот предлагает:
-1. "Хотите, чтобы вам перезвонили?" → `lead_step="offer"`
-2. "Да" → "Как вас зовут?" → `lead_step="name"`
-3. Иван Петров → "Укажите номер телефона" → `lead_step="phone"`
-4. +998901234567 → сохраняет **Lead** в БД → сброс dialog
+1. `lead_step="offer"` → «Хотите, чтобы вам перезвонили?» (кнопки: Да / Нет / Пересчитать). На «Пересчитать» (`_is_recalculate`) — рестарт калькулятора с тем же продуктом.
+2. `lead_step="name"` → «Как вас зовут?» В историю пишется маска `[NAME]` вместо реального имени.
+3. `lead_step="phone"` → «Укажите номер телефона». В истории — `[PHONE]`. `_save_lead_async` пишет `Lead` в БД (продукт, сумма, срок, ставка, имя, телефон).
 
 ---
 
 ## Node: human_mode (`app/agent/nodes/human_mode.py`)
 
-1. `langgraph_interrupt()` приостанавливает выполнение графа
-2. Оператор отвечает через:
-   - **REST API:** `POST /operator/send` (с `X-API-Key`)
-   - **SQLAdmin:** `https://agent-bot.uz/admin/` → ChatSessions → operator_reply
-   - **Telegram:** оператор с ID из `OPERATOR_IDS`
-3. `Command(resume=operator_reply)` возобновляет граф
-4. Auto-timeout: если оператор не ответил за `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` → возврат к боту
+Тело ноды — одна строка:
+```python
+operator_reply = langgraph_interrupt({"user_message": user_text, "reason": "human_mode_active"})
+```
+
+1. `langgraph_interrupt(...)` приостанавливает граф **в чекпоинтере** — состояние persistent, можно перезапускать процесс, ход не теряется.
+2. Оператор отвечает через один из каналов:
+   - **REST API:** `POST /operator/send` (с `X-API-Key`).
+   - **SQLAdmin:** `https://agent-bot.uz/admin/` → ChatSessions → `operator_reply`.
+   - **Telegram:** оператор с ID из `OPERATOR_IDS`.
+   - **Asaka chat-middleware:** `_on_agent_message` callback ([app/api/fastapi_app.py:100-112](app/api/fastapi_app.py#L100-L112)).
+3. Любой из каналов в итоге зовёт `agent_client.resume_human_mode(session_id, text)` → `graph.ainvoke(Command(resume=text), config)`. Граф возобновляется ровно с точки `interrupt`, `operator_reply` становится `answer`.
+4. **Auto-timeout** через `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES`:
+   - `inactivity_watcher` (60 c) находит сессии с `human_mode=True` и `human_mode_since <= threshold`, у которых **не было ни одного `Message(role="operator")`** с момента включения.
+   - Сбрасывает `human_mode=False` и зовёт `sync_human_mode_history_to_agent(session_id, since=human_mode_since)`.
+   - Та подгружает все `user`/`operator` сообщения с этого момента и инжектит их в `messages` графа: `user → HumanMessage`, `operator → AIMessage` (так бот «увидит», что оператор уже что-то ответил, и не будет переспрашивать с нуля).
 
 ### Fallback → Оператор
 
-- Если `faq_lookup` не нашёл ответ (similarity < 0.62) → `fallback_streak += 1`
-- После **3 fallback подряд** → показываем кнопку "Связаться с оператором"
+- Если `faq_lookup` не нашёл ответ (similarity < 0.62) → `fallback_streak += 1`.
+- После **3 fallback подряд** → `show_operator_button=True` → `handle_text` показывает кнопку «Связаться с оператором».
+- Сам `human_mode` включается только когда пользователь жмёт эту кнопку (callback `human:<session_id>` → `enable_human_mode`).
 
 ---
 
