@@ -6,7 +6,7 @@ import logging as _logging
 import os
 from typing import List, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langgraph.prebuilt import ToolNode
 from openai import APIError
 
@@ -293,24 +293,32 @@ async def node_faq(state: BotState) -> dict:
 
     llm = _get_chat_openai()
 
-    # Build message list for LLM. Per-language full system policy (Variant B).
+    # Build message list for LLM.
+    # Stable per-language policy and dynamic <state> XML go in SEPARATE
+    # SystemMessages so OpenAI auto-prompt-caching (≥1024 tokens) can hit on the
+    # policy block across turns. If we glued them into one string, every turn's
+    # changing <state> would invalidate the cache prefix.
     policy = get_system_policy(lang)
     existing_msgs = list(state.get("messages") or [SystemMessage(content=policy)])
-    system_content = policy
-
-    state_xml = _format_state_xml(dialog)
-    if state_xml:
-        system_content += "\n\n" + state_xml
-
-    if existing_msgs and isinstance(existing_msgs[0], SystemMessage):
-        chat_msgs = [SystemMessage(content=system_content)] + existing_msgs[1:]
-    else:
-        chat_msgs = [SystemMessage(content=system_content)] + existing_msgs
-    chat_msgs.append(HumanMessage(content=mask_pii(normalized_text or user_text)))
+    history_tail = existing_msgs[1:] if existing_msgs and isinstance(existing_msgs[0], SystemMessage) else list(existing_msgs)
 
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
-    if len(chat_msgs) > _max + 1:
-        chat_msgs = [chat_msgs[0]] + chat_msgs[-_max:]
+    if history_tail:
+        history_tail = trim_messages(
+            history_tail,
+            max_tokens=_max,
+            token_counter=len,
+            strategy="last",
+            start_on="human",
+            allow_partial=False,
+        )
+
+    state_xml = _format_state_xml(dialog)
+    chat_msgs: list = [SystemMessage(content=policy)]
+    if state_xml:
+        chat_msgs.append(SystemMessage(content=state_xml))
+    chat_msgs.extend(history_tail)
+    chat_msgs.append(HumanMessage(content=mask_pii(normalized_text or user_text)))
 
     fallback_reply = get_faq_fallback(lang)
     answer = fallback_reply

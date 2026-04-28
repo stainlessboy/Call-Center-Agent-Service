@@ -4,7 +4,7 @@ import logging as _logging
 import os
 from typing import List, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
 
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import at, get_system_policy
@@ -39,7 +39,19 @@ def _finalize_turn(
     msgs.append(AIMessage(content=answer))
     _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
     if len(msgs) > _max + 1:
-        msgs = [msgs[0]] + msgs[-_max:]
+        # Always preserve the leading SystemMessage; trim the rest with
+        # tool-call/tool-result pair safety via trim_messages.
+        head = [msgs[0]] if isinstance(msgs[0], SystemMessage) else []
+        tail_source = msgs[1:] if head else msgs
+        tail = trim_messages(
+            tail_source,
+            max_tokens=_max,
+            token_counter=len,
+            strategy="last",
+            start_on="human",
+            allow_partial=False,
+        )
+        msgs = head + tail
 
     # Track consecutive fallback answers
     streak = dialog.get("fallback_streak", 0)
