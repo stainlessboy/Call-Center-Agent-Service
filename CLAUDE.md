@@ -238,7 +238,7 @@ Important optional:
 - `OPENAI_MAX_RETRIES` — retries for all OpenAI calls (default `1`)
 - `AGENT_TIMEOUT_SECONDS` — per-turn timeout for agent invocation (seconds, default `25`)
 - `DEFAULT_CUSTOM_LOAN_RATE_PCT` — fallback rate for calculator when product rate is unavailable (default `20.0`)
-- `MAX_DIALOG_MESSAGES` — message history limit (default: 12)
+- `MAX_DIALOG_TOKENS` — approximate token budget for dialog history sent to the LLM (default: 3000)
 - `LANG_DETECTOR_MODEL` — model used by the dedicated language detector (default: `gpt-4o-mini`)
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` (default 60)
 - `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` (default 10)

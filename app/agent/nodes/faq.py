@@ -298,16 +298,21 @@ async def node_faq(state: BotState) -> dict:
     # SystemMessages so OpenAI auto-prompt-caching (≥1024 tokens) can hit on the
     # policy block across turns. If we glued them into one string, every turn's
     # changing <state> would invalidate the cache prefix.
-    policy = get_system_policy(lang)
+    #
+    # `mode` selects an optional addendum on top of the cached base. When the
+    # user is browsing offices we add OFFICE SELECTION rules; otherwise we
+    # ship the lean base so the cache hits on more turns.
+    policy_mode = "office_select" if dialog.get("offices") else "default"
+    policy = get_system_policy(lang, policy_mode)
     existing_msgs = list(state.get("messages") or [SystemMessage(content=policy)])
     history_tail = existing_msgs[1:] if existing_msgs and isinstance(existing_msgs[0], SystemMessage) else list(existing_msgs)
 
-    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
+    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "3000"))
     if history_tail:
         history_tail = trim_messages(
             history_tail,
-            max_tokens=_max,
-            token_counter=len,
+            max_tokens=_max_tokens,
+            token_counter="approximate",
             strategy="last",
             start_on="human",
             allow_partial=False,

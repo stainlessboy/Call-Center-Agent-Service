@@ -55,6 +55,30 @@ def _unsafecb(text: str) -> str:
     return text.replace(";", ":")
 
 
+# ── Language switch suggestion (heuristic mismatch) ─────────────────────────
+# Surfaced when the heuristic in app/agent/lang_heuristic.py thinks the user
+# wrote in a different language than User.language. The text is in the
+# *target* language (the one the user appears to be writing in) — they
+# obviously understand it since they just typed in it.
+_LANG_SWITCH_PROMPT = {
+    "ru": "Я заметил, что вы пишете по-русски — переключиться?",
+    "en": "Looks like you switched to English — switch the bot too?",
+    "uz": "O'zbek tiliga o'tasizmi?",
+}
+_LANG_SWITCH_YES = {"ru": "✅ Да", "en": "✅ Yes", "uz": "✅ Ha"}
+_LANG_SWITCH_NO = {"ru": "❌ Нет", "en": "❌ No", "uz": "❌ Yo'q"}
+
+
+def _lang_switch_keyboard(target_lang: str) -> InlineKeyboardMarkup:
+    """Two-button inline keyboard: confirm switch to *target_lang* or decline."""
+    yes_label = _LANG_SWITCH_YES.get(target_lang, _LANG_SWITCH_YES["ru"])
+    no_label = _LANG_SWITCH_NO.get(target_lang, _LANG_SWITCH_NO["ru"])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=yes_label, callback_data=f"lang_switch:{target_lang}"),
+        InlineKeyboardButton(text=no_label, callback_data="lang_switch:keep"),
+    ]])
+
+
 def _flow_keyboard(options: list[str], row_size: int = 2) -> InlineKeyboardMarkup:
     """Build an inline keyboard for flow answer buttons (prefix: flow:).
 
@@ -859,6 +883,10 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
             os.remove(reply.pdf_path)
         except OSError:
             pass
+    if reply.suggested_language and reply.suggested_language != lang:
+        target = reply.suggested_language
+        prompt = _LANG_SWITCH_PROMPT.get(target, _LANG_SWITCH_PROMPT["ru"])
+        await message.answer(prompt, reply_markup=_lang_switch_keyboard(target))
 
 
 @router.callback_query(F.data.startswith("noop:"))
@@ -1042,6 +1070,49 @@ async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatServic
             os.remove(reply.pdf_path)
         except OSError:
             pass
+    if reply.suggested_language and reply.suggested_language != lang:
+        target = reply.suggested_language
+        prompt = _LANG_SWITCH_PROMPT.get(target, _LANG_SWITCH_PROMPT["ru"])
+        await callback.message.answer(prompt, reply_markup=_lang_switch_keyboard(target))
+
+
+@router.callback_query(F.data.startswith("lang_switch:"))
+async def lang_switch_callback(callback: CallbackQuery, chat_service: ChatService) -> None:
+    """Handle the heuristic switch-language offer.
+
+    `lang_switch:keep` dismisses the prompt; `lang_switch:<code>` updates
+    User.language (mirrors the existing `lang:` callback for /start).
+    """
+    if callback.from_user is None or callback.message is None or not callback.data:
+        await callback.answer()
+        return
+    _, action = callback.data.split(":", 1)
+
+    if action == "keep":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    if action not in {"ru", "en", "uz"}:
+        await callback.answer()
+        return
+
+    await chat_service.get_or_create_user(
+        telegram_user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+        language=action,
+    )
+    texts = _user_language_text(action)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer(texts["language_saved"])
 
 
 @router.callback_query(F.data.startswith("lang:"))

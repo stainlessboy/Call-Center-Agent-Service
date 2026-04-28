@@ -26,6 +26,10 @@ class AgentTurnResult:
     keyboard_options: Optional[List[str]] = None
     show_operator_button: bool = False
     token_usage: Optional[dict] = None
+    # Set when the user's message looks like it's in a different language than
+    # User.language. The bot layer surfaces an inline "switch?" prompt; we
+    # never switch silently. None when no mismatch was detected.
+    suggested_language: Optional[str] = None
 
 
 def _default_dialog() -> dict:

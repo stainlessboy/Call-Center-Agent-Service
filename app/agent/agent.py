@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging as _logging
 from typing import Any, Dict, Optional, Sequence
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.checkpointer import _create_async_checkpointer
-from app.agent.constants import resolve_language
-from app.agent.i18n import at, get_system_policy
+from app.agent.constants import VALID_LANGS, resolve_language
+from app.agent.i18n import at
 from app.agent.graph import build_graph
 from app.agent.lang_detect import detect_language
+from app.agent.lang_heuristic import check_lang_mismatch
 from app.agent.pii_masker import mask_pii
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
 
@@ -54,10 +55,33 @@ class Agent:
         existing = await self._aload_existing_state(config)
         dialog = dict(existing.get("dialog") or _default_dialog())
 
-        # Dedicated LLM detector — one small call, authoritative for this turn.
-        # Falls back to last_lang / "ru" on error or empty input.
-        detected_lang = await detect_language(user_text, fallback=resolve_language(dialog))
-        dialog["last_lang"] = detected_lang
+        # Language resolution (hybrid):
+        # 1. User.language (passed via `language` arg) is authoritative — it's
+        #    what the user explicitly chose in /start. Costs zero tokens.
+        # 2. If User.language is unset (first contact), fall back to the
+        #    dedicated LLM detector — one small call, cached.
+        # 3. Run a cheap regex heuristic on top: if the message clearly looks
+        #    like a different language, surface a switch suggestion so the
+        #    bot layer can ask the user to confirm. We never switch silently.
+        primary_lang = language if language in VALID_LANGS else None
+        if primary_lang is None:
+            primary_lang = await detect_language(
+                user_text, fallback=resolve_language(dialog)
+            )
+        suggested_lang: Optional[str] = check_lang_mismatch(user_text, primary_lang)
+        # Don't re-prompt every turn — once we've offered a switch for a given
+        # target language and the user answered, we record the answer in
+        # `dialog["lang_switch_offered"]`. While that flag matches the same
+        # target, suppress the offer.
+        if suggested_lang and dialog.get("lang_switch_offered") == suggested_lang:
+            suggested_lang = None
+        dialog["last_lang"] = primary_lang
+        if suggested_lang:
+            # Mark that we've offered a switch toward this target so the next
+            # turn doesn't re-prompt. The flag is cleared whenever a tool call
+            # resets dialog to defaults (greeting, get_products, find_office).
+            dialog["lang_switch_offered"] = suggested_lang
+        detected_lang = primary_lang
 
         # node_faq builds a fresh SystemMessage(policy[lang]) every turn, so we
         # don't bake one in here. Any stale SystemMessage left at messages[0]
@@ -84,6 +108,7 @@ class Agent:
             keyboard_options=out.get("keyboard_options") or None,
             show_operator_button=bool(out.get("show_operator_button")),
             token_usage=out.get("token_usage") or None,
+            suggested_language=suggested_lang,
         )
 
     async def send_message(
@@ -112,8 +137,7 @@ class Agent:
             return
         config = self._build_config(session_id)
         existing = await self._aload_existing_state(config)
-        dialog_for_lang = dict(existing.get("dialog") or {})
-        msgs = list(existing.get("messages") or [SystemMessage(content=get_system_policy(resolve_language(dialog_for_lang)))])
+        msgs = list(existing.get("messages") or [])
         for event in events:
             role = (event.get("role") or "").strip().lower()
             text = (event.get("text") or "").strip()

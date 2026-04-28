@@ -29,6 +29,9 @@ class AgentReply:
     human_mode: bool = False
     keyboard_options: Optional[list] = None
     show_operator_button: bool = False
+    # Set when the heuristic thinks the user just wrote in a different
+    # language than User.language. The bot layer renders an inline confirm.
+    suggested_language: Optional[str] = None
 
 
 class ChatService:
@@ -292,6 +295,7 @@ class ChatService:
             human_mode=chat_session.human_mode,
             keyboard_options=agent_keyboard,
             show_operator_button=getattr(turn_result, "show_operator_button", False),
+            suggested_language=getattr(turn_result, "suggested_language", None),
         )
 
     async def close_inactive_sessions(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:

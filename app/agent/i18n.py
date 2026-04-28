@@ -72,7 +72,10 @@ XML-блок `<state>` в этом промте несёт текущий диа
 - `<offices>` — пронумерованный список офисов, который сейчас показан после вызова `find_office`
 - `<selected_office>` — офис, который клиент выбрал
 Если клиент прислал только число («2»), сопоставь его с продуктом по этому индексу через `select_product`.
+"""
 
+
+_POLICY_OFFICE_SELECT_RU = """
 ## ВЫБОР ОФИСА
 Если `find_office` только что был вызван и клиент отвечает числом («1», «2»…), порядковым словом («первый», «birinchisi»), названием офиса или словом «все»/«хаммаси»/«barchasi»/«all»/«hammasini» — немедленно вызови `select_office`. НИКОГДА не отвечай «подождите несколько секунд» или «сейчас найду» — возвращай детали офиса в этом же ответе.
 """
@@ -133,7 +136,10 @@ The `<state>` XML block in this prompt carries the current dialog:
 - `<offices>` — numbered list of offices shown after `find_office`
 - `<selected_office>` — the office the user selected
 If the user sends just a number ("2"), map it to the product at that index via `select_product`.
+"""
 
+
+_POLICY_OFFICE_SELECT_EN = """
 ## OFFICE SELECTION
 If `find_office` was just called and the user replies with a number ("1", "2"…), an ordinal word ("first", "birinchisi"), an office name, or "all"/"все"/"хаммаси"/"barchasi"/"hammasini" — call `select_office` immediately. NEVER reply with "wait a few seconds" or "I'll fetch the info" — return the office details in this same turn.
 """
@@ -197,7 +203,10 @@ Ushbu promtdagi `<state>` XML bloki joriy dialogni saqlaydi:
 - `<offices>` — `find_office` chaqirilgandan keyin ko'rsatilgan raqamlangan ofislar ro'yxati
 - `<selected_office>` — mijoz tanlagan ofis
 Mijoz faqat raqam ("2") yuborsa, uni shu indeksdagi mahsulot bilan `select_product` orqali moslang.
+"""
 
+
+_POLICY_OFFICE_SELECT_UZ = """
 ## OFIS TANLASH
 Agar `find_office` hozirgina chaqirilgan bo'lsa va mijoz raqam ("1", "2"...), tartib so'zi ("birinchi", "birinchisi"), ofis nomi yoki "hammasi"/"barchasi"/"all"/"все"/"хаммаси"/"hammasini" deb javob bersa — darhol `select_office` ni chaqiring. HECH QACHON "bir necha soniya kuting" yoki "hozir topaman" demang — ofis tafsilotlarini shu javobda qaytaring.
 """
@@ -209,10 +218,30 @@ SYSTEM_POLICY: dict[str, str] = {
     "uz": _SYSTEM_POLICY_UZ,
 }
 
+# Per-mode policy addenda. The base policy above is stable across turns and
+# benefits from OpenAI's auto prompt cache (≥1024 tokens, 50% discount on the
+# cached prefix). Addenda are appended only when the dialog state needs them.
+_POLICY_ADDENDA: dict[str, dict[str, str]] = {
+    "office_select": {
+        "ru": _POLICY_OFFICE_SELECT_RU,
+        "en": _POLICY_OFFICE_SELECT_EN,
+        "uz": _POLICY_OFFICE_SELECT_UZ,
+    },
+}
 
-def get_system_policy(lang: str) -> str:
-    """Return the full system prompt for the given language. Falls back to Russian."""
-    return SYSTEM_POLICY.get(lang) or SYSTEM_POLICY["ru"]
+
+def get_system_policy(lang: str, mode: str = "default") -> str:
+    """Return the system prompt for the given language and dialog mode.
+
+    `mode` selects an optional addendum appended to the stable base:
+      - "default": base only (most turns)
+      - "office_select": base + office-selection rules (when offices are shown)
+
+    Unknown languages fall back to Russian; unknown modes fall back to base.
+    """
+    base = SYSTEM_POLICY.get(lang) or SYSTEM_POLICY["ru"]
+    addendum = _POLICY_ADDENDA.get(mode, {}).get(lang)
+    return base + addendum if addendum else base
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from typing import List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
 
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
-from app.agent.i18n import at, get_system_policy
+from app.agent.i18n import at
 from app.agent.intent import _is_operator_request
 from app.agent.pii_masker import mask_pii
 from app.agent.state import BotState
@@ -25,8 +25,14 @@ def _finalize_turn(
     mask_user_text: Optional[str] = None,
 ) -> dict:
     user_text = (state.get("last_user_text") or "").strip()
-    lang = (dialog or {}).get("last_lang") or "ru"
-    msgs = list(state.get("messages") or [SystemMessage(content=get_system_policy(lang))])
+    # Existing checkpoints from older code may have a SystemMessage at index 0.
+    # We don't write new ones (policy is rebuilt fresh each turn in node_faq),
+    # but we preserve any legacy head as opaque so old sessions stay valid.
+    prior = list(state.get("messages") or [])
+    legacy_system_head = (
+        [prior[0]] if prior and isinstance(prior[0], SystemMessage) else []
+    )
+    msgs = list(prior)
     # mask_user_text — explicit token override used by lead-name/phone steps
     # where we know exactly what the field is. Otherwise apply the generic
     # regex masker so volunteered PII (card, passport, IBAN, etc.) never
@@ -37,21 +43,17 @@ def _finalize_turn(
         history_text = mask_pii(user_text)
     msgs.append(HumanMessage(content=history_text))
     msgs.append(AIMessage(content=answer))
-    _max = int(os.getenv("MAX_DIALOG_MESSAGES", "12"))
-    if len(msgs) > _max + 1:
-        # Always preserve the leading SystemMessage; trim the rest with
-        # tool-call/tool-result pair safety via trim_messages.
-        head = [msgs[0]] if isinstance(msgs[0], SystemMessage) else []
-        tail_source = msgs[1:] if head else msgs
-        tail = trim_messages(
-            tail_source,
-            max_tokens=_max,
-            token_counter=len,
-            strategy="last",
-            start_on="human",
-            allow_partial=False,
-        )
-        msgs = head + tail
+    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "3000"))
+    tail_source = msgs[len(legacy_system_head):]
+    tail = trim_messages(
+        tail_source,
+        max_tokens=_max_tokens,
+        token_counter="approximate",
+        strategy="last",
+        start_on="human",
+        allow_partial=False,
+    )
+    msgs = legacy_system_head + tail
 
     # Track consecutive fallback answers
     streak = dialog.get("fallback_streak", 0)

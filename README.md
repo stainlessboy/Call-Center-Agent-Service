@@ -178,7 +178,7 @@ LLM получает историю сообщений + системный пр
 1. **Нормализация ввода** (`_normalize_user_text`) — схлопывает пробелы, режет повторы пунктуации (`!!!`, `???`), обрезает до 2000 символов. Регистр и диакритика сохраняются.
 2. **PII-маскинг** (`mask_pii`) применяется только к `HumanMessage`, который уходит в LLM. В БД и в `messages` хранится оригинал.
 3. **Системный промпт каждый ход = `policy[lang] + <state>...</state>`**. XML-сериализация `dialog` (`_format_state_xml`) включает `flow`, `category`, `products`, `selected_product`, `offices` + хинт «если пользователь прислал только число — вызови `select_product`/`select_office` с этим индексом». Используется XML, потому что `gpt-4o-mini` парсит теги надёжнее, чем «Current state: …» свободным текстом.
-4. **Окно истории**: `[system] + последние MAX_DIALOG_MESSAGES` (по умолчанию 12). System-сообщение никогда не обрезается.
+4. **Окно истории**: токенный бюджет `MAX_DIALOG_TOKENS` (по умолчанию 3000), считается через `count_tokens_approximately`. `trim_messages(strategy="last", start_on="human", allow_partial=False)` режет старое, сохраняя пары tool-call/tool-result. Системные сообщения (policy + `<state>`) пересобираются каждый ход и в чекпоинте не хранятся.
 5. **Цикл tool-calling, до 3 раундов** (`max_rounds = 3`):
    - `llm_with_tools.ainvoke(loop_msgs)` → `AIMessage` с `tool_calls` или с финальным текстом.
    - Если `tool_calls` пуст → берём текст как `answer`, выходим.
@@ -679,7 +679,7 @@ crontab -e
 | `LANGGRAPH_CHECKPOINT_BACKEND` | — | `auto` | `memory\|postgres\|auto` |
 | `SESSION_INACTIVITY_TIMEOUT_MINUTES` | — | `1440` | Таймаут сессии (мин) |
 | `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES` | — | `10` | Таймаут оператора (мин) |
-| `MAX_DIALOG_MESSAGES` | — | `12` | Лимит истории сообщений |
+| `MAX_DIALOG_TOKENS` | — | `3000` | Токенный бюджет истории (через `count_tokens_approximately`) |
 
 ---
 
