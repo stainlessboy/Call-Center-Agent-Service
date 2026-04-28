@@ -1112,6 +1112,14 @@ async def lang_switch_callback(callback: CallbackQuery, chat_service: ChatServic
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    # Visible chat message in the new language so the user sees the switch
+    # took effect (toast via callback.answer is too easy to miss).
+    confirmation = {
+        "ru": "✅ Готово, продолжаем по-русски.",
+        "en": "✅ Done, switching to English.",
+        "uz": "✅ Tayyor, o'zbek tilida davom etamiz.",
+    }[action]
+    await callback.message.answer(confirmation, reply_markup=chat_keyboard(action))
     await callback.answer(texts["language_saved"])
 
 
