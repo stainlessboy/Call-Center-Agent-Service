@@ -95,7 +95,8 @@ app/
 ├── services/
 │   ├── agent_client.py       # Thin wrapper around Agent
 │   ├── chat_service.py       # Session lifecycle, message persistence, hybrid mode
-│   ├── chat_middleware_client.py  # External chat middleware integration
+│   ├── chat_middleware_client.py  # Asaka chat-middleware integration (JWT auth, Socket.IO)
+│   ├── middleware_files.py   # MinIO upload + download/forward operator media to Telegram
 │   └── telegram_sender.py    # Telegram message sending utility
 ├── utils/
 │   ├── data_loaders.py       # Async DB loaders for products and FAQ
@@ -235,6 +236,8 @@ Important optional:
 - `OPENAI_REQUEST_TIMEOUT` — per-request timeout for the main LLM (seconds, default `15`)
 - `LANG_DETECTOR_TIMEOUT` — per-request timeout for the language detector (seconds, default `10`)
 - `OPENAI_MAX_RETRIES` — retries for all OpenAI calls (default `1`)
+- `AGENT_TIMEOUT_SECONDS` — per-turn timeout for agent invocation (seconds, default `25`)
+- `DEFAULT_CUSTOM_LOAN_RATE_PCT` — fallback rate for calculator when product rate is unavailable (default `20.0`)
 - `MAX_DIALOG_MESSAGES` — message history limit (default: 12)
 - `LANG_DETECTOR_MODEL` — model used by the dedicated language detector (default: `gpt-4o-mini`)
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` (default 60)

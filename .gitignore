@@ -20,3 +20,4 @@ nginx/certbot/
 .claude
 .playwright-mcp
 chat-middleware-mock
+call_center_bot

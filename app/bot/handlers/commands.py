@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from aiogram import F, Router
@@ -39,6 +39,16 @@ from app.services.chat_service import ChatService
 
 router = Router()
 TELEGRAM_SAFE_CHUNK = 3800
+
+
+def _is_within_working_hours() -> bool:
+    """Окно работы операторов middleware (по дефолту 8:00–23:00 Asia/Tashkent)."""
+    settings = get_settings()
+    if not settings.middleware_working_hours_enabled:
+        return True
+    tz = timezone(timedelta(hours=settings.middleware_working_hours_tz_offset))
+    now = datetime.now(tz)
+    return settings.middleware_working_hours_start <= now.hour < settings.middleware_working_hours_end
 
 
 def _unsafecb(text: str) -> str:
@@ -532,6 +542,97 @@ async def contact_shared(message: Message, chat_service: ChatService) -> None:
         await message.answer(texts["start"], reply_markup=main_menu_keyboard(user.language))
 
 
+@router.message(F.photo | F.video | F.audio | F.voice | F.document)
+async def handle_media(message: Message, chat_service: ChatService) -> None:
+    """
+    Медиа от пользователя в human_mode пересылается оператору через
+    MinIO upload + middleware send-message (как в call_center_bot).
+    Если human_mode выключен или middleware не настроен — пишем подсказку.
+    """
+    tg_user = message.from_user
+    if tg_user is None:
+        return
+
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=tg_user.id,
+        username=tg_user.username,
+        first_name=tg_user.first_name,
+        last_name=tg_user.last_name,
+    )
+    lang = normalize_lang(user.language)
+
+    chat_session = await chat_service.ensure_active_session(user.id)
+    if not chat_session.human_mode:
+        await message.answer(t("agent_unavailable", lang))
+        return
+
+    from app.api.fastapi_app import app as _fastapi_app
+    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+    if middleware_client is None or not middleware_client.has_active_chat(chat_session.id):
+        await message.answer(t("connection_lost", lang))
+        return
+
+    settings = get_settings()
+    if not (settings.minio_base_url and settings.minio_username and settings.minio_password):
+        await message.answer(t("message_send_failed", lang))
+        return
+
+    file_path: str | None = None
+    try:
+        if message.photo:
+            ph = message.photo[-1]
+            file_path = f"/tmp/{ph.file_id}.jpg"
+            await message.bot.download(ph, file_path)
+        elif message.video:
+            file_path = f"/tmp/{message.video.file_id}.mp4"
+            await message.bot.download(message.video, file_path)
+        elif message.audio:
+            file_path = f"/tmp/{message.audio.file_id}.mp3"
+            await message.bot.download(message.audio, file_path)
+        elif message.voice:
+            file_path = f"/tmp/{message.voice.file_id}.mp3"
+            await message.bot.download(message.voice, file_path)
+        elif message.document:
+            ext = os.path.splitext(message.document.file_name or "")[1] or ".bin"
+            file_path = f"/tmp/{message.document.file_id}{ext}"
+            await message.bot.download(message.document, file_path)
+
+        if not file_path:
+            return
+
+        from app.services.middleware_files import upload_file_to_minio
+
+        minio_path = await upload_file_to_minio(
+            file_path,
+            base_url=settings.minio_base_url,
+            username=settings.minio_username,
+            password=settings.minio_password,
+            verify_ssl=settings.middleware_verify_ssl,
+        )
+        if not minio_path:
+            await message.answer(t("message_send_failed", lang))
+            return
+
+        ok = await middleware_client.send_message(chat_session.id, minio_path)
+        if not ok:
+            await message.answer(t("message_send_failed", lang))
+        else:
+            await chat_service._save_message(
+                session_id=chat_session.id,
+                role="user",
+                text=f"[file] {minio_path}",
+                telegram_message_id=message.message_id,
+            )
+    except Exception:
+        await message.answer(t("message_send_failed", lang))
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+
+
 @router.message(F.text)
 async def handle_text(message: Message, chat_service: ChatService) -> None:
     tg_user = message.from_user
@@ -985,8 +1086,14 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
             }[normalize_lang(user.language)]
         )
         return
-    await chat_service.set_human_mode(session_id, True)
+
     lang = normalize_lang(user.language)
+
+    # Working hours guard (Asia/Tashkent 8–23 by default, configurable)
+    if not _is_within_working_hours():
+        await callback.message.answer(t("working_hours", lang))
+        await callback.answer()
+        return
 
     # Chat Middleware
     from app.api.fastapi_app import app as _fastapi_app
@@ -994,25 +1101,31 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
 
     if middleware_client is None:
         # Middleware not configured — tell user operators are unavailable
-        await chat_service.set_human_mode(session_id, False)
         await callback.message.answer(t("middleware_unavailable", lang))
         await callback.answer()
         return
 
-    recent = await chat_service.get_recent_messages(session_id, limit=10)
-    context = "\n".join(
-        f"{'User' if m.role == 'user' else 'Bot'}: {m.text}"
-        for m in recent if m.text
-    )
-    customer_name = f"@{user.username}" if user.username else (user.first_name or str(user.telegram_user_id))
+    # Phone is required by middleware (used as requestId/userPhone)
+    if not user.phone:
+        await callback.message.answer(
+            t("phone_required_for_operator", lang),
+            reply_markup=contact_keyboard(lang),
+        )
+        await callback.answer()
+        return
+
+    await chat_service.set_human_mode(session_id, True)
+    customer_name = user.first_name or (f"@{user.username}" if user.username else str(user.telegram_user_id))
 
     await callback.message.answer(t("searching_operator", lang))
     await callback.answer()
 
     ok = await middleware_client.start_chat(
         session_id=session_id,
+        phone=user.phone,
         user_name=customer_name,
-        initial_message=context or "Клиент запросил оператора",
+        lang=lang,
+        telegram_id=user.telegram_user_id,
     )
     if not ok:
         await chat_service.set_human_mode(session_id, False)

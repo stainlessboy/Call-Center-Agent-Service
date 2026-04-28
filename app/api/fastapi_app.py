@@ -24,6 +24,7 @@ from app.admin.setup import setup_admin
 from app.services.agent_client import AgentClient
 from app.services.chat_service import ChatService
 from app.services.chat_middleware_client import ChatMiddlewareClient
+from app.services.middleware_files import download_and_send_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ async def lifespan(app: FastAPI):
     middleware_client: ChatMiddlewareClient | None = None
     if settings.middleware_enabled and settings.middleware_url and settings.middleware_login and settings.middleware_password:
 
-        async def _on_agent_joined(session_id: str, agent_name: str):
+        async def _on_agent_joined(session_id: str, agent_name: str | None):
             data = await chat_service.get_session_with_user(session_id)
             if not data:
                 return
@@ -93,7 +94,7 @@ async def lifespan(app: FastAPI):
             lang = normalize_lang(user.language)
             await bot.send_message(
                 chat_id=user.telegram_user_id,
-                text=t("operator_joined", lang, name=agent_name),
+                text=t("operator_connected", lang),
             )
 
         async def _on_agent_message(session_id: str, text: str):
@@ -101,14 +102,22 @@ async def lifespan(app: FastAPI):
             if not data:
                 return
             _, user = data
+            if not text:
+                return
             await chat_service._save_message(session_id, role="operator", text=text)
-            name = middleware_client.get_agent_name(session_id) if middleware_client else "Оператор"
-            formatted = f"👤 ({name or 'Оператор'}): {text}"
-            await bot.send_message(chat_id=user.telegram_user_id, text=formatted)
+            await bot.send_message(chat_id=user.telegram_user_id, text=text)
             try:
                 await agent_client.resume_human_mode(session_id, text)
             except Exception:
                 pass
+
+        async def _on_agent_file(session_id: str, file_url: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            await chat_service._save_message(session_id, role="operator", text=f"[file] {file_url}")
+            await download_and_send_to_user(bot, user.telegram_user_id, file_url)
 
         async def _on_chat_ended(session_id: str, reason: str):
             data = await chat_service.get_session_with_user(session_id)
@@ -117,10 +126,14 @@ async def lifespan(app: FastAPI):
             _, user = data
             lang = normalize_lang(user.language)
             await chat_service.set_human_mode(session_id, False)
-            if reason == "timeout":
+            if reason == "operator_left":
+                msg = t("chat_ended", lang)
+            elif reason == "chat_finished_error":
+                msg = t("chat_ended_try_again", lang)
+            elif reason == "timeout":
                 msg = t("operator_wait_timeout", lang)
             else:
-                msg = t("human_timeout_back_to_bot", lang, minutes=0)
+                msg = t("chat_ended", lang)
             await bot.send_message(chat_id=user.telegram_user_id, text=msg)
 
         async def _on_error(session_id: str, error_code: str):
@@ -134,20 +147,36 @@ async def lifespan(app: FastAPI):
                 msg = t("all_operators_busy", lang)
             elif error_code == "chat_timedout_waiting_for_agent":
                 msg = t("operator_wait_timeout", lang)
+            elif error_code == "start_error":
+                msg = t("chat_ended_try_again", lang)
             else:
                 msg = t("all_operators_busy", lang)
             await bot.send_message(chat_id=user.telegram_user_id, text=msg)
+
+        async def _on_inactivity_warning(session_id: str):
+            data = await chat_service.get_session_with_user(session_id)
+            if not data:
+                return
+            _, user = data
+            lang = normalize_lang(user.language)
+            await bot.send_message(
+                chat_id=user.telegram_user_id,
+                text=t("chat_inactivity_warning", lang),
+            )
 
         middleware_client = ChatMiddlewareClient(
             middleware_url=settings.middleware_url,
             login=settings.middleware_login,
             password=settings.middleware_password,
-            csq=settings.middleware_csq,
             on_agent_message=_on_agent_message,
             on_agent_joined=_on_agent_joined,
             on_chat_ended=_on_chat_ended,
             on_error=_on_error,
+            on_agent_file=_on_agent_file,
+            on_inactivity_warning=_on_inactivity_warning,
+            is_test_request=settings.middleware_is_test_request,
             nginx_ws_url=settings.middleware_nginx_ws_url,
+            verify_ssl=settings.middleware_verify_ssl,
         )
         logger.info("Chat Middleware client initialized (url=%s)", settings.middleware_url)
     elif settings.middleware_enabled:

@@ -140,11 +140,6 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "🔍 Looking for an available operator...",
         "uz": "🔍 Bo’sh operator qidirilmoqda...",
     },
-    "operator_joined": {
-        "ru": "✅ Оператор {name} подключился к чату.",
-        "en": "✅ Operator {name} joined the chat.",
-        "uz": "✅ Operator {name} chatga qo’shildi.",
-    },
     "all_operators_busy": {
         "ru": "😔 Все операторы заняты. Попробуйте позже.",
         "en": "😔 All operators are busy. Please try again later.",
@@ -159,6 +154,46 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "😔 Операторы сейчас недоступны. Попробуйте позже.",
         "en": "😔 Operators are currently unavailable. Please try again later.",
         "uz": "😔 Operatorlar hozircha mavjud emas. Keyinroq urinib ko’ring.",
+    },
+    "operator_connected": {
+        "ru": "✅ Оператор подключился, можете задать свой вопрос.",
+        "en": "✅ Operator joined the chat, you can ask your question.",
+        "uz": "✅ Operator ulandi, savolingizni berishingiz mumkin.",
+    },
+    "chat_ended": {
+        "ru": "Чат завершён.",
+        "en": "Chat ended.",
+        "uz": "Chat yakunlandi.",
+    },
+    "chat_ended_try_again": {
+        "ru": "Чат завершён, пожалуйста, попробуйте ещё раз.",
+        "en": "Chat ended, please try again.",
+        "uz": "Chat yakunlandi, iltimos qaytadan urinib ko‘ring.",
+    },
+    "chat_inactivity_warning": {
+        "ru": "Чат закроется через минуту из-за бездействия. Чтобы продолжить — напишите сообщение.",
+        "en": "Chat will close in a minute due to inactivity. Send a message to continue.",
+        "uz": "Chat 1 daqiqada faoliyatsizlik sababli yopiladi. Davom etish uchun xabar yozing.",
+    },
+    "working_hours": {
+        "ru": "Чат с оператором работает с 8:00 до 23:00 (Ташкент).",
+        "en": "Operator chat is available from 8:00 to 23:00 (Tashkent time).",
+        "uz": "Operator chati 8:00 dan 23:00 gacha ishlaydi (Toshkent vaqti).",
+    },
+    "phone_required_for_operator": {
+        "ru": "Чтобы соединить вас с оператором, поделитесь номером телефона кнопкой ниже.",
+        "en": "To connect you to an operator, please share your phone number using the button below.",
+        "uz": "Operator bilan bog‘lash uchun pastdagi tugma orqali telefon raqamingizni yuboring.",
+    },
+    "message_send_failed": {
+        "ru": "Не удалось отправить сообщение. Попробуйте ещё раз.",
+        "en": "Failed to send the message. Please try again.",
+        "uz": "Xabarni yuborib bo‘lmadi. Qayta urinib ko‘ring.",
+    },
+    "connection_lost": {
+        "ru": "Соединение с оператором потеряно. Попробуйте подключиться снова.",
+        "en": "Connection to the operator was lost. Please try connecting again.",
+        "uz": "Operator bilan aloqa uzildi. Qaytadan ulanishga harakat qiling.",
     },
 }
 

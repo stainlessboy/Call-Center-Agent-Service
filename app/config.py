@@ -33,8 +33,16 @@ class Settings:
     middleware_url: str | None
     middleware_login: str | None
     middleware_password: str | None
-    middleware_csq: str
     middleware_nginx_ws_url: str | None
+    middleware_is_test_request: bool
+    middleware_verify_ssl: bool
+    middleware_working_hours_enabled: bool
+    middleware_working_hours_start: int
+    middleware_working_hours_end: int
+    middleware_working_hours_tz_offset: int
+    minio_base_url: str | None
+    minio_username: str | None
+    minio_password: str | None
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -87,6 +95,14 @@ def get_settings() -> Settings:
         middleware_url=(os.getenv("MIDDLEWARE_URL") or "").strip() or None,
         middleware_login=(os.getenv("MIDDLEWARE_LOGIN") or "").strip() or None,
         middleware_password=(os.getenv("MIDDLEWARE_PASSWORD") or "").strip() or None,
-        middleware_csq=os.getenv("MIDDLEWARE_CSQ", "Chat_Queue_1").strip(),
         middleware_nginx_ws_url=(os.getenv("MIDDLEWARE_NGINX_WS_URL") or "").strip() or None,
+        middleware_is_test_request=os.getenv("MIDDLEWARE_IS_TEST_REQUEST", "false").strip().lower() == "true",
+        middleware_verify_ssl=os.getenv("MIDDLEWARE_VERIFY_SSL", "false").strip().lower() == "true",
+        middleware_working_hours_enabled=os.getenv("MIDDLEWARE_WORKING_HOURS_ENABLED", "false").strip().lower() == "true",
+        middleware_working_hours_start=_parse_positive_int(os.getenv("MIDDLEWARE_WORKING_HOURS_START"), default=8),
+        middleware_working_hours_end=_parse_positive_int(os.getenv("MIDDLEWARE_WORKING_HOURS_END"), default=23),
+        middleware_working_hours_tz_offset=_parse_positive_int(os.getenv("MIDDLEWARE_WORKING_HOURS_TZ_OFFSET"), default=5),
+        minio_base_url=(os.getenv("MINIO_BASE_URL") or "").strip() or None,
+        minio_username=(os.getenv("MINIO_USERNAME") or "").strip() or None,
+        minio_password=(os.getenv("MINIO_PASSWORD") or "").strip() or None,
     )
