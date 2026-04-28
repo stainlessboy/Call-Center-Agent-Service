@@ -59,15 +59,10 @@ class Agent:
         detected_lang = await detect_language(user_text, fallback=resolve_language(dialog))
         dialog["last_lang"] = detected_lang
 
-        # Refresh SystemMessage every turn: picks up i18n.py edits and follows
-        # language switches mid-session. Without this the first-turn prompt
-        # gets frozen into the checkpoint forever.
-        fresh_system = SystemMessage(content=get_system_policy(detected_lang))
+        # node_faq builds a fresh SystemMessage(policy[lang]) every turn, so we
+        # don't bake one in here. Any stale SystemMessage left at messages[0]
+        # from older code is silently dropped by node_faq's history-tail logic.
         prior = list(existing.get("messages") or [])
-        if prior and isinstance(prior[0], SystemMessage):
-            prior[0] = fresh_system
-        else:
-            prior = [fresh_system, *prior]
 
         state_in: BotState = {
             "last_user_text": user_text,
