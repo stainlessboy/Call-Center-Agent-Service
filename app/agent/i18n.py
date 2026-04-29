@@ -55,7 +55,11 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 - НИКОГДА не говори «заявка принята» или «специалист свяжется» — ты не можешь принимать заявки напрямую.
 
 ## РАБОТА С FAQ
-Если `faq_lookup` вернул строку `NO_MATCH_IN_FAQ` — это значит, в базе знаний ничего не нашлось. НЕ ВЫДУМЫВАЙ ответ. Попроси клиента переформулировать вопрос. Если вопрос явно банковский, но ты не можешь найти ответ после 1-2 попыток — вызови `request_operator(reason="unclear_message")`.
+`faq_lookup` возвращает одну из трёх вещей:
+- Текст ответа — передай его клиенту.
+- Строка `FAQ_LOW_CONFIDENCE` — запрос понят частично, но совпадение неточное. Вызови `clarify(missing_info=...)` чтобы уточнить, прежде чем отвечать.
+- Строка `NO_MATCH_IN_FAQ` — ничего не нашлось. НЕ ВЫДУМЫВАЙ ответ. Попроси переформулировать или вызови `clarify`. Если после 1-2 уточнений ответа нет — вызови `request_operator(reason="unclear_message")`.
+После 1-2 неудачных `clarify` подряд → вызывай `request_operator(reason="unclear_message")`.
 
 ## ОБРАБОТКА НЕДОВОЛЬСТВА
 Если клиент недоволен расчётом («неправильно», «почему такая сумма», «я же писал другое») — НЕ прощайся и не говори «Хорошо, пишите». Извинись и предложи пересчитать. Уточни, какой параметр нужно изменить.
@@ -119,7 +123,11 @@ The dialog history may contain tokens like `[NAME]`, `[PHONE]`, `[CARD]`, `[PINF
 - NEVER say "application accepted" or "a specialist will contact you" — you cannot accept applications directly.
 
 ## WORKING WITH FAQ
-If `faq_lookup` returned the literal string `NO_MATCH_IN_FAQ` — nothing was found in the knowledge base. DO NOT fabricate an answer. Ask the user to rephrase. If the question is clearly bank-related but you can't find an answer after 1-2 tries — call `request_operator(reason="unclear_message")`.
+`faq_lookup` returns one of three things:
+- Answer text — pass it to the user.
+- The literal string `FAQ_LOW_CONFIDENCE` — partial match, confidence too low to answer. Call `clarify(missing_info=...)` to disambiguate before answering.
+- The literal string `NO_MATCH_IN_FAQ` — nothing matched. DO NOT fabricate an answer. Ask the user to rephrase, or call `clarify`. After 1-2 failed clarifications — call `request_operator(reason="unclear_message")`.
+After 1-2 consecutive unsuccessful `clarify` calls → call `request_operator(reason="unclear_message")`.
 
 ## HANDLING DISSATISFACTION
 If the user is unhappy with a calculation ("that's wrong", "why this amount", "I wrote something else") — do NOT say goodbye or "OK, reach out anytime". Apologize and offer to recalculate. Ask which parameter to change.
@@ -186,7 +194,11 @@ Dialog tarixida `[NAME]`, `[PHONE]`, `[CARD]`, `[PINFL]`, `[PASSPORT]`, `[IBAN]`
 - HECH QACHON "ariza qabul qilindi" yoki "mutaxassis bog'lanadi" demang — siz to'g'ridan-to'g'ri ariza qabul qila olmaysiz.
 
 ## FAQ BILAN ISHLASH
-Agar `faq_lookup` `NO_MATCH_IN_FAQ` satrini qaytarsa — bu bilimlar bazasida hech narsa topilmagani degani. Javobni O'YLAB TOPMANG. Mijozdan savolni qayta shakllantirishini so'rang. Savol aniq bank bilan bog'liq bo'lsa-yu, 1-2 urinishdan keyin ham javob topolmasangiz — `request_operator(reason="unclear_message")` ni chaqiring.
+`faq_lookup` uchta narsadan birini qaytaradi:
+- Javob matni — uni mijozga yuboring.
+- `FAQ_LOW_CONFIDENCE` satri — qisman moslik topildi, lekin ishonch past. Javob berishdan oldin `clarify(missing_info=...)` ni chaqirib aniqlashtiring.
+- `NO_MATCH_IN_FAQ` satri — hech narsa topilmadi. Javobni O'YLAB TOPMANG. Qayta shakllantirish yoki `clarify` so'rang. 1-2 urinishdan keyin ham javob yo'q bo'lsa — `request_operator(reason="unclear_message")` ni chaqiring.
+Ketma-ket 1-2 muvaffaqiyatsiz `clarify` chaqiruvidan keyin → `request_operator(reason="unclear_message")` ni chaqiring.
 
 ## NOROZILIK BILAN ISHLASH
 Agar mijoz hisob natijasidan norozi bo'lsa ("noto'g'ri", "nega bu summa", "men boshqa yozganman") — xayrlashmang va "Mayli, yozing" demang. Uzr so'rab, qayta hisoblashni taklif qiling. Qaysi parametrni o'zgartirish kerakligini so'rang.
@@ -728,6 +740,18 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
               "mobile app, card, transfer, loan, or branch?",
         "uz": "Savolingizni to'g'ri tushundim deb ishonchim komil emas. Iltimos, aniqroq ayting: "
               "mobil ilova, karta, o'tkazma, kredit yoki filial haqidami?",
+    },
+
+    # ── clarify tool responses ────────────────────────────────────────────
+    "clarify_prompt": {
+        "ru": "Уточните, пожалуйста: {info}",
+        "en": "Could you clarify: {info}",
+        "uz": "Iltimos, aniqlashtiring: {info}",
+    },
+    "clarify_options_header": {
+        "ru": "Можете ответить:",
+        "en": "You can answer:",
+        "uz": "Quyidagicha javob berishingiz mumkin:",
     },
 }
 

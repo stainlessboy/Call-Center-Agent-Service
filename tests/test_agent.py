@@ -412,9 +412,9 @@ class TestFaqToolsRegistered:
         assert "back_to_product_list" not in names
 
     def test_tool_count_trimmed(self):
-        """Consolidated tool set should be 13 tools (select_office added in 2026-04)."""
+        """Tool set should be 14 tools (clarify added in 2026-04)."""
         from app.agent.tools import _FAQ_TOOLS
-        assert len(_FAQ_TOOLS) == 13
+        assert len(_FAQ_TOOLS) == 14
 
 
 class TestToolGetOfficeTypesInfo:
@@ -2216,21 +2216,21 @@ class TestCustomLoanCalculatorNoRate:
 # ---- faq_lookup NO_MATCH_IN_FAQ marker -----------------------------------
 
 class TestFaqLookupNoMatch:
-    def test_returns_marker_when_empty(self):
+    def test_returns_marker_when_score_zero(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value="")):
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.0))):
             result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
         assert result == NO_MATCH_IN_FAQ
 
-    def test_returns_marker_when_none(self):
+    def test_returns_marker_when_score_below_low_threshold(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value=None)):
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.30))):
             result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
         assert result == NO_MATCH_IN_FAQ
 
     def test_returns_answer_when_found(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup", new=AsyncMock(return_value="Use the app menu")):
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Use the app menu", 0.9))):
             result = _run(faq_lookup.coroutine(query="blocking card", state={"lang": "en"}))
         assert result == "Use the app menu"
         assert result != NO_MATCH_IN_FAQ
@@ -2241,4 +2241,198 @@ class TestFaqLookupNoMatch:
             assert "NO_MATCH_IN_FAQ" in SYSTEM_POLICY[lang], (
                 f"SYSTEM_POLICY[{lang}] missing NO_MATCH_IN_FAQ handling"
             )
+
+
+# ---- Task 1: clarify tool ------------------------------------------------
+
+class TestClarifyTool:
+    def test_ru_returns_info_phrase(self):
+        from app.agent.tools import clarify
+        result = _run(clarify.coroutine(
+            missing_info="тип кредита", state={"lang": "ru"}
+        ))
+        assert "тип кредита" in result
+
+    def test_en_returns_info_phrase(self):
+        from app.agent.tools import clarify
+        result = _run(clarify.coroutine(
+            missing_info="city or district", state={"lang": "en"}
+        ))
+        assert "city or district" in result
+
+    def test_uz_returns_info_phrase(self):
+        from app.agent.tools import clarify
+        result = _run(clarify.coroutine(
+            missing_info="qaysi mahsulot", state={"lang": "uz"}
+        ))
+        assert "qaysi mahsulot" in result
+
+    def test_with_options_returns_bullet_list(self):
+        from app.agent.tools import clarify
+        result = _run(clarify.coroutine(
+            missing_info="какой продукт",
+            options=["Вклад", "Карта", "Кредит"],
+            state={"lang": "ru"},
+        ))
+        assert "Вклад" in result
+        assert "Карта" in result
+        assert "Кредит" in result
+        assert "•" in result
+
+    def test_registered_in_faq_tools(self):
+        from app.agent.tools import clarify, _FAQ_TOOLS
+        assert clarify in _FAQ_TOOLS
+
+
+# ---- Task 1: _update_dialog_from_tools for clarify -----------------------
+
+class TestUpdateDialogClarify:
+    def test_clarify_with_options_sets_keyboard(self):
+        dialog = {**_default_dialog(), "category": "mortgage", "products": [{"name": "Ипотека Лайт"}]}
+        tool_calls = [{"name": "clarify", "args": {"missing_info": "тип", "options": ["Вклад", "Карта"]}}]
+        new_dialog, keyboard = _run(_update_dialog_from_tools(dialog, tool_calls, "уточни", "ru"))
+        assert keyboard == ["Вклад", "Карта"]
+        # Dialog state preserved — category and products must be intact.
+        assert new_dialog.get("category") == "mortgage"
+        assert new_dialog.get("products") == [{"name": "Ипотека Лайт"}]
+
+    def test_clarify_without_options_preserves_flow_keyboard(self):
+        from app.agent.constants import FLOW_SHOW_PRODUCTS
+        dialog = {
+            **_default_dialog(),
+            "flow": FLOW_SHOW_PRODUCTS,
+            "category": "deposit",
+            "products": [{"name": "Вклад А"}, {"name": "Вклад Б"}],
+        }
+        tool_calls = [{"name": "clarify", "args": {"missing_info": "срок", "options": []}}]
+        new_dialog, keyboard = _run(_update_dialog_from_tools(dialog, tool_calls, "", "ru"))
+        # Flow keyboard (product names) should be preserved.
+        assert keyboard == ["Вклад А", "Вклад Б"]
+        assert new_dialog.get("category") == "deposit"
+
+
+# ---- Task 2: _faq_lookup_with_score --------------------------------------
+
+class TestFaqLookupWithScore:
+    def test_returns_tuple_with_score_between_0_and_1(self):
+        from app.utils.faq_tools import _faq_lookup_with_score
+        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[
+            {"q": "как заблокировать карту", "a": "Через приложение"}
+        ])):
+            answer, score = _run(_faq_lookup_with_score("как заблокировать карту", "ru"))
+        assert 0.0 <= score <= 1.0
+
+    def test_returns_none_answer_when_no_items(self):
+        from app.utils.faq_tools import _faq_lookup_with_score
+        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[])):
+            answer, score = _run(_faq_lookup_with_score("anything", "ru"))
+        assert answer is None
+        assert score == 0.0
+
+
+# ---- Task 2: faq_lookup tri-tier dispatch --------------------------------
+
+class TestFaqLookupTriTier:
+    def test_zero_score_returns_no_match(self):
+        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.0))):
+            result = _run(faq_lookup.coroutine(query="???", state={"lang": "ru"}))
+        assert result == NO_MATCH_IN_FAQ
+
+    def test_mid_score_returns_low_confidence(self):
+        from app.agent.tools import faq_lookup, FAQ_LOW_CONFIDENCE
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("some answer", 0.5))):
+            result = _run(faq_lookup.coroutine(query="карта", state={"lang": "ru"}))
+        assert result == FAQ_LOW_CONFIDENCE
+
+    def test_high_score_returns_answer(self):
+        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Через приложение", 0.9))):
+            result = _run(faq_lookup.coroutine(query="заблокировать карту", state={"lang": "ru"}))
+        assert result == "Через приложение"
+        assert result not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE)
+
+    def test_env_override_strict_threshold(self, monkeypatch):
+        """Setting FAQ_STRICT_THRESHOLD=0.95 makes a 0.7-score match return FAQ_LOW_CONFIDENCE."""
+        monkeypatch.setenv("FAQ_STRICT_THRESHOLD", "0.95")
+        monkeypatch.setenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45")
+        import importlib
+        import app.agent.tools as tools_module
+        importlib.reload(tools_module)
+        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Some answer", 0.7))):
+            result = _run(tools_module.faq_lookup.coroutine(query="test", state={"lang": "ru"}))
+        assert result == tools_module.FAQ_LOW_CONFIDENCE
+        monkeypatch.delenv("FAQ_STRICT_THRESHOLD")
+        monkeypatch.delenv("FAQ_LOW_CONFIDENCE_THRESHOLD")
+        importlib.reload(tools_module)
+
+
+# ---- Task 3: _looks_like_giving_up ---------------------------------------
+
+class TestLooksLikeGivingUp:
+    def test_giving_up_ru(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert _looks_like_giving_up("Извините, не понял, попробуйте переформулировать", "ru")
+
+    def test_giving_up_en(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert _looks_like_giving_up("Sorry, I don't understand your request, please rephrase", "en")
+
+    def test_giving_up_uz(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert _looks_like_giving_up("Kechirasiz, tushunmadim, qaytadan yozing", "uz")
+
+    def test_not_giving_up_helpful_answer(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert not _looks_like_giving_up("Конечно, помогу с ипотекой! Ставка от 18% годовых.", "ru")
+
+    def test_not_giving_up_short_text(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert not _looks_like_giving_up("ок", "ru")
+
+    def test_not_giving_up_empty(self):
+        from app.agent.nodes.faq import _looks_like_giving_up
+        assert not _looks_like_giving_up("", "ru")
+
+
+# ---- Task 4: _last_useful_tool_output ------------------------------------
+
+class TestLastUsefulToolOutput:
+    def test_returns_last_non_sentinel_content(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [
+            ToolMessage(content="Через приложение", tool_call_id="1"),
+            ToolMessage(content="NO_MATCH_IN_FAQ", tool_call_id="2"),
+        ]
+        # Last tool result is a sentinel — should return None (not walk further back).
+        result = _last_useful_tool_output(msgs)
+        assert result is None
+
+    def test_returns_content_when_last_is_useful(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [
+            ToolMessage(content="NO_MATCH_IN_FAQ", tool_call_id="1"),
+            ToolMessage(content="Ставка по ипотеке: 18% годовых", tool_call_id="2"),
+        ]
+        result = _last_useful_tool_output(msgs)
+        assert result == "Ставка по ипотеке: 18% годовых"
+
+    def test_returns_none_when_no_tool_messages(self):
+        from langchain_core.messages import HumanMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [HumanMessage(content="привет")]
+        result = _last_useful_tool_output(msgs)
+        assert result is None
+
+    def test_returns_none_when_last_is_faq_low_confidence(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [
+            ToolMessage(content="Через приложение", tool_call_id="1"),
+            ToolMessage(content="FAQ_LOW_CONFIDENCE", tool_call_id="2"),
+        ]
+        result = _last_useful_tool_output(msgs)
+        assert result is None
 

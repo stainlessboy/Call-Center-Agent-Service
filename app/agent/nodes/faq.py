@@ -35,7 +35,7 @@ from app.agent.nodes.helpers import _finalize_turn
 from app.agent.pii_masker import mask_pii
 from app.agent.products import _find_product_by_name, _get_products_by_category
 from app.agent.state import BotState, _default_dialog
-from app.agent.tools import _FAQ_TOOLS
+from app.agent.tools import FAQ_LOW_CONFIDENCE, NO_MATCH_IN_FAQ, _FAQ_TOOLS
 from app.utils.faq_tools import _faq_lookup, get_faq_fallback
 
 _agent_logger = _logging.getLogger(__name__)
@@ -272,10 +272,67 @@ async def _update_dialog_from_tools(
     if name == "faq_lookup":
         return _reattach_keyboard(dialog, lang)
 
+    if name == "clarify":
+        options = args.get("options") or []
+        keyboard: Optional[List[str]] = list(options) if options else None
+        if not keyboard:
+            # Preserve flow keyboard if any — clarify shouldn't strip context.
+            _, keyboard = _reattach_keyboard(dialog, lang)
+        return dict(dialog), keyboard
+
     if name == "request_operator":
         return {**dialog, "operator_requested": True}, None
 
     return _reattach_keyboard(dialog, lang)
+
+
+# ---------------------------------------------------------------------------
+# Fallback detection helpers
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+# Compiled once at module load — matches "giving up" phrases in all 3 languages.
+_GIVING_UP_RE = _re.compile(
+    r"переформулир|не понял|не могу помочь|не смог понять"
+    r"|rephrase|i don.t understand|i cannot help|couldn.t understand"
+    r"|tushunmadim|qaytadan yozing|tushuna olmadim",
+    _re.IGNORECASE,
+)
+
+_PRODUCTIVE_TOOLS = frozenset({
+    "greeting_response", "thanks_response", "find_office", "select_office",
+    "get_office_types_info", "get_currency_info", "show_credit_menu",
+    "get_products", "select_product", "start_calculator",
+    "custom_loan_calculator", "request_operator", "clarify",
+})
+
+
+def _looks_like_giving_up(answer: str, lang: str) -> bool:  # noqa: ARG001
+    """Return True only when the answer is an obvious 'I can't help' reply.
+
+    Conservative by design — only catches clear giving-up phrases so that
+    legitimate partial answers ("I can't do X, but here's Y") are not flagged.
+    """
+    if not answer or len(answer) < 10:
+        return False
+    return bool(_GIVING_UP_RE.search(answer))
+
+
+def _last_useful_tool_output(loop_msgs: list) -> Optional[str]:
+    """Walk loop_msgs backward and return the last ToolMessage content that
+    is non-empty and not a sentinel value, or None if the last tool result
+    was a sentinel (not useful to surface to the user).
+    """
+    from langchain_core.messages import ToolMessage
+    for msg in reversed(loop_msgs):
+        if isinstance(msg, ToolMessage):
+            content = (str(msg.content or "")).strip()
+            if content and content not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE):
+                return content
+            # The last tool result was a sentinel — nothing useful to recover.
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -347,17 +404,16 @@ async def node_faq(state: BotState) -> dict:
                 content = extract_text_content(ai_msg).strip()
                 if content:
                     answer = content
-                    is_fallback = False
                 break
 
             tool_calls_made.extend(tool_calls)
-            is_fallback = False
             tool_node = ToolNode(_FAQ_TOOLS)
             tool_results = await tool_node.ainvoke({"messages": loop_msgs, "dialog": dialog})
             loop_msgs.extend(tool_results.get("messages", []))
 
             if round_idx == max_rounds - 1:
                 hit_limit_with_pending_tools = True
+
         if hit_limit_with_pending_tools:
             _agent_logger.warning(
                 "node_faq tool loop hit %d-round limit, session=%s last_tools=%s",
@@ -365,6 +421,37 @@ async def node_faq(state: BotState) -> dict:
                 state.get("session_id"),
                 [tc.get("name") for tc in tool_calls_made[-max_rounds:]],
             )
+            # Attempt to surface the last useful tool output directly so the
+            # user gets their data even without an LLM wrapping turn.
+            recovered = _last_useful_tool_output(loop_msgs)
+            if recovered:
+                answer = recovered
+
+        # ---------------------------------------------------------------------------
+        # Determine is_fallback based on what actually happened this turn.
+        # ---------------------------------------------------------------------------
+        called_names = {tc.get("name") for tc in tool_calls_made}
+
+        if hit_limit_with_pending_tools:
+            is_fallback = True
+        elif called_names & _PRODUCTIVE_TOOLS:
+            is_fallback = False
+        elif "faq_lookup" in called_names:
+            # Collect all ToolMessage contents for faq_lookup calls.
+            from langchain_core.messages import ToolMessage
+            faq_results = {
+                str(msg.content or "").strip()
+                for msg in loop_msgs
+                if isinstance(msg, ToolMessage)
+            }
+            # All faq results were sentinels → no useful answer was found.
+            is_fallback = faq_results <= {NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE}
+        elif not tool_calls_made:
+            # Free-text answer only — check if it reads as a give-up reply.
+            is_fallback = _looks_like_giving_up(answer, lang)
+        else:
+            is_fallback = False
+
     except (asyncio.TimeoutError, APIError, json.JSONDecodeError) as exc:
         _agent_logger.warning("node_faq LLM failed: %s", exc)
         # Fall through to FAQ lookup fallback

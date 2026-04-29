@@ -19,7 +19,7 @@ from app.agent.products import (
     _format_product_list_text,
     _get_products_by_category,
 )
-from app.utils.faq_tools import _faq_lookup
+from app.utils.faq_tools import _faq_lookup_with_score
 
 # All supported product categories, ordered from most common to least.
 # Used in the 3-tier fallback search in select_product.
@@ -39,9 +39,17 @@ _ALL_CATEGORIES = [
 import os as _os
 _DEFAULT_CUSTOM_LOAN_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
 
-# Marker returned by faq_lookup when nothing matched — explicit, not an empty
-# string, so the LLM can detect and handle it without hallucinating an answer.
+# Sentinels returned by faq_lookup — explicit strings so the LLM can detect
+# and handle each case without hallucinating an answer.
 NO_MATCH_IN_FAQ = "NO_MATCH_IN_FAQ"
+# Returned when the best FAQ match score is between LOW and STRICT thresholds.
+# The LLM should call clarify() to disambiguate before answering.
+FAQ_LOW_CONFIDENCE = "FAQ_LOW_CONFIDENCE"
+
+# Tri-tier FAQ similarity thresholds (overridable via env).
+import os as _os_thresh
+_FAQ_STRICT_THRESHOLD: float = float(_os_thresh.getenv("FAQ_STRICT_THRESHOLD", "0.62"))
+_FAQ_LOW_CONFIDENCE_THRESHOLD: float = float(_os_thresh.getenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45"))
 
 
 def _lang_from_state(state: dict | None) -> str:
@@ -162,15 +170,10 @@ async def get_currency_info(
 ) -> str:
     """Get the latest currency exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
 
-    HARD RULE: call ONLY if the message contains at least ONE of these explicit
-    currency tokens (case-insensitive, as a whole word or stem):
-      USD, EUR, RUB, GBP, KZT, CNY, UZS,
-      доллар, евро, рубль/рубл, фунт, тенге, юань, сум/сўм/so'm,
-      валюта, валют, обмен, обменник, конверт,
-      currency, exchange, convert,
-      valyuta, ayirboshlash, almashtirish, narx (only if next to a currency name).
-    If NONE of the above tokens are present in the user's message — DO NOT call
-    this tool. Route the message through `faq_lookup` or `find_office` instead.
+    HARD RULE: call ONLY if the message contains at least ONE explicit currency token
+    (USD, EUR, RUB, GBP, KZT, CNY, UZS, доллар, евро, рубль, фунт, тенге, юань,
+    сум/so'm, валюта, обмен, currency, exchange, valyuta, ayirboshlash). If none of
+    these tokens are present — route via `faq_lookup` or `find_office` instead.
 
     EXAMPLES:
     - "курс доллара" / "сколько сейчас евро" / "обменный курс" → get_currency_info()
@@ -178,17 +181,7 @@ async def get_currency_info(
     - "USD rate today" / "exchange rate" → get_currency_info()
     - "dollar narxi" / "valyuta kursi qancha" → get_currency_info()
 
-    CRITICAL ANTI-PATTERN — DO NOT call in these cases:
-    - The substring "курс" appears INSIDE a different Uzbek word.
-      Uzbek verb stem `kursatmoq / курсатмок` means "to show / to provide".
-      Inflected forms include: курсатиш, курсатинг, курсатолисиз,
-      курсатолисизме, курсатиб, курсатади, ko'rsatish, ko'rsatib.
-      Example: "Филиалларингда навбатсиз хизмат курсатолисизме"
-        = "Do you provide queue-free service in your branches?"
-        → THIS IS NOT ABOUT CURRENCY. Call faq_lookup("навбатсиз хизмат").
-    - "курс кредита / курс обучения / курс лекций" — these are not exchange rates.
-    - Any message about service, branches, schedule, hours, products — no
-      currency token present, so this tool MUST NOT be called.
+    Edge cases for the 'курс/kursat...' homonym are described in the system policy — follow that guidance.
     """
     from app.utils.cbu_rates import fetch_cbu_rates
 
@@ -417,15 +410,21 @@ async def faq_lookup(
     - "how to change phone number" → faq_lookup(query="change phone number")
     - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
 
-    RETURNS:
-    - the FAQ answer as formatted text if found.
-    - the literal string "NO_MATCH_IN_FAQ" if nothing matched. In that case,
-      ask the user to rephrase, or call request_operator if the question is
-      clearly bank-related but not in the FAQ. DO NOT fabricate an answer.
+    RETURNS one of three values:
+    - Answer text if score >= FAQ_STRICT_THRESHOLD (0.62 default) — pass it to the user.
+    - The literal string "FAQ_LOW_CONFIDENCE" if LOW_CONFIDENCE_THRESHOLD <= score < STRICT.
+      In that case call clarify(missing_info=...) to disambiguate before answering.
+    - The literal string "NO_MATCH_IN_FAQ" if score < LOW_CONFIDENCE_THRESHOLD.
+      In that case ask the user to rephrase OR call clarify. After 1-2 failed
+      clarifications call request_operator(reason="unclear_message"). DO NOT fabricate an answer.
     """
     lang = _lang_from_state(state)
-    result = await _faq_lookup(query, lang)
-    return result if result else NO_MATCH_IN_FAQ
+    answer, score = await _faq_lookup_with_score(query, lang)
+    if score >= _FAQ_STRICT_THRESHOLD:
+        return answer or NO_MATCH_IN_FAQ
+    if score >= _FAQ_LOW_CONFIDENCE_THRESHOLD:
+        return FAQ_LOW_CONFIDENCE
+    return NO_MATCH_IN_FAQ
 
 
 @lc_tool
@@ -532,6 +531,47 @@ async def request_operator(
     return at("operator_connecting", lang)
 
 
+@lc_tool
+async def clarify(
+    missing_info: str,
+    options: list[str] = None,
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
+    """Ask the user a structured clarifying question when their message is ambiguous
+    or incomplete, instead of a flat 'I don't understand'.
+
+    PREFER this over a free-form 'please rephrase' answer when:
+    - the user's intent is unclear but bank-related
+    - faq_lookup returned FAQ_LOW_CONFIDENCE — disambiguate before answering
+    - the user asked something that needs a missing parameter (which product? which city? which card type?)
+
+    DO NOT use clarify() for:
+    - greeting/thanks (use greeting_response/thanks_response)
+    - clear product or branch requests (use get_products / find_office)
+    - explicit operator request (use request_operator)
+
+    After 1-2 unsuccessful clarifies in a row → call request_operator(reason="unclear_message").
+
+    EXAMPLES:
+    - user: "хочу что-то открыть" → clarify(missing_info="какой продукт", options=["Вклад", "Карта", "Кредит"])
+    - user: "какая ставка" → clarify(missing_info="по какому продукту", options=["Ипотека", "Автокредит", "Микрозайм"])
+    - user: "where is the office" → clarify(missing_info="city or district")
+    - faq_lookup returned FAQ_LOW_CONFIDENCE for "карта" → clarify(missing_info="какая карта", options=["Дебетовая", "Валютная"])
+
+    Parameters:
+        missing_info: short phrase describing what's unclear (e.g. "тип кредита", "city").
+        options: optional list of suggested answers shown as quick-reply buttons.
+    """
+    from app.agent.i18n import at as _at
+    lang = _lang_from_state(state)
+    prompt = _at("clarify_prompt", lang, info=missing_info)
+    if options:
+        header = _at("clarify_options_header", lang)
+        bullet_list = "\n".join(f"• {opt}" for opt in options)
+        return f"{prompt}\n\n{header}\n{bullet_list}"
+    return prompt
+
+
 _FAQ_TOOLS = [
     greeting_response,
     thanks_response,
@@ -546,4 +586,5 @@ _FAQ_TOOLS = [
     custom_loan_calculator,
     faq_lookup,
     request_operator,
+    clarify,
 ]
