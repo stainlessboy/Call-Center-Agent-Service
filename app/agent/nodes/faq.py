@@ -409,7 +409,20 @@ async def node_faq(state: BotState) -> dict:
             tool_calls_made.extend(tool_calls)
             tool_node = ToolNode(_FAQ_TOOLS)
             tool_results = await tool_node.ainvoke({"messages": loop_msgs, "dialog": dialog})
-            loop_msgs.extend(tool_results.get("messages", []))
+            new_tool_msgs = tool_results.get("messages", [])
+            loop_msgs.extend(new_tool_msgs)
+
+            # Display-tool short-circuit: tools return pre-formatted user-facing
+            # text (product cards, office details, currency tables, calc results,
+            # etc.). gpt-4o-mini consistently summarizes these in the wrapping
+            # round — "Показал программу" instead of actually showing it. Surface
+            # the tool output directly. Exception: faq_lookup sentinels mean the
+            # LLM should chain to clarify/request_operator, so keep looping.
+            if new_tool_msgs:
+                last_content = str(getattr(new_tool_msgs[-1], "content", "") or "").strip()
+                if last_content and last_content not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE):
+                    answer = last_content
+                    break
 
             if round_idx == max_rounds - 1:
                 hit_limit_with_pending_tools = True
