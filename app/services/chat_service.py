@@ -93,6 +93,11 @@ class ChatService:
         )
         return result.scalar_one_or_none()
 
+    async def get_active_session(self, user_id: int) -> Optional[ChatSession]:
+        """Return the user's active session without creating one."""
+        async with self.session_factory() as session:
+            return await self._get_active_session(session, user_id)
+
     async def ensure_active_session(self, user_id: int) -> ChatSession:
         async with self.session_factory() as session:
             async with session.begin():
@@ -122,39 +127,6 @@ class ChatService:
                     assigned_operator_id=None,
                 )
                 session.add(chat_session)
-            await session.commit()
-            await session.refresh(chat_session)
-            return chat_session
-
-    async def list_active_sessions(self, user_id: int, limit: int = 10) -> list[ChatSession]:
-        async with self.session_factory() as session:
-            result = await session.execute(
-                select(ChatSession)
-                .where(ChatSession.user_id == user_id, ChatSession.status == SessionStatus.ACTIVE)
-                .order_by(ChatSession.last_activity_at.desc(), ChatSession.started_at.desc())
-                .limit(limit)
-            )
-            return list(result.scalars().all())
-
-    async def switch_active_session(self, user_id: int, session_id: str) -> Optional[ChatSession]:
-        session_id = (session_id or "").strip()
-        if not session_id:
-            return None
-        async with self.session_factory() as session:
-            async with session.begin():
-                result = await session.execute(
-                    select(ChatSession)
-                    .where(
-                        ChatSession.id == session_id,
-                        ChatSession.user_id == user_id,
-                        ChatSession.status == SessionStatus.ACTIVE,
-                    )
-                    .limit(1)
-                )
-                chat_session = result.scalar_one_or_none()
-                if chat_session is None:
-                    return None
-                chat_session.last_activity_at = datetime.now(timezone.utc)
             await session.commit()
             await session.refresh(chat_session)
             return chat_session
