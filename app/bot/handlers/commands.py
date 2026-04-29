@@ -757,7 +757,15 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
         await _show_session_history(message, chat_service, user.id, lang, texts)
         return
 
-    # ── Free-form text → agent ──────────────────────────────────────────────
+    # ── Free-form text → agent (only when a dialog is active) ───────────────
+    # If the user hasn't pressed «💬 Начать диалог» yet (or has just ended a
+    # dialog), we don't auto-start one on every typed message. Otherwise the
+    # bot would feel chatty before the user opted in.
+    active_session = await chat_service.get_active_session(user.id)
+    if active_session is None:
+        await message.answer(texts["dialog_no_active"], reply_markup=main_menu_keyboard(lang))
+        return
+
     reply = await _with_typing(
         message,
         chat_service.handle_user_message(
