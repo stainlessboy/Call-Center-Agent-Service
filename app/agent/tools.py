@@ -205,14 +205,23 @@ async def get_currency_info(
 async def show_credit_menu(
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Show the credit-type selection menu. Use when user asks about credit without specifying type.
+    """Show the credit-type selection menu. Use ONLY when user wants credit but has NOT specified which type.
 
-    EXAMPLES:
+    EXAMPLES (correct use — type is genuinely unknown):
     - "хочу кредит" / "мне нужен кредит" / "какие есть кредиты" → show_credit_menu()
-    - "I need a loan" → show_credit_menu()
-    - "kredit olmoqchiman" → show_credit_menu()
+    - "I need a loan" / "what loans do you offer" → show_credit_menu()
+    - "kredit olmoqchiman" / "kredit turlari" → show_credit_menu()
 
-    DO NOT call when the user specifies the credit type (ипотека/автокредит/etc) — use get_products instead.
+    DO NOT call when the user names a goal that uniquely implies a category — call get_products instead:
+    - "хочу купить квартиру" / "квартира в кредит" / "хочу квартиру" / "жильё" → get_products(category="mortgage")
+    - "хочу машину" / "куплю авто" / "нужен автомобиль" → get_products(category="autoloan")
+    - "оплатить учёбу" / "контракт" / "оплата обучения" → get_products(category="education_credit")
+    - "buy a house" / "buy an apartment" / "home loan" → get_products(category="mortgage")
+    - "buy a car" / "car loan" → get_products(category="autoloan")
+    - "pay tuition" / "student loan" → get_products(category="education_credit")
+    - "kvartira olmoqchiman" / "uy-joy olish" → get_products(category="mortgage")
+    - "mashina olmoqchiman" / "avtomobil sotib olmoqchiman" → get_products(category="autoloan")
+    - "o'qish puli" / "kontrakt to'lovi" → get_products(category="education_credit")
     """
     return at("credit_menu_prompt", _lang_from_state(state))
 
@@ -227,7 +236,7 @@ async def get_products(
 
     CATEGORIES: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
 
-    EXAMPLES:
+    EXAMPLES — direct product/category names:
     - "хочу ипотеку" → get_products(category="mortgage")
     - "покажи автокредиты" → get_products(category="autoloan")
     - "какие у вас вклады" → get_products(category="deposit")
@@ -237,6 +246,20 @@ async def get_products(
     - "all products" / "◀ Все продукты" when state has category → get_products(category=<state.category>)
     - "deposit products" → get_products(category="deposit")
     - "ipoteka" → get_products(category="mortgage")
+
+    EXAMPLES — goal-based phrasings that imply a specific category (prefer this over show_credit_menu):
+    - "хочу купить квартиру" / "хочу квартиру" / "куплю жильё" / "квартира в кредит" / "недвижимость" → get_products(category="mortgage")
+    - "I want to buy an apartment" / "buy a home" / "home loan" → get_products(category="mortgage")
+    - "kvartira olmoqchiman" / "uy-joy olish" / "ipoteka kerak" → get_products(category="mortgage")
+    - "хочу купить машину" / "куплю авто" / "нужен автомобиль" → get_products(category="autoloan")
+    - "I want to buy a car" / "car financing" → get_products(category="autoloan")
+    - "mashina olmoqchiman" / "avtomobil sotib olmoqchiman" → get_products(category="autoloan")
+    - "оплатить учёбу" / "контракт в университете" / "оплата обучения" → get_products(category="education_credit")
+    - "pay tuition" / "student loan for university" → get_products(category="education_credit")
+    - "o'qish puli" / "kontrakt to'lovi" → get_products(category="education_credit")
+    - "хочу копить" / "хочу накопить" / "куда положить деньги под процент" → get_products(category="deposit")
+    - "I want to save money" / "where to invest" → get_products(category="deposit")
+    - "pul yig'moqchiman" / "jamg'arish" → get_products(category="deposit")
 
     Also use when the user clicks a "back to products" button while a category is in state —
     call with the state's current category to re-render the list.
