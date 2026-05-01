@@ -452,9 +452,9 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "uz": "Telefon raqamingizni kiriting:",
     },
     "lead_saved": {
-        "ru": "✅ Отлично! Менеджер свяжется с вами в ближайшее время. Спасибо за обращение!",
-        "en": "✅ Great! A manager will contact you shortly. Thank you for reaching out!",
-        "uz": "✅ Ajoyib! Menejer tez orada siz bilan bog'lanadi. Murojaat uchun rahmat!",
+        "ru": "Благодарим вас за информацию, наши специалисты в скором времени обязательно с вами свяжутся. Уважаемый клиент, у вас будут дополнительные вопросы?",
+        "en": "Thank you for the information, our specialists will contact you shortly. Dear customer, do you have any additional questions?",
+        "uz": "Ma'lumotlaringiz uchun tashakkur. Mutaxassislarimiz tez orada siz bilan bog'lanishadi. Hurmatli mijoz, qo'shimcha savollaringiz bo'ladimi?",
     },
     "lead_save_error": {
         "ru": "⚠️ Не удалось сохранить заявку. Пожалуйста, попробуйте позже или свяжитесь с нами по телефону.",
