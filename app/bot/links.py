@@ -1,7 +1,7 @@
 """Hardcoded outbound links and phone numbers shown in the «Useful links» menu.
 
 Centralised so the bot handlers stay clean. URL values are placeholders for the
-real Asaka Bank assets — replace them in-place when the marketing team
+real Asakabank assets — replace them in-place when the marketing team
 provides updated targets. Localised LABEL fields are what's shown to the user;
 URL fields stay language-agnostic.
 """
@@ -82,13 +82,13 @@ CONTACTS_BODY: dict[str, str] = {
 }
 
 APP_HEADER: dict[str, str] = {
-    "ru": "📱 Скачайте мобильное приложение Asaka Bank:",
-    "en": "📱 Download the Asaka Bank mobile app:",
-    "uz": "📱 Asaka Bank mobil ilovasini yuklab oling:",
+    "ru": "📱 Скачайте мобильное приложение Asakabank:",
+    "en": "📱 Download the Asakabank mobile app:",
+    "uz": "📱 Asakabank mobil ilovasini yuklab oling:",
 }
 
 SOCIAL_HEADER: dict[str, str] = {
-    "ru": "🌍 Официальные соцсети Asaka Bank:",
-    "en": "🌍 Asaka Bank official social media:",
-    "uz": "🌍 Asaka Bankning rasmiy ijtimoiy tarmoqlari:",
+    "ru": "🌍 Официальные соцсети Asakabank:",
+    "en": "🌍 Asakabank official social media:",
+    "uz": "🌍 Asakabankning rasmiy ijtimoiy tarmoqlari:",
 }

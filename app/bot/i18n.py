@@ -266,9 +266,21 @@ TEXTS: dict[str, dict[str, str]] = {
         "uz": "🛠 Bo'lim ishlanmoqda. Tez orada ishga tushadi.",
     },
     "start_dialog_greeting": {
-        "ru": "Здравствуйте! Я бот Asaka Bank. Чем могу помочь?",
-        "en": "Hello! I'm the Asaka Bank bot. How can I help?",
-        "uz": "Assalomu alaykum! Men Asaka Bank botiman. Qanday yordam bera olaman?",
+        "ru": (
+            "Здравствуйте! Я бот Asakabank. Чем могу помочь?\n\n"
+            "ℹ️ Бот работает в тестовом режиме и может ошибаться. "
+            "Для точной информации обращайтесь к оператору или в колл-центр 1152."
+        ),
+        "en": (
+            "Hello! I'm the Asakabank bot. How can I help?\n\n"
+            "ℹ️ The bot is running in test mode and may make mistakes. "
+            "For accurate information, contact an operator or call center 1152."
+        ),
+        "uz": (
+            "Assalomu alaykum! Men Asakabank botiman. Qanday yordam bera olaman?\n\n"
+            "ℹ️ Bot sinov rejimida ishlamoqda va xato qilishi mumkin. "
+            "Aniq ma'lumot uchun operatorga yoki 1152 koll-markaziga murojaat qiling."
+        ),
     },
     "dialog_already_active": {
         "ru": "Диалог уже идёт. Завершите текущий, чтобы начать новый — кнопка «✅ Завершить диалог».",

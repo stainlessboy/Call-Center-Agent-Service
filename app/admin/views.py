@@ -1081,7 +1081,7 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
             "description": "Например: «1 000 сум/мес.»",
         },
         "pin_setup_mobile_text": {
-            "description": "Например: «Через приложение AsakaBank»",
+            "description": "Например: «Через приложение Asakabank»",
         },
         "sms_setup_mobile_text": {
             "description": "Например: «Через приложение — бесплатно»",

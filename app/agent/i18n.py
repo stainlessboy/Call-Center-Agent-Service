@@ -335,7 +335,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     },
     "office_types_info": {
         "ru": (
-            "<b>Три типа офисов AsakaBank:</b>\n\n"
+            "<b>Три типа офисов Asakabank:</b>\n\n"
             "🏦 <b>Филиал (ЦБУ)</b> — полный спектр услуг: кредиты физлицам, "
             "автокредиты, карты, касса, обмен валют, устройства самообслуживания, "
             "а также услуги для ИП и юридических лиц (счета, корп. кредиты).\n\n"
@@ -346,7 +346,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "консультации и устройства самообслуживания. Касса и карты — не оформляют."
         ),
         "en": (
-            "<b>Three types of AsakaBank offices:</b>\n\n"
+            "<b>Three types of Asakabank offices:</b>\n\n"
             "🏦 <b>Filial (Bank Service Center)</b> — full range: individual loans, "
             "auto loans, cards, cashier, currency exchange, self-service terminals, "
             "plus services for sole proprietors and legal entities (accounts, corp. loans).\n\n"
@@ -356,7 +356,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
             "and self-service terminals. No cashier or cards."
         ),
         "uz": (
-            "<b>AsakaBank ofislarining uch turi:</b>\n\n"
+            "<b>Asakabank ofislarining uch turi:</b>\n\n"
             "🏦 <b>Filial (BXM)</b> — to'liq xizmatlar: jismoniy shaxslar uchun kreditlar, "
             "avtokredit, kartalar, kassa, valyuta ayirboshlash, o'zini o'zi xizmat qilish qurilmalari, "
             "shuningdek yakka tartibdagi tadbirkorlar va yuridik shaxslar uchun xizmatlar (hisoblar, korp. kreditlar).\n\n"
@@ -368,11 +368,11 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         ),
     },
     "currency_info": {
-        "ru": "Актуальные курсы валют смотрите на сайте банка или в мобильном приложении AsakaBank.\n"
+        "ru": "Актуальные курсы валют смотрите на сайте банка или в мобильном приложении Asakabank.\n"
               "Там же можно открыть валютный вклад или заказать карту.",
-        "en": "Check current exchange rates on the bank's website or in the AsakaBank mobile app.\n"
+        "en": "Check current exchange rates on the bank's website or in the Asakabank mobile app.\n"
               "You can also open a foreign currency deposit or order a card there.",
-        "uz": "Joriy valyuta kurslarini bankning veb-saytida yoki AsakaBank mobil ilovasida ko'ring.\n"
+        "uz": "Joriy valyuta kurslarini bankning veb-saytida yoki Asakabank mobil ilovasida ko'ring.\n"
               "U yerda valyuta omonati ochish yoki karta buyurtma qilish ham mumkin.",
     },
     "credit_menu_prompt": {
