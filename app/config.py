@@ -43,6 +43,8 @@ class Settings:
     minio_base_url: str | None
     minio_username: str | None
     minio_password: str | None
+    daily_message_limit: int
+    rate_limit_per_minute: int
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -105,4 +107,6 @@ def get_settings() -> Settings:
         minio_base_url=(os.getenv("MINIO_BASE_URL") or "").strip() or None,
         minio_username=(os.getenv("MINIO_USERNAME") or "").strip() or None,
         minio_password=(os.getenv("MINIO_PASSWORD") or "").strip() or None,
+        daily_message_limit=_parse_positive_int(os.getenv("DAILY_MESSAGE_LIMIT"), default=30),
+        rate_limit_per_minute=_parse_positive_int(os.getenv("RATE_LIMIT_PER_MINUTE"), default=20),
     )

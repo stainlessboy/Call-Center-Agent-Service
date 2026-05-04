@@ -18,6 +18,7 @@ from app.bot.i18n import normalize_lang, t
 from app.bot.handlers import commands as command_handlers
 from app.bot.keyboards.feedback import feedback_keyboard
 from app.bot.middlewares.chat_service import ChatServiceMiddleware
+from app.bot.middlewares.rate_limit import RateLimitMiddleware
 from app.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
@@ -76,6 +77,9 @@ async def lifespan(app: FastAPI):
     agent_client = AgentClient()
     await agent_client.setup(settings)
     chat_service = ChatService(AsyncSessionLocal, agent_client)
+    rate_limit_mw = RateLimitMiddleware(max_per_minute=int(settings.rate_limit_per_minute))
+    dp.message.middleware(rate_limit_mw)
+    dp.callback_query.middleware(rate_limit_mw)
     chat_service_mw = ChatServiceMiddleware(chat_service)
     dp.message.middleware(chat_service_mw)
     dp.callback_query.middleware(chat_service_mw)

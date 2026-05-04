@@ -271,6 +271,26 @@ class ChatService:
             suggested_language=getattr(turn_result, "suggested_language", None),
         )
 
+    async def count_user_messages_today(self, user_id: int) -> int:
+        # Joins Message → ChatSession because Message has no direct user_id.
+        # Counts all user-role messages; human_mode bypass is handled at the
+        # call site (the gate skips entirely when the active session is in
+        # human_mode), so messages sent to an operator still count toward the
+        # daily quota — acceptable trade-off for query simplicity.
+        from sqlalchemy import func
+        today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(func.count(Message.id))
+                .join(ChatSession, Message.session_id == ChatSession.id)
+                .where(
+                    ChatSession.user_id == user_id,
+                    Message.role == "user",
+                    Message.created_at >= today_utc,
+                )
+            )
+            return int(result.scalar_one() or 0)
+
     async def close_inactive_sessions(self, timeout_minutes: int) -> list[tuple[User, ChatSession]]:
         if timeout_minutes <= 0:
             return []

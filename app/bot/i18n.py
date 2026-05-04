@@ -169,6 +169,16 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "I cannot reply right now. Please try again later.",
         "uz": "Hozircha javob bera olmayman. Keyinroq urinib ko‘ring.",
     },
+    "daily_limit_reached": {
+        "ru": "Вы достигли дневного лимита сообщений с ботом. Хотите продолжить с оператором?",
+        "en": "You've reached the daily message limit with the bot. Would you like to continue with an operator?",
+        "uz": "Bot bilan kunlik xabar limitiga yetdingiz. Operator bilan davom ettirasizmi?",
+    },
+    "rate_limit_exceeded": {
+        "ru": "Слишком часто. Подождите немного и попробуйте снова.",
+        "en": "Too many requests. Please wait a moment and try again.",
+        "uz": "Juda tez-tez. Bir oz kuting va qayta urinib ko‘ring.",
+    },
     "sent_to_operator": {
         "ru": "Ваше сообщение передано оператору. Ожидайте ответа.",
         "en": "Your message has been forwarded to an operator. Please wait for a reply.",

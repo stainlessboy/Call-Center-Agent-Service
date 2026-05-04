@@ -653,6 +653,30 @@ async def _back_keyboard(chat_service: ChatService, user_id: int, lang: str):
     return chat_keyboard(lang) if active else main_menu_keyboard(lang)
 
 
+async def _daily_limit_reached(
+    chat_service: ChatService,
+    user_id: int,
+    active_session,
+) -> bool:
+    """True when the user has hit DAILY_MESSAGE_LIMIT and the agent should be skipped.
+
+    Bypassed when the active session is in human_mode (operator chat continues
+    without bot quota). Returns False if the limit is disabled (=0).
+    """
+    limit = int(get_settings().daily_message_limit)
+    if limit <= 0:
+        return False
+    if active_session is not None and getattr(active_session, "human_mode", False):
+        return False
+    used = await chat_service.count_user_messages_today(user_id)
+    return used >= limit
+
+
+def _operator_only_keyboard(session_id: str, lang: str) -> InlineKeyboardMarkup:
+    """Single-button keyboard offering operator handoff (used when daily limit is hit)."""
+    return human_mode_keyboard(session_id, human_mode=False, lang=lang)
+
+
 @router.message(F.text)
 async def handle_text(message: Message, chat_service: ChatService) -> None:
     tg_user = message.from_user
@@ -764,6 +788,13 @@ async def handle_text(message: Message, chat_service: ChatService) -> None:
     active_session = await chat_service.get_active_session(user.id)
     if active_session is None:
         await message.answer(texts["dialog_no_active"], reply_markup=main_menu_keyboard(lang))
+        return
+
+    if await _daily_limit_reached(chat_service, user.id, active_session):
+        await message.answer(
+            t("daily_limit_reached", lang),
+            reply_markup=_operator_only_keyboard(active_session.id, lang),
+        )
         return
 
     reply = await _with_typing(
@@ -952,6 +983,14 @@ async def flow_answer_callback(callback: CallbackQuery, chat_service: ChatServic
         await callback.message.answer(value)
     except Exception:
         pass
+
+    active_session = await chat_service.get_active_session(user.id)
+    if active_session is not None and await _daily_limit_reached(chat_service, user.id, active_session):
+        await callback.message.answer(
+            t("daily_limit_reached", lang),
+            reply_markup=_operator_only_keyboard(active_session.id, lang),
+        )
+        return
 
     # Forward the selection to the agent
     reply = await _with_typing(
