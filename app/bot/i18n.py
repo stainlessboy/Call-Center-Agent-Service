@@ -150,9 +150,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "uz": "Bahoni saqlab bo‘lmadi. Keyinroq qayta urinib ko‘ring.",
     },
     "session_closed_timeout": {
-        "ru": "Сессия закрыта из-за отсутствия активности. Оцените работу агента:",
-        "en": "The session was closed due to inactivity. Please rate the agent:",
-        "uz": "Faollik bo‘lmagani sababli sessiya yopildi. Agent ishini baholang:",
+        "ru": "Сессия закрыта из-за отсутствия активности.",
+        "en": "The session was closed due to inactivity.",
+        "uz": "Faollik bo‘lmagani sababli sessiya yopildi.",
+    },
+    "operator_chat_ended_rate": {
+        "ru": "Чат с оператором завершён. Пожалуйста, оцените работу оператора:",
+        "en": "The chat with the operator has ended. Please rate the operator:",
+        "uz": "Operator bilan chat yakunlandi. Iltimos, operator ishini baholang:",
     },
     "human_timeout_back_to_bot": {
         "ru": "Оператор не ответил в течение {minutes} минут. Я снова переключил сессию в режим бота, можем продолжать.",

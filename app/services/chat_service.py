@@ -131,7 +131,7 @@ class ChatService:
             await session.refresh(chat_session)
             return chat_session
 
-    async def end_active_session(self, user_id: int) -> Optional[str]:
+    async def end_active_session(self, user_id: int, reason: str = "manual_end") -> Optional[str]:
         async with self.session_factory() as session:
             async with session.begin():
                 chat_session = await self._get_active_session(session, user_id)
@@ -139,7 +139,8 @@ class ChatService:
                     return None
                 chat_session.status = SessionStatus.ENDED
                 chat_session.ended_at = datetime.now(timezone.utc)
-                chat_session.closed_reason = "manual_end"
+                chat_session.closed_reason = reason
+                chat_session.human_mode = False
             await session.commit()
             return chat_session.id
 

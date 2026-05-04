@@ -45,7 +45,6 @@ async def _inactivity_watcher(
                     await bot.send_message(
                         chat_id=user.telegram_user_id,
                         text=t("session_closed_timeout", lang),
-                        reply_markup=feedback_keyboard(session.id),
                     )
             if human_mode_timeout_minutes > 0:
                 switched = await chat_service.return_stale_human_sessions_to_bot(
@@ -125,10 +124,16 @@ async def lifespan(app: FastAPI):
                 return
             _, user = data
             lang = normalize_lang(user.language)
-            await chat_service.set_human_mode(session_id, False)
             if reason == "operator_left":
-                msg = t("chat_ended", lang)
-            elif reason == "chat_finished_error":
+                await chat_service.end_active_session(user.id, reason="operator_left")
+                await bot.send_message(
+                    chat_id=user.telegram_user_id,
+                    text=t("operator_chat_ended_rate", lang),
+                    reply_markup=feedback_keyboard(session_id),
+                )
+                return
+            await chat_service.set_human_mode(session_id, False)
+            if reason == "chat_finished_error":
                 msg = t("chat_ended_try_again", lang)
             elif reason == "timeout":
                 msg = t("operator_wait_timeout", lang)
