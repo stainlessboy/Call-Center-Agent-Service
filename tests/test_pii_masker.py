@@ -12,9 +12,12 @@ import pytest
 
 from app.agent.pii_masker import (
     ALL_TOKENS,
+    TOKEN_ACCOUNT,
     TOKEN_CARD,
+    TOKEN_CVV,
     TOKEN_EMAIL,
     TOKEN_IBAN,
+    TOKEN_INN,
     TOKEN_PASSPORT,
     TOKEN_PHONE,
     TOKEN_PINFL,
@@ -138,6 +141,145 @@ class TestEmail:
 
 
 # ---------------------------------------------------------------------------
+# Phone — Uzbekistan mobile WITHOUT 998 prefix (operator code + separator)
+# ---------------------------------------------------------------------------
+class TestPhoneUzLocal:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "90 123 45 67",
+            "91 234 56 78",
+            "93-456-78-90",
+            "94.567.89.01",
+            "(95) 678 90 12",
+            "97 789 01 23",
+            "99 890 12 34",
+            "33 901 23 45",
+            "50 012 34 56",
+            "55 123 45 67",
+            "77 234 56 78",
+            "88 345 67 89",
+            "22 456 78 90",
+        ],
+    )
+    def test_local_mobile_formats_are_masked(self, raw):
+        assert mask_pii(f"мой номер {raw} перезвоните") == f"мой номер {TOKEN_PHONE} перезвоните"
+
+    def test_local_phone_with_dot_separator(self):
+        assert mask_pii("+998.90.123.45.67") == TOKEN_PHONE
+
+    def test_bare_9_digits_without_separator_not_masked(self):
+        # Without separators we can't distinguish a phone from a 9-digit
+        # amount/INN/etc. — must remain untouched.
+        text = "номер 901234567"
+        assert mask_pii(text) == text
+
+    def test_wrong_grouping_not_masked(self):
+        # 90 12345 67 — wrong grouping, not a phone format.
+        text = "число 90 12345 67"
+        assert mask_pii(text) == text
+
+    def test_non_operator_prefix_not_masked(self):
+        # 80, 60, 12 are not UZ mobile operator codes — must not match.
+        for raw in ("80 123 45 67", "60 234 56 78", "12 345 67 89"):
+            text = f"число {raw}"
+            assert mask_pii(text) == text, f"{raw!r} should not be masked"
+
+    def test_amount_with_thousands_grouping_not_masked(self):
+        # Critical: "200 000 000 сум" must survive — the leading 200 is not
+        # in the operator-code list, so the pattern shouldn't fire.
+        text = "хочу взять 200 000 000 сум"
+        assert mask_pii(text) == text
+
+
+# ---------------------------------------------------------------------------
+# UZ bank account number — 20 digits
+# ---------------------------------------------------------------------------
+class TestAccount:
+    def test_20_digit_account_masked(self):
+        assert mask_pii("счёт 20208000900123456789 в банке") == f"счёт {TOKEN_ACCOUNT} в банке"
+
+    def test_account_at_start(self):
+        assert mask_pii("20208000900123456789") == TOKEN_ACCOUNT
+
+    def test_19_digits_not_masked(self):
+        text = "номер 2020800090012345678"
+        assert mask_pii(text) == text
+
+    def test_21_digits_not_masked(self):
+        text = "номер 202080009001234567890"
+        assert mask_pii(text) == text
+
+    def test_account_does_not_collide_with_card(self):
+        # 16-digit card and 20-digit account in the same message.
+        out = mask_pii("карта 1234 5678 9012 3456 счёт 20208000900123456789")
+        assert TOKEN_CARD in out
+        assert TOKEN_ACCOUNT in out
+        assert "1234" not in out
+        assert "20208000900123456789" not in out
+
+
+# ---------------------------------------------------------------------------
+# ИНН/СТИР/ТИН — 9 digits with explicit prefix
+# ---------------------------------------------------------------------------
+class TestInnPrefixed:
+    @pytest.mark.parametrize(
+        "raw,expected_prefix",
+        [
+            ("ИНН 123456789", "ИНН "),
+            ("инн: 305123456", "инн: "),
+            ("ИНН №305123456", "ИНН №"),
+            ("STIR 305123456", "STIR "),
+            ("stir: 123456789", "stir: "),
+            ("TIN 305123456", "TIN "),
+            ("tin 123456789", "tin "),
+        ],
+    )
+    def test_inn_with_prefix_masked(self, raw, expected_prefix):
+        assert mask_pii(f"мой {raw} зарегистрирован") == f"мой {expected_prefix}{TOKEN_INN} зарегистрирован"
+
+    def test_bare_9_digits_without_prefix_not_masked(self):
+        # No prefix → no mask. This preserves calculator amounts.
+        text = "число 305123456"
+        assert mask_pii(text) == text
+
+    def test_inn_with_amount_in_same_message(self):
+        # "200000000 сум" must survive even if message contains an INN.
+        out = mask_pii("ИНН 305123456, сумма 200 000 000 сум")
+        assert TOKEN_INN in out
+        assert "200 000 000" in out
+        assert "305123456" not in out
+
+
+# ---------------------------------------------------------------------------
+# CVV/CVC — 3 digits with explicit prefix
+# ---------------------------------------------------------------------------
+class TestCvvPrefixed:
+    @pytest.mark.parametrize(
+        "raw,expected_prefix",
+        [
+            ("CVV 437", "CVV "),
+            ("cvv: 921", "cvv: "),
+            ("CVC 558", "CVC "),
+            ("cvc 100", "cvc "),
+            ("код безопасности 437", "код безопасности "),
+            ("код карты 921", "код карты "),
+        ],
+    )
+    def test_cvv_with_prefix_masked(self, raw, expected_prefix):
+        assert mask_pii(raw) == f"{expected_prefix}{TOKEN_CVV}"
+
+    def test_bare_3_digits_not_masked(self):
+        # 3 digits without context could be an age, count, percentage, etc.
+        text = "мне 437 раз говорили"
+        assert mask_pii(text) == text
+
+    def test_percentage_not_masked(self):
+        text = "ставка 437% какая-то странная но всё же"
+        assert mask_pii(text) == text
+
+
+# ---------------------------------------------------------------------------
 # CRITICAL NEGATIVES — banking inputs that must survive untouched.
 # A single false positive here breaks the calculator flow.
 # ---------------------------------------------------------------------------
@@ -231,7 +373,17 @@ class TestProperties:
         assert once == twice, "mask_pii must be idempotent so re-running on history is safe"
 
     def test_all_tokens_are_listed(self):
-        for token in (TOKEN_PHONE, TOKEN_CARD, TOKEN_PINFL, TOKEN_PASSPORT, TOKEN_IBAN, TOKEN_EMAIL):
+        for token in (
+            TOKEN_PHONE,
+            TOKEN_CARD,
+            TOKEN_PINFL,
+            TOKEN_PASSPORT,
+            TOKEN_IBAN,
+            TOKEN_EMAIL,
+            TOKEN_ACCOUNT,
+            TOKEN_INN,
+            TOKEN_CVV,
+        ):
             assert token in ALL_TOKENS
 
     def test_tokens_are_not_themselves_pii(self):
