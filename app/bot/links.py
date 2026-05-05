@@ -9,14 +9,14 @@ from __future__ import annotations
 
 
 # ── Mobile app ──────────────────────────────────────────────────────────────
-ANDROID_APP_URL = "https://play.google.com/store/apps/details?id=uz.asakabank.mobile"
-IOS_APP_URL = "https://apps.apple.com/uz/app/asaka-bank/id1467473684"
+ANDROID_APP_URL = "https://lnnk.in/dMdU"
+IOS_APP_URL = "https://lnnk.in/jhbr"
 
 # ── Social media ────────────────────────────────────────────────────────────
-INSTAGRAM_URL = "https://instagram.com/asakabank"
-TELEGRAM_CHANNEL_URL = "https://t.me/asakabank_uz"
-FACEBOOK_URL = "https://facebook.com/asakabank"
-WEBSITE_URL = "https://asakabank.uz"
+INSTAGRAM_URL = "https://www.instagram.com/asakabankofficial/"
+TELEGRAM_CHANNEL_URL = "https://t.me/Asakabank_official"
+FACEBOOK_URL = "https://www.facebook.com/asakabankofficial"
+WEBSITE_URL = "https://asakabank.uz/uz/physical-persons/home"
 
 # ── Contacts ────────────────────────────────────────────────────────────────
 TRUST_LINE_PHONE = "+998 71 200 55 22"

@@ -444,6 +444,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             annual_rate_pct=rate_pct,
             term_months=term_months,
             output_dir=None,
+            lang=lang,
         )
         answer = at(
             "credit_result_pdf", lang,

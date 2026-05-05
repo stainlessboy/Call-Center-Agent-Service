@@ -13,6 +13,48 @@ except ImportError:
     _FPDF_AVAILABLE = False
 
 
+_PDF_TRANSLATIONS: dict[str, dict[str, str]] = {
+    "title": {
+        "ru": "График платежей: {product}",
+        "en": "Payment schedule: {product}",
+        "uz": "To'lovlar jadvali: {product}",
+    },
+    "borrower": {"ru": "Заёмщик: {name}", "en": "Borrower: {name}", "uz": "Qarz oluvchi: {name}"},
+    "amount": {
+        "ru": "Сумма кредита: {value} сум",
+        "en": "Loan amount: {value} UZS",
+        "uz": "Kredit summasi: {value} so'm",
+    },
+    "rate": {
+        "ru": "Годовая ставка: {value}%",
+        "en": "Annual rate: {value}%",
+        "uz": "Yillik stavka: {value}%",
+    },
+    "term": {
+        "ru": "Срок: {value} мес.",
+        "en": "Term: {value} mo.",
+        "uz": "Muddat: {value} oy",
+    },
+    "monthly_payment": {
+        "ru": "Ежемесячный платёж: {value} сум",
+        "en": "Monthly payment: {value} UZS",
+        "uz": "Oylik to'lov: {value} so'm",
+    },
+    "header_month": {"ru": "Мес.", "en": "Mo.", "uz": "Oy"},
+    "header_payment": {"ru": "Платёж", "en": "Payment", "uz": "To'lov"},
+    "header_principal": {"ru": "Осн. долг", "en": "Principal", "uz": "Asosiy qarz"},
+    "header_interest": {"ru": "Проценты", "en": "Interest", "uz": "Foizlar"},
+    "header_balance": {"ru": "Остаток", "en": "Balance", "uz": "Qoldiq"},
+    "total": {"ru": "Итого", "en": "Total", "uz": "Jami"},
+}
+
+
+def _t(key: str, lang: str, **kwargs: str) -> str:
+    bucket = _PDF_TRANSLATIONS[key]
+    template = bucket.get(lang) or bucket["ru"]
+    return template.format(**kwargs) if kwargs else template
+
+
 def _annuity_payment(principal: float, monthly_rate: float, n: int) -> float:
     """Compute monthly annuity payment."""
     if monthly_rate == 0:
@@ -27,6 +69,7 @@ def generate_amortization_pdf(
     term_months: int,
     borrower_name: str = "",
     output_dir: str | None = None,
+    lang: str = "ru",
 ) -> str:
     """
     Generate an amortization schedule PDF and return the file path.
@@ -36,7 +79,7 @@ def generate_amortization_pdf(
     if output_dir is None:
         output_dir = tempfile.mkdtemp(prefix="bankbot_pdf_")
     if not _FPDF_AVAILABLE:
-        return _generate_text_fallback(product_name, principal, annual_rate_pct, term_months, output_dir)
+        return _generate_text_fallback(product_name, principal, annual_rate_pct, term_months, output_dir, lang)
 
     monthly_rate = annual_rate_pct / 100 / 12
     payment = _annuity_payment(float(principal), monthly_rate, term_months)
@@ -75,24 +118,30 @@ def generate_amortization_pdf(
 
     # Title
     pdf.set_font(font_name, "B", 14)
-    title = _safe_text(f"График платежей: {product_name}", font_name)
+    title = _safe_text(_t("title", lang, product=product_name), font_name)
     pdf.cell(0, 10, title, ln=True, align="C")
     pdf.ln(2)
 
     # Metadata
     pdf.set_font(font_name, "", 10)
     if borrower_name:
-        pdf.cell(0, 7, _safe_text(f"Заёмщик: {borrower_name}", font_name), ln=True)
-    pdf.cell(0, 7, _safe_text(f"Сумма кредита: {principal:,} сум".replace(",", " "), font_name), ln=True)
-    pdf.cell(0, 7, _safe_text(f"Годовая ставка: {annual_rate_pct:.1f}%", font_name), ln=True)
-    pdf.cell(0, 7, _safe_text(f"Срок: {term_months} мес.", font_name), ln=True)
-    pdf.cell(0, 7, _safe_text(f"Ежемесячный платёж: {payment:,.0f} сум".replace(",", " "), font_name), ln=True)
+        pdf.cell(0, 7, _safe_text(_t("borrower", lang, name=borrower_name), font_name), ln=True)
+    pdf.cell(0, 7, _safe_text(_t("amount", lang, value=f"{principal:,}".replace(",", " ")), font_name), ln=True)
+    pdf.cell(0, 7, _safe_text(_t("rate", lang, value=f"{annual_rate_pct:.1f}"), font_name), ln=True)
+    pdf.cell(0, 7, _safe_text(_t("term", lang, value=str(term_months)), font_name), ln=True)
+    pdf.cell(0, 7, _safe_text(_t("monthly_payment", lang, value=f"{payment:,.0f}".replace(",", " ")), font_name), ln=True)
     pdf.ln(4)
 
     # Table header
     pdf.set_font(font_name, "B", 9)
     col_w = [15, 35, 40, 35, 45]
-    headers = ["Мес.", "Платёж", "Осн. долг", "Проценты", "Остаток"]
+    headers = [
+        _t("header_month", lang),
+        _t("header_payment", lang),
+        _t("header_principal", lang),
+        _t("header_interest", lang),
+        _t("header_balance", lang),
+    ]
     for i, h in enumerate(headers):
         pdf.cell(col_w[i], 7, _safe_text(h, font_name), border=1, align="C")
     pdf.ln()
@@ -117,7 +166,7 @@ def generate_amortization_pdf(
     total_payment = sum(r[1] for r in rows)
     total_interest = sum(r[3] for r in rows)
     pdf.set_font(font_name, "B", 8)
-    pdf.cell(col_w[0], 6, _safe_text("Итого", font_name), border=1, align="C")
+    pdf.cell(col_w[0], 6, _safe_text(_t("total", lang), font_name), border=1, align="C")
     pdf.cell(col_w[1], 6, f"{total_payment:,.0f}".replace(",", " "), border=1, align="R")
     pdf.cell(col_w[2], 6, f"{principal:,.0f}".replace(",", " "), border=1, align="R")
     pdf.cell(col_w[3], 6, f"{total_interest:,.0f}".replace(",", " "), border=1, align="R")
@@ -159,19 +208,22 @@ def _generate_text_fallback(
     annual_rate_pct: float,
     term_months: int,
     output_dir: str,
+    lang: str = "ru",
 ) -> str:
     """Generate a plain text payment schedule when fpdf2 is unavailable."""
     monthly_rate = annual_rate_pct / 100 / 12
     payment = _annuity_payment(float(principal), monthly_rate, term_months)
 
     lines = [
-        f"График платежей: {product_name}",
-        f"Сумма: {principal:,} сум",
-        f"Ставка: {annual_rate_pct:.1f}% годовых",
-        f"Срок: {term_months} мес.",
-        f"Ежемесячный платёж: {payment:,.0f} сум",
+        _t("title", lang, product=product_name),
+        _t("amount", lang, value=f"{principal:,}".replace(",", " ")),
+        _t("rate", lang, value=f"{annual_rate_pct:.1f}"),
+        _t("term", lang, value=str(term_months)),
+        _t("monthly_payment", lang, value=f"{payment:,.0f}".replace(",", " ")),
         "",
-        f"{'Мес.':<6} {'Платёж':<15} {'Осн.долг':<15} {'Проценты':<15} {'Остаток':<15}",
+        f"{_t('header_month', lang):<6} {_t('header_payment', lang):<15} "
+        f"{_t('header_principal', lang):<15} {_t('header_interest', lang):<15} "
+        f"{_t('header_balance', lang):<15}",
         "-" * 66,
     ]
     balance = float(principal)
