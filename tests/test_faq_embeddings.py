@@ -122,6 +122,10 @@ class TestHybridLookup:
         get_settings.cache_clear()
 
     def test_lex_wins_when_higher(self, monkeypatch):
+        # When lex strictly beats sem AND sem produced a competing candidate,
+        # the returned score is shifted down by FAQ_LEX_WIN_PENALTY (0.10 by
+        # default). Lex-only wins are prone to false positives on short
+        # canonical FAQ entries, so we demand more headroom for STRICT.
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
@@ -138,7 +142,29 @@ class TestHybridLookup:
             answer, score = _run(_faq_lookup_with_score("hello", "ru"))
 
         assert answer == "lex answer"
-        assert score == pytest.approx(0.95)
+        assert score == pytest.approx(0.85)  # 0.95 - 0.10 penalty
+        get_settings.cache_clear()
+
+    def test_lex_win_penalty_skipped_when_sem_unavailable(self, monkeypatch):
+        # If the semantic leg returns no candidate (None), the penalty must
+        # NOT apply — otherwise the no-API-key fallback would be broken.
+        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+        from app.utils.faq_tools import _faq_lookup_with_score
+        with patch(
+            "app.utils.faq_tools._lexical_lookup",
+            new=AsyncMock(return_value=("lex answer", 0.95)),
+        ), patch(
+            "app.utils.faq_tools._semantic_lookup",
+            new=AsyncMock(return_value=(None, 0.0)),
+        ):
+            answer, score = _run(_faq_lookup_with_score("hello", "ru"))
+
+        assert answer == "lex answer"
+        assert score == pytest.approx(0.95)  # unpenalized — sem didn't compete
         get_settings.cache_clear()
 
     def test_no_items_returns_none(self, monkeypatch):

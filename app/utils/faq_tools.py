@@ -21,6 +21,14 @@ _logger = logging.getLogger(__name__)
 _STRICT_THRESHOLD: float = float(os.getenv("FAQ_STRICT_THRESHOLD", "0.62"))
 _LOW_CONFIDENCE_THRESHOLD: float = float(os.getenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45"))
 
+# Penalty applied to the hybrid score when the lexical leg strictly outranks
+# the semantic leg. Lex-only wins are prone to false positives on short
+# canonical FAQ questions (e.g. "карту нерезидентам" matching "Как открыть
+# виртуальную карту?"). Subtracting a constant means a lex-only hit needs
+# 0.62 + penalty to be returned as STRICT, while semantic wins keep the
+# original threshold.
+_LEX_WIN_PENALTY: float = float(os.getenv("FAQ_LEX_WIN_PENALTY", "0.10"))
+
 # Sentinel kept for backward compat (tests, imports). Use get_faq_fallback(lang) for display.
 FAQ_FALLBACK_REPLY = "__FAQ_FALLBACK__"
 
@@ -44,8 +52,15 @@ def _faq_similarity(a: str, b: str) -> float:
     seq = difflib.SequenceMatcher(a=na, b=nb).ratio()
     ta = token_set(na)
     tb = token_set(nb)
-    overlap = len(ta & tb) / max(1, len(tb)) if ta and tb else 0.0
-    return max(seq, overlap)
+    if ta and tb and (inter := len(ta & tb)):
+        # F1 of token-level precision (query coverage) and recall (FAQ coverage).
+        # Old |A∩B|/|B| was insensitive to *extra* query tokens — e.g. query
+        # "карту нерезидентам" matched FAQ "Как открыть виртуальную карту?" at
+        # 0.75 because "нерезидентам" (the discriminative token) was ignored.
+        token_score = (2 * inter) / (len(ta) + len(tb))
+    else:
+        token_score = 0.0
+    return max(seq, token_score)
 
 
 async def _lexical_lookup(
@@ -179,6 +194,12 @@ async def _faq_lookup_with_score(
     else:
         best_answer, best_score = lex_answer, lex_score
         leg = "lex"
+        # Penalize lex-only wins ONLY when sem actually ran and produced a
+        # competing answer that lost. If sem was disabled or failed
+        # (sem_answer is None), penalizing lex would break the no-API-key
+        # fallback, where lex is the sole signal by design.
+        if sem_answer is not None and sem_score < lex_score:
+            best_score = max(0.0, best_score - _LEX_WIN_PENALTY)
 
     _logger.debug(
         "faq_lookup leg=%s lex=%.2f sem=%.2f → %.2f, query=%r",
