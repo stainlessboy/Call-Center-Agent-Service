@@ -467,17 +467,20 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "uz": "Operatorni ulayman. Quyidagi tugmani bosing.",
     },
     "operator_identity_required": {
-        "ru": "Для выполнения этой операции необходима идентификация. "
-              "Сейчас подключу вас к специалисту, который сможет помочь.",
-        "en": "This operation requires identity verification. "
-              "Let me connect you to a specialist who can help.",
-        "uz": "Bu operatsiya uchun shaxsni tasdiqlash kerak. "
-              "Sizga yordam bera oladigan mutaxassisga ulayman.",
+        "ru": "Для этой операции нужна идентификация в отделении. "
+              "Чтобы связаться со специалистом — нажмите кнопку ниже.",
+        "en": "This operation requires identity verification at a branch. "
+              "Tap the button below to connect to a specialist.",
+        "uz": "Bu operatsiya uchun bo'limda shaxsni tasdiqlash kerak. "
+              "Mutaxassis bilan bog'lanish uchun quyidagi tugmani bosing.",
     },
     "operator_unclear_message": {
-        "ru": "К сожалению, не смог понять ваш запрос. Подключаю специалиста, чтобы вам помогли.",
-        "en": "Unfortunately, I couldn't understand your request. Let me connect you to a specialist.",
-        "uz": "Afsuski, so'rovingizni tushuna olmadim. Sizga yordam berishi uchun mutaxassisga ulayman.",
+        "ru": "К сожалению, не смог понять ваш запрос. "
+              "Чтобы вам помог специалист — нажмите кнопку ниже.",
+        "en": "Unfortunately, I couldn't understand your request. "
+              "Tap the button below to talk to a specialist.",
+        "uz": "Afsuski, so'rovingizni tushuna olmadim. "
+              "Mutaxassis yordam berishi uchun quyidagi tugmani bosing.",
     },
 
     # ── Lead flow ─────────────────────────────────────────────────────────

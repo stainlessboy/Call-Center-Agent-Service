@@ -46,7 +46,7 @@ MENU_LABELS: dict[str, dict[str, str]] = {
         "branches_filials": "🏦 Филиалы (ЦБУ)",
         "branches_sales_offices": "🏪 Офисы продаж",
         "branches_sales_points": "🚗 Точки продаж (автосалоны)",
-        "human_mode_on": "👤 Живой оператор",
+        "human_mode_on": "🟢 Подключить к оператору",
         "human_mode_off": "🤖 Вернуться к боту",
     },
     "en": {
@@ -77,7 +77,7 @@ MENU_LABELS: dict[str, dict[str, str]] = {
         "branches_filials": "🏦 Filials",
         "branches_sales_offices": "🏪 Sales offices",
         "branches_sales_points": "🚗 Sales points (car dealers)",
-        "human_mode_on": "👤 Live operator",
+        "human_mode_on": "🟢 Connect to operator",
         "human_mode_off": "🤖 Back to bot",
     },
     "uz": {
@@ -108,7 +108,7 @@ MENU_LABELS: dict[str, dict[str, str]] = {
         "branches_filials": "🏦 Filiallar (BXM)",
         "branches_sales_offices": "🏪 Savdo ofislari",
         "branches_sales_points": "🚗 Savdo nuqtalari (avtosalon)",
-        "human_mode_on": "👤 Jonli operator",
+        "human_mode_on": "🟢 Operatorga ulash",
         "human_mode_off": "🤖 Botga qaytish",
     },
 }
