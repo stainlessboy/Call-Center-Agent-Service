@@ -45,6 +45,11 @@ class Settings:
     minio_password: str | None
     daily_message_limit: int
     rate_limit_per_minute: int
+    faq_embedding_enabled: bool
+    faq_embedding_model: str
+    faq_embedding_dim: int
+    faq_sem_strict_threshold: float
+    faq_sem_low_threshold: float
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -64,6 +69,21 @@ def _parse_positive_int(raw: str | None, default: int) -> int:
         return value if value >= 0 else default
     except ValueError:
         return default
+
+
+def _parse_float(raw: str | None, default: float) -> float:
+    if raw is None:
+        return default
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        return default
+
+
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
 @lru_cache
@@ -109,4 +129,9 @@ def get_settings() -> Settings:
         minio_password=(os.getenv("MINIO_PASSWORD") or "").strip() or None,
         daily_message_limit=_parse_positive_int(os.getenv("DAILY_MESSAGE_LIMIT"), default=30),
         rate_limit_per_minute=_parse_positive_int(os.getenv("RATE_LIMIT_PER_MINUTE"), default=20),
+        faq_embedding_enabled=_parse_bool(os.getenv("FAQ_EMBEDDING_ENABLED"), default=True),
+        faq_embedding_model=(os.getenv("FAQ_EMBEDDING_MODEL") or "text-embedding-3-small").strip(),
+        faq_embedding_dim=_parse_positive_int(os.getenv("FAQ_EMBEDDING_DIM"), default=1536),
+        faq_sem_strict_threshold=_parse_float(os.getenv("FAQ_SEM_STRICT_THRESHOLD"), default=0.70),
+        faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.50),
     )

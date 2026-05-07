@@ -20,6 +20,7 @@ from app.bot.keyboards.feedback import feedback_keyboard
 from app.bot.middlewares.chat_service import ChatServiceMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
 from app.config import get_settings
+from app.db.events import register_faq_embedding_events
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
 from app.services.agent_client import AgentClient
@@ -67,6 +68,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not set")
+
+    register_faq_embedding_events()
 
     bot = Bot(
         token=settings.bot_token,

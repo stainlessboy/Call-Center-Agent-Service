@@ -511,6 +511,10 @@ class FaqItemAdmin(ModelView, model=FaqItem):
     column_sortable_list = [FaqItem.id, FaqItem.created_at]
     column_default_sort = ("id", True)
 
+    # 1536-dim numpy arrays — useless to render and break Jinja's `if obj`.
+    column_details_exclude_list = ["embedding_ru", "embedding_en", "embedding_uz"]
+    form_excluded_columns = ["embedding_ru", "embedding_en", "embedding_uz", "created_at"]
+
     column_labels = {
         "id": "ID",
         "question_ru": "Вопрос (RU)",

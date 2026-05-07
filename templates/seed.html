@@ -215,5 +215,36 @@
     </div>
 
   </div>
+
+  <!-- Recompute FAQ Embeddings -->
+  <div class="row row-deck row-cards mt-3">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fa-solid fa-vector-square me-2"></i>
+            FAQ — пересчитать эмбеддинги
+          </h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3">
+            Заполняет недостающие векторы для уже существующих FAQ-записей
+            (например, после миграции добавления pgvector). Идемпотентно —
+            повторное нажатие безопасно: пропустит то, что уже посчитано.
+            Стоимость: ~$0.001 на 100 записей × 3 языка.
+          </p>
+          <form method="post">
+            <input type="hidden" name="action" value="recompute_embeddings">
+            <button type="submit" class="btn btn-outline-primary"
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Считаю...'; this.form.submit();">
+              <i class="fa-solid fa-arrows-rotate me-2"></i>
+              Пересчитать эмбеддинги
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 {% endblock %}

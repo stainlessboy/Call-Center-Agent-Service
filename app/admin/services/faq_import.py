@@ -238,9 +238,43 @@ def _extract_multilingual_items(
     ]
 
 
+async def _attach_embeddings(items: List[dict[str, Optional[str]]]) -> None:
+    """Batch-embed all questions across languages and attach vectors to *items*.
+
+    Three batched OpenAI calls (one per language). On failure any individual
+    embedding stays None — the row is still inserted, the SQLAlchemy event
+    listener will not retry (its before_insert path skips columns that already
+    exist or are explicitly None for missing questions). Backfill via the
+    admin UI handles those rows later.
+    """
+    import logging
+
+    from app.utils.embeddings import embed_texts
+
+    logger = logging.getLogger(__name__)
+
+    for lang in ("ru", "en", "uz"):
+        q_field = f"question_{lang}"
+        emb_field = f"embedding_{lang}"
+        # Pair (index, text) so we can write back after the batch.
+        pairs = [(i, item.get(q_field)) for i, item in enumerate(items)]
+        texts = [t or "" for _, t in pairs]
+        if not any(texts):
+            continue
+        try:
+            vectors = await embed_texts(texts)
+        except Exception as exc:
+            logger.warning("seed embed batch failed for %s: %s", lang, exc)
+            continue
+        for (idx, q_text), vec in zip(pairs, vectors):
+            if q_text and vec is not None:
+                items[idx][emb_field] = vec
+
+
 async def _import_items(items: List[dict[str, Optional[str]]], replace: bool, dry_run: bool) -> None:
     if dry_run:
         return
+    await _attach_embeddings(items)
     async with get_session() as session:
         if replace:
             await session.execute(delete(FaqItem))

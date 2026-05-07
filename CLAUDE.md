@@ -203,6 +203,7 @@ The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `c
 - Operators respond via Telegram (with `/op` prefix), the `/operator/send` REST API, or the SQLAdmin panel at `/admin`
 - Background inactivity watcher (60s interval) auto-returns stale human-mode sessions to bot after `HUMAN_MODE_OPERATOR_TIMEOUT_MINUTES`
 - `request_operator` tool allows LLM to trigger handoff for identity-required operations
+- **Asaka chat-middleware integration** (Socket.IO + JWT) — full protocol details, sequence diagrams, env vars and run checklist in [docs/CHAT_MIDDLEWARE_INTEGRATION.md](docs/CHAT_MIDDLEWARE_INTEGRATION.md)
 
 ### Database Models (`app/db/models.py`)
 

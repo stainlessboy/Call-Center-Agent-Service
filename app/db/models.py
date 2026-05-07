@@ -20,8 +20,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from app.db.session import Base
+
+FAQ_EMBEDDING_DIM = 1536
 
 
 class SessionStatus(str, enum.Enum):
@@ -205,6 +208,9 @@ class FaqItem(Base):
     answer_en: Mapped[Optional[str]] = mapped_column(Text)
     question_uz: Mapped[Optional[str]] = mapped_column(Text)
     answer_uz: Mapped[Optional[str]] = mapped_column(Text)
+    embedding_ru: Mapped[Optional[list[float]]] = mapped_column(Vector(FAQ_EMBEDDING_DIM), nullable=True)
+    embedding_en: Mapped[Optional[list[float]]] = mapped_column(Vector(FAQ_EMBEDDING_DIM), nullable=True)
+    embedding_uz: Mapped[Optional[list[float]]] = mapped_column(Vector(FAQ_EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

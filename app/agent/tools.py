@@ -424,10 +424,18 @@ async def faq_lookup(
 ) -> str:
     """Look up the FAQ knowledge base for banking questions about services, products or procedures.
 
+    Call this for ANY "how do I X with the bank" question — including ones that
+    sound like generic financial advice. The bank-specific FAQ is the source of
+    truth; do not reply from general knowledge before checking it.
+
     EXAMPLES:
     - "как обновить паспорт в приложении" → faq_lookup(query="обновить паспорт в приложении")
     - "можно ли досрочно погасить кредит" → faq_lookup(query="досрочное погашение кредита")
+    - "как кредит быстрее погасить" → faq_lookup(query="досрочное погашение кредита")
+    - "как закрыть кредит" → faq_lookup(query="закрытие кредита")
     - "как заблокировать карту" → faq_lookup(query="блокировка карты")
+    - "какие комиссии за перевод" → faq_lookup(query="комиссии переводы")
+    - "сколько процентов при досрочном закрытии вклада" → faq_lookup(query="досрочное закрытие вклада проценты")
     - "есть ли обслуживание без очереди в филиалах" → faq_lookup(query="обслуживание без очереди")
     - "Филиалларингда навбатсиз хизмат курсатолисизме" → faq_lookup(query="навбатсиз хизмат")
     - "how to change phone number" → faq_lookup(query="change phone number")
