@@ -131,16 +131,21 @@ def _format_state_xml(dialog: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _reattach_keyboard(dialog: dict, lang: str) -> tuple[dict, Optional[List[str]]]:
-    """Re-attach flow-appropriate keyboard."""
+    """Re-attach flow-appropriate keyboard.
+
+    PRODUCT_DETAIL keeps its CTA buttons across side-questions (sticky context —
+    user is "in" a product, deciding whether to apply). SHOW_PRODUCTS does NOT
+    re-push the product list keyboard: the list is already visible upstream in
+    chat, and pushing it on every unrelated reply makes the bot feel pushy.
+    `dialog.products` is preserved either way, so user can still pick by name
+    or index — `select_product` will match against the saved list.
+    """
     flow = dialog.get("flow")
-    products = list(dialog.get("products") or [])
     category = dialog.get("category", "")
     if flow == FLOW_PRODUCT_DETAIL:
         if category in ("debit_card", "fx_card"):
             return dict(dialog), [at("btn_submit_app", lang), at("btn_all_products", lang)]
         return dict(dialog), [at("btn_calc_payment", lang), at("btn_all_products", lang)]
-    if flow == FLOW_SHOW_PRODUCTS and products:
-        return dict(dialog), [p["name"] for p in products]
     return dict(dialog), None
 
 

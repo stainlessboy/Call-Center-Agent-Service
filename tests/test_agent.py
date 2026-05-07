@@ -470,14 +470,18 @@ class TestUpdateDialogFromTools:
         assert new_dialog["selected_product"]["name"] == "Ипотека Стандарт"
         assert "✅ Рассчитать платёж" in keyboard
 
-    def test_no_tools_reattaches_keyboard(self):
+    def test_no_tools_drops_show_products_keyboard(self):
+        # Side-question while in SHOW_PRODUCTS must NOT re-push the product
+        # list keyboard — it's already visible upstream and would be spammy.
+        # Dialog state is preserved so user can still pick by name/index.
         dialog = {
             **_default_dialog(),
             "flow": "show_products",
             "products": [{"name": "A"}, {"name": "B"}],
         }
         new_dialog, keyboard = _run(_update_dialog_from_tools(dialog, [], "", "ru"))
-        assert keyboard == ["A", "B"]
+        assert keyboard is None
+        assert new_dialog["products"] == [{"name": "A"}, {"name": "B"}]
 
     def test_faq_lookup_reattaches_keyboard(self):
         dialog = {
@@ -512,10 +516,12 @@ class TestReattachKeyboard:
         _, keyboard = _reattach_keyboard(dialog, "ru")
         assert "📋 Подать заявку" in keyboard
 
-    def test_show_products(self):
+    def test_show_products_does_not_reattach(self):
+        # SHOW_PRODUCTS is shown only on the turn get_products fires; on
+        # subsequent side-questions the product keyboard is dropped.
         dialog = {**_default_dialog(), "flow": "show_products", "products": [{"name": "A"}]}
         _, keyboard = _reattach_keyboard(dialog, "ru")
-        assert keyboard == ["A"]
+        assert keyboard is None
 
     def test_no_flow(self):
         _, keyboard = _reattach_keyboard(_default_dialog(), "ru")
@@ -2221,7 +2227,22 @@ class TestUpdateDialogClarify:
         assert new_dialog.get("category") == "mortgage"
         assert new_dialog.get("products") == [{"name": "Ипотека Лайт"}]
 
-    def test_clarify_without_options_preserves_flow_keyboard(self):
+    def test_clarify_without_options_preserves_product_detail_keyboard(self):
+        # PRODUCT_DETAIL CTA buttons stay sticky across clarify with no options.
+        # SHOW_PRODUCTS list keyboard does NOT — see test_show_products_does_not_reattach.
+        from app.agent.constants import FLOW_PRODUCT_DETAIL
+        dialog = {
+            **_default_dialog(),
+            "flow": FLOW_PRODUCT_DETAIL,
+            "category": "mortgage",
+            "selected_product": {"name": "Ипотека Стандарт"},
+        }
+        tool_calls = [{"name": "clarify", "args": {"missing_info": "срок", "options": []}}]
+        new_dialog, keyboard = _run(_update_dialog_from_tools(dialog, tool_calls, "", "ru"))
+        assert "✅ Рассчитать платёж" in keyboard
+        assert new_dialog.get("category") == "mortgage"
+
+    def test_clarify_without_options_drops_show_products_keyboard(self):
         from app.agent.constants import FLOW_SHOW_PRODUCTS
         dialog = {
             **_default_dialog(),
@@ -2231,9 +2252,9 @@ class TestUpdateDialogClarify:
         }
         tool_calls = [{"name": "clarify", "args": {"missing_info": "срок", "options": []}}]
         new_dialog, keyboard = _run(_update_dialog_from_tools(dialog, tool_calls, "", "ru"))
-        # Flow keyboard (product names) should be preserved.
-        assert keyboard == ["Вклад А", "Вклад Б"]
-        assert new_dialog.get("category") == "deposit"
+        assert keyboard is None
+        # State preserved — user can still pick a product by name/index.
+        assert new_dialog.get("products") == [{"name": "Вклад А"}, {"name": "Вклад Б"}]
 
 
 # ---- Task 2: _faq_lookup_with_score --------------------------------------
