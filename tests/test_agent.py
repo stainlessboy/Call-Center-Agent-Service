@@ -7,10 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import Command
 
 from app.agent.state import BotState, _default_dialog
-from app.agent.constants import (
-    FALLBACK_STREAK_THRESHOLD,
-    _greeting_with_menu,
-)
+from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import SYSTEM_POLICY, at, get_system_policy
 from app.agent.intent import (
     _detect_product_category,
@@ -30,8 +27,6 @@ from app.agent.nodes.faq import _reattach_keyboard, _update_dialog_from_tools
 from app.agent.nodes.router import node_router
 from app.agent.nodes.calc_flow import node_calc_flow
 from app.agent.tools import (
-    greeting_response,
-    thanks_response,
     find_office,
     get_office_types_info,
     get_currency_info,
@@ -291,19 +286,6 @@ class TestFindProductByName:
         assert _find_product_by_name("Автокредит", products) is None
 
 
-# ---- Greeting text ---------------------------------------------------------
-
-class TestGreetingWithMenu:
-    def test_russian(self):
-        assert "Здравствуйте" in _greeting_with_menu("ru")
-
-    def test_english(self):
-        assert "Hello" in _greeting_with_menu("en")
-
-    def test_uzbek(self):
-        assert "Assalomu" in _greeting_with_menu("uz")
-
-
 # ---- _fmt_rate -------------------------------------------------------------
 
 class TestFmtRate:
@@ -323,22 +305,6 @@ class TestFmtRate:
 
 
 # ---- LangGraph Tools (direct tests) ---------------------------------------
-
-class TestToolGreetingResponse:
-    def test_russian(self):
-        result = _run(greeting_response.coroutine(state={"lang": "ru"}))
-        assert "Здравствуйте" in result
-
-    def test_english(self):
-        result = _run(greeting_response.coroutine(state={"lang": "en"}))
-        assert "Hello" in result
-
-
-class TestToolThanksResponse:
-    def test_returns_acknowledgment(self):
-        result = _run(thanks_response.coroutine())
-        assert "Пожалуйста" in result
-
 
 class TestFindOfficeTool:
     def test_none_found(self):
@@ -412,9 +378,9 @@ class TestFaqToolsRegistered:
         assert "back_to_product_list" not in names
 
     def test_tool_count_trimmed(self):
-        """Tool set should be 14 tools (clarify added in 2026-04)."""
+        """Tool set should be 12 tools (greeting/thanks removed in 2026-05)."""
         from app.agent.tools import _FAQ_TOOLS
-        assert len(_FAQ_TOOLS) == 14
+        assert len(_FAQ_TOOLS) == 12
 
 
 class TestToolGetOfficeTypesInfo:
@@ -474,23 +440,6 @@ class TestToolSelectProduct:
 # ---- _update_dialog_from_tools --------------------------------------------
 
 class TestUpdateDialogFromTools:
-    def test_greeting_resets_dialog(self):
-        dialog = {**_default_dialog(), "flow": "show_products"}
-        new_dialog, keyboard = _run(
-            _update_dialog_from_tools(dialog, [{"name": "greeting_response", "args": {}}], "", "ru")
-        )
-        assert new_dialog["flow"] is None
-        assert keyboard is not None
-        assert len(keyboard) == 6
-
-    def test_thanks_keeps_dialog(self):
-        dialog = {**_default_dialog(), "flow": "show_products"}
-        new_dialog, keyboard = _run(
-            _update_dialog_from_tools(dialog, [{"name": "thanks_response", "args": {}}], "", "ru")
-        )
-        assert new_dialog["flow"] == "show_products"
-        assert keyboard is None
-
     def test_credit_menu_buttons(self):
         new_dialog, keyboard = _run(
             _update_dialog_from_tools(_default_dialog(), [{"name": "show_credit_menu", "args": {}}], "", "ru")
@@ -898,10 +847,6 @@ class TestLocalizedName:
 # ---- i18n: Tools respond in English/Uzbek ----------------------------------
 
 class TestToolsI18n:
-    def test_thanks_en(self):
-        result = _run(thanks_response.coroutine(state={"lang": "en"}))
-        assert "welcome" in result.lower()
-
     def test_branch_info_en(self):
         with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
             result = _run(find_office.coroutine(office_type="filial", query="NotFound", state={"lang": "en"}))
@@ -919,30 +864,10 @@ class TestToolsI18n:
 # ---- Lang switching: persists via state["lang"] (set by detector) ----------
 
 class TestLastLangPersistence:
-    def test_tools_render_uz_from_state(self):
-        """Tools read lang from InjectedState, not from a function arg."""
-        result = _run(thanks_response.coroutine(state={"lang": "uz"}))
-        assert "Arzimaydi" in result or "rahmat" in result.lower() or "yozing" in result.lower()
-
     def test_tools_render_en_from_state(self):
         result = _run(show_credit_menu.coroutine(state={"lang": "en"}))
         assert "Mortgage" in result
         assert "Auto loan" in result
-
-    def test_tools_fallback_to_last_lang_when_state_empty(self):
-        """If state doesn't have lang explicitly, fallback to dialog.last_lang."""
-        result = _run(thanks_response.coroutine(state={"dialog": {"last_lang": "uz"}}))
-        assert "Arzimaydi" in result or "rahmat" in result.lower() or "yozing" in result.lower()
-
-    def test_tools_default_to_ru(self):
-        """Tools default to Russian when state is entirely absent."""
-        result = _run(thanks_response.coroutine())
-        assert "Пожалуйста" in result
-
-    def test_default_lang_is_ru(self):
-        """Tools without explicit lang default to Russian."""
-        result = _run(thanks_response.coroutine())
-        assert "Пожалуйста" in result
 
 
 # ---- i18n: Intent detection multilingual -----------------------------------

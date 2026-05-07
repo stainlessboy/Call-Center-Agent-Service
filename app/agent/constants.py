@@ -35,11 +35,3 @@ FLOW_OFFICE_DETAIL = "office_detail"
 STEP_AMOUNT = "amount"
 STEP_TERM = "term"
 STEP_DOWNPAYMENT = "downpayment"
-
-
-def _greeting_with_menu(lang: str = "ru") -> str:
-    if lang == "en":
-        return "Hello! What are you interested in?"
-    if lang == "uz":
-        return "Assalomu alaykum! Qiziqtirayotgan bo'limni tanlang:"
-    return "Здравствуйте! Выберите раздел или напишите ваш вопрос:"

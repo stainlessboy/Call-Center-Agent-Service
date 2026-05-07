@@ -339,9 +339,9 @@ _OFFICE_TYPE_HEADERS = {
 }
 
 _OFFICE_TYPE_PROMPT = {
-    "ru": "🏢 Выберите тип офиса:",
-    "en": "🏢 Choose office type:",
-    "uz": "🏢 Ofis turini tanlang:",
+    "ru": "🏦 Выберите тип офиса:",
+    "en": "🏦 Choose office type:",
+    "uz": "🏦 Ofis turini tanlang:",
 }
 
 
@@ -598,9 +598,9 @@ async def _show_cbu_rates(message: Message, lang: str, texts: dict[str, str]) ->
 
     date_str = cbu_data[0].get("date", "")
     title = {
-        "ru": f"💱 Курс ЦБ Узбекистана на {date_str}:",
-        "en": f"💱 CBU exchange rates for {date_str}:",
-        "uz": f"💱 O'zbekiston MB kursi {date_str}:",
+        "ru": f"💰 Курс ЦБ Узбекистана на {date_str}:",
+        "en": f"💰 CBU exchange rates for {date_str}:",
+        "uz": f"💰 O'zbekiston MB kursi {date_str}:",
     }[lang]
 
     buttons: list[list[InlineKeyboardButton]] = []

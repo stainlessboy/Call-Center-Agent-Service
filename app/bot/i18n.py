@@ -16,8 +16,8 @@ MENU_LABELS: dict[str, dict[str, str]] = {
         # Top-level (main menu)
         "start_dialog": "💬 Начать диалог",
         "end_dialog": "✅ Завершить диалог",
-        "our_branches": "🏢 Наши отделения",
-        "currency_rates": "💱 Курс валют",
+        "our_branches": "🏦 Наши отделения",
+        "currency_rates": "💰 Курс валют",
         "useful_links": "🔗 Полезные ссылки",
         "settings": "⚙️ Настройки",
         # Branches submenu
@@ -52,8 +52,8 @@ MENU_LABELS: dict[str, dict[str, str]] = {
     "en": {
         "start_dialog": "💬 Start dialog",
         "end_dialog": "✅ End dialog",
-        "our_branches": "🏢 Our branches",
-        "currency_rates": "💱 Exchange rates",
+        "our_branches": "🏦 Our branches",
+        "currency_rates": "💰 Exchange rates",
         "useful_links": "🔗 Useful links",
         "settings": "⚙️ Settings",
         "office_list": "📋 Office list",
@@ -83,8 +83,8 @@ MENU_LABELS: dict[str, dict[str, str]] = {
     "uz": {
         "start_dialog": "💬 Suhbatni boshlash",
         "end_dialog": "✅ Suhbatni yakunlash",
-        "our_branches": "🏢 Bizning filiallar",
-        "currency_rates": "💱 Valyuta kursi",
+        "our_branches": "🏦 Bizning filiallar",
+        "currency_rates": "💰 Valyuta kursi",
         "useful_links": "🔗 Foydali havolalar",
         "settings": "⚙️ Sozlamalar",
         "office_list": "📋 Ofislar ro'yxati",
@@ -256,14 +256,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "uz": "Asosiy menyu. Bo'limni tanlang:",
     },
     "branches_menu_prompt": {
-        "ru": "🏢 Наши отделения — выберите действие:",
-        "en": "🏢 Our branches — pick an action:",
-        "uz": "🏢 Bizning filiallar — tanlang:",
+        "ru": "🏦 Наши отделения — выберите действие:",
+        "en": "🏦 Our branches — pick an action:",
+        "uz": "🏦 Bizning filiallar — tanlang:",
     },
     "rates_menu_prompt": {
-        "ru": "💱 Курс валют — выберите тип:",
-        "en": "💱 Exchange rates — pick a type:",
-        "uz": "💱 Valyuta kursi — turini tanlang:",
+        "ru": "💰 Курс валют — выберите тип:",
+        "en": "💰 Exchange rates — pick a type:",
+        "uz": "💰 Valyuta kursi — turini tanlang:",
     },
     "links_menu_prompt": {
         "ru": "🔗 Полезные ссылки — выберите раздел:",
@@ -282,17 +282,17 @@ TEXTS: dict[str, dict[str, str]] = {
     },
     "start_dialog_greeting": {
         "ru": (
-            "Здравствуйте! Я бот Asakabank. Чем могу помочь?\n\n"
+            "Здравствуйте! Ваши финансы – в центре внимания. Какой вопрос вас интересует?\n\n"
             "ℹ️ Бот работает в тестовом режиме и может ошибаться. "
             "Для точной информации обращайтесь к оператору или в колл-центр 1152."
         ),
         "en": (
-            "Hello! I'm the Asakabank bot. How can I help?\n\n"
+            "Hello! Your finances — in the spotlight. What question can I help you with?\n\n"
             "ℹ️ The bot is running in test mode and may make mistakes. "
             "For accurate information, contact an operator or call center 1152."
         ),
         "uz": (
-            "Assalomu alaykum! Men Asakabank botiman. Qanday yordam bera olaman?\n\n"
+            "Assalomu alaykum! Moliyangiz – bizning e'tibor markazimizda. Qanday savol sizni qiziqtirmoqda?\n\n"
             "ℹ️ Bot sinov rejimida ishlamoqda va xato qilishi mumkin. "
             "Aniq ma'lumot uchun operatorga yoki 1152 koll-markaziga murojaat qiling."
         ),
@@ -303,9 +303,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "uz": "Suhbat allaqachon faol. Yangisini boshlash uchun «✅ Suhbatni yakunlash»ni bosing.",
     },
     "dialog_ended": {
-        "ru": "Диалог завершён. Нажмите «💬 Начать диалог», чтобы начать новый.",
-        "en": "Dialog ended. Tap «💬 Start dialog» to start a new one.",
-        "uz": "Suhbat yakunlandi. Yangisini boshlash uchun «💬 Suhbatni boshlash»ni bosing.",
+        "ru": "Спасибо за обращение! Если появятся вопросы, я всегда рядом. Желаю вам хорошего дня!",
+        "en": "Thank you for reaching out! If any questions come up, I'm always here. Have a great day!",
+        "uz": "Murojaatingiz uchun rahmat! Agar qo'shimcha savolingiz bo'lsa, men doim yoningizdaman. Kuningiz xayrli o'tsin!",
     },
     "dialog_no_active": {
         "ru": "Активного диалога нет. Нажмите «💬 Начать диалог», чтобы начать.",

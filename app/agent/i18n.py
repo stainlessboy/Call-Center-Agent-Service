@@ -66,7 +66,7 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 - любые формулировки «как мне [действие с банком/деньгами/картой/кредитом/вкладом]»
 
 ИСКЛЮЧЕНИЯ — НЕ нужно `faq_lookup`:
-- Приветствие/благодарность (используй `greeting_response`/`thanks_response`)
+- Приветствие/благодарность — отвечай коротко сам, без вызова инструментов
 - Запрос конкретного продукта (используй `get_products`)
 - Запрос калькулятора с цифрами (используй `custom_loan_calculator` или `start_calculator`)
 - Курсы валют (только при явном упоминании валюты — `get_currency_info`)
@@ -151,7 +151,7 @@ Triggers (call `faq_lookup` as the FIRST move, do not pad with your own "tips"):
 - any phrasing of "how do I [action with the bank/money/card/loan/deposit]"
 
 EXCEPTIONS — do NOT call `faq_lookup`:
-- Greetings/thanks (use `greeting_response`/`thanks_response`)
+- Greetings/thanks — answer briefly yourself, no tool call
 - A specific product request (use `get_products`)
 - A calculator request with numbers (use `custom_loan_calculator` or `start_calculator`)
 - Exchange rates (only when a currency is explicitly mentioned — `get_currency_info`)
@@ -239,7 +239,7 @@ Triggerlar (`faq_lookup` ni BIRINCHI bo'lib chaqiring, o'z "lifehack"laringiz bi
 - "men [bank/pul/karta/kredit/omonat bilan amal] ni qanday qilaman" tipidagi har qanday formulalash
 
 ISTISNOLAR — `faq_lookup` ni chaqirMANG:
-- Salomlashish/rahmat (`greeting_response`/`thanks_response` ishlating)
+- Salomlashish/rahmat — qisqa o'zingiz javob bering, asbob chaqirmang
 - Aniq mahsulot so'rovi (`get_products` ishlating)
 - Raqamlar bilan kalkulyator so'rovi (`custom_loan_calculator` yoki `start_calculator` ishlating)
 - Valyuta kurslari (faqat valyuta aniq aytilganda — `get_currency_info`)
@@ -358,7 +358,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "btn_autoloan": {"ru": "🚗 Автокредит", "en": "🚗 Auto loan", "uz": "🚗 Avtokredit"},
     "btn_microloan": {"ru": "💰 Микрозайм", "en": "💰 Microloan", "uz": "💰 Mikroqarz"},
     "btn_deposit": {"ru": "💳 Вклад", "en": "💳 Deposit", "uz": "💳 Omonat"},
-    "btn_card": {"ru": "🃏 Карта", "en": "🃏 Card", "uz": "🃏 Karta"},
+    "btn_card": {"ru": "💳 Карта", "en": "💳 Card", "uz": "💳 Karta"},
     "btn_question": {"ru": "❓ Вопрос", "en": "❓ Question", "uz": "❓ Savol"},
     "btn_edu_credit": {"ru": "📚 Образовательный кредит", "en": "📚 Educational loan", "uz": "📚 Ta'lim krediti"},
     "btn_calc_payment": {"ru": "✅ Рассчитать платёж", "en": "✅ Calculate payment", "uz": "✅ To'lovni hisoblash"},
@@ -369,11 +369,6 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "btn_recalculate": {"ru": "🔄 Пересчитать", "en": "🔄 Recalculate", "uz": "🔄 Qayta hisoblash"},
 
     # ── Tool responses ────────────────────────────────────────────────────
-    "thanks_reply": {
-        "ru": "Пожалуйста! Если нужно — пишите.",
-        "en": "You're welcome! Feel free to write if you need anything.",
-        "uz": "Arzimaydi! Kerak bo'lsa — yozing.",
-    },
     "branch_found_header": {
         "ru": "Нашёл {count} подходящих офис(ов):",
         "en": "Found {count} matching office(s):",

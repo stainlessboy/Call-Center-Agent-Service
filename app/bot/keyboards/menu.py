@@ -4,12 +4,12 @@ Layout (2026-04 redesign):
 
     main_menu_keyboard (idle, no active dialog)
         💬 Начать диалог
-        🏢 Наши отделения  │  💱 Курс валют
+        🏦 Наши отделения  │  💰 Курс валют
         🔗 Полезные ссылки │  ⚙️ Настройки
 
     chat_keyboard (during an active dialog — same nav, just swap top button)
         ✅ Завершить диалог
-        🏢 Наши отделения  │  💱 Курс валют
+        🏦 Наши отделения  │  💰 Курс валют
         🔗 Полезные ссылки │  ⚙️ Настройки
 
 Submenus are reply keyboards (1 level deep). Drill-downs deeper than that

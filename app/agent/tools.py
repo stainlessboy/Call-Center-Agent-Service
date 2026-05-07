@@ -5,9 +5,6 @@ from typing import Annotated, Literal
 from langchain_core.tools import tool as lc_tool
 from langgraph.prebuilt import InjectedState
 
-from app.agent.constants import (
-    _greeting_with_menu,
-)
 from app.agent.i18n import (
     at,
     category_label,
@@ -61,35 +58,6 @@ def _lang_from_state(state: dict | None) -> str:
         return lang
     dialog = state.get("dialog") or {}
     return dialog.get("last_lang") or "ru"
-
-
-@lc_tool
-async def greeting_response(
-    state: Annotated[dict, InjectedState] = None,
-) -> str:
-    """Greet the user when they say hello.
-
-    EXAMPLES:
-    - "привет" → greeting_response()
-    - "здравствуйте" → greeting_response()
-    - "hi" / "hello" → greeting_response()
-    - "salom" / "assalomu alaykum" → greeting_response()
-    """
-    return _greeting_with_menu(_lang_from_state(state))
-
-
-@lc_tool
-async def thanks_response(
-    state: Annotated[dict, InjectedState] = None,
-) -> str:
-    """Reply to gratitude from the user.
-
-    EXAMPLES:
-    - "спасибо" / "благодарю" → thanks_response()
-    - "thank you" → thanks_response()
-    - "rahmat" / "katta rahmat" → thanks_response()
-    """
-    return at("thanks_reply", _lang_from_state(state))
 
 
 async def _find_offices_impl(office_type: str, query: str, lang: str) -> str:
@@ -577,7 +545,6 @@ async def clarify(
     - the user asked something that needs a missing parameter (which product? which city? which card type?)
 
     DO NOT use clarify() for:
-    - greeting/thanks (use greeting_response/thanks_response)
     - clear product or branch requests (use get_products / find_office)
     - explicit operator request (use request_operator)
 
@@ -604,8 +571,6 @@ async def clarify(
 
 
 _FAQ_TOOLS = [
-    greeting_response,
-    thanks_response,
     find_office,
     select_office,
     get_office_types_info,

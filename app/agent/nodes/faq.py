@@ -158,12 +158,6 @@ async def _update_dialog_from_tools(
     name = last_tc["name"]
     args = last_tc.get("args", {})
 
-    if name == "greeting_response":
-        return _default_dialog(), get_main_menu_buttons(lang)
-
-    if name == "thanks_response":
-        return dict(dialog), None
-
     if name == "find_office":
         from app.agent.branches import search_offices
         office_type = args.get("office_type", "")
@@ -301,7 +295,7 @@ _GIVING_UP_RE = _re.compile(
 )
 
 _PRODUCTIVE_TOOLS = frozenset({
-    "greeting_response", "thanks_response", "find_office", "select_office",
+    "find_office", "select_office",
     "get_office_types_info", "get_currency_info", "show_credit_menu",
     "get_products", "select_product", "start_calculator",
     "custom_loan_calculator", "request_operator", "clarify",
