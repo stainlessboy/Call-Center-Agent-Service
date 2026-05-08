@@ -10,7 +10,7 @@ from app.agent.constants import VALID_LANGS, resolve_language
 from app.agent.i18n import at
 from app.agent.graph import build_graph
 from app.agent.lang_detect import detect_language
-from app.agent.lang_heuristic import check_lang_mismatch
+from app.agent.lang_heuristic import check_lang_mismatch, looks_worth_llm_recheck
 from app.agent.pii_masker import mask_pii
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
 
@@ -63,12 +63,31 @@ class Agent:
         # 3. Run a cheap regex heuristic on top: if the message clearly looks
         #    like a different language, surface a switch suggestion so the
         #    bot layer can ask the user to confirm. We never switch silently.
+        # 4. If the regex stayed silent on a "suspicious" message (Uzbek typos,
+        #    short transliterated text), fall back to the LLM detector — same
+        #    one as step 2, with PII masking baked in. This catches cases
+        #    where the regex marker list is too narrow.
         primary_lang = language if language in VALID_LANGS else None
+        llm_detected: Optional[str] = None
         if primary_lang is None:
-            primary_lang = await detect_language(
+            llm_detected = await detect_language(
                 user_text, fallback=resolve_language(dialog)
             )
+            primary_lang = llm_detected
         suggested_lang: Optional[str] = check_lang_mismatch(user_text, primary_lang)
+        if (
+            suggested_lang is None
+            and primary_lang in VALID_LANGS
+            and looks_worth_llm_recheck(user_text)
+        ):
+            # Reuse the step-2 result if we already paid for it this turn;
+            # otherwise pay for one extra detector call. mask_pii is applied
+            # inside detect_language, so raw PII never reaches the LLM.
+            recheck = llm_detected if llm_detected is not None else await detect_language(
+                user_text, fallback=primary_lang
+            )
+            if recheck in VALID_LANGS and recheck != primary_lang:
+                suggested_lang = recheck
         # Don't re-prompt every turn — once we've offered a switch for a given
         # target language and the user answered, we record the answer in
         # `dialog["lang_switch_offered"]`. While that flag matches the same

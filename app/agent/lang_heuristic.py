@@ -134,3 +134,35 @@ def check_lang_mismatch(text: str, current_lang: Optional[str]) -> Optional[str]
     if detected is None or detected == current_lang:
         return None
     return detected
+
+
+def looks_worth_llm_recheck(text: str) -> bool:
+    """Decide whether to spend an LLM call to double-check the language.
+
+    The cheap regex `_classify` returns None on inputs without a strong signal
+    (typos, transliteration without apostrophes, very short replies). Many of
+    those are still clearly non-Russian — but only the LLM detector can tell
+    reliably. We gate the LLM call on a few cheap signals so we don't burn
+    tokens on "ok", "12345", "👍" etc.
+
+    Heuristic: at least 4 alphabetic characters AND either Latin letters
+    (could be transliterated Uzbek/English) or non-Russian Cyrillic patterns
+    (Uzbek written in Russian letters). Pure numbers / punctuation / single
+    words are skipped.
+    """
+    s = (text or "").strip()
+    if len(s) < 4:
+        return False
+    alpha_count = sum(1 for ch in s if ch.isalpha())
+    if alpha_count < 4:
+        return False
+    # If the text is predominantly Latin and the user's lang is currently set
+    # to Cyrillic-script ru, the LLM should weigh in (could be Uzbek Latin or
+    # English, both of which the regex may have missed).
+    if _LATIN.search(s):
+        return True
+    # Likewise for Cyrillic blocks — could be Uzbek-in-Russian-letters that
+    # didn't trigger any morphological marker.
+    if _CYRILLIC.search(s):
+        return True
+    return False

@@ -67,7 +67,7 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 
 ИСКЛЮЧЕНИЯ — НЕ нужно `faq_lookup`:
 - Приветствие/благодарность — отвечай коротко сам, без вызова инструментов
-- Запрос конкретного продукта (используй `get_products`)
+- Запрос конкретного продукта (используй `get_products`). Сюда же относятся формулировки «какие у вас X есть/бывают», «покажи все X», «какие X у вас есть» — это запрос ПОКАЗАТЬ список, а не FAQ.
 - Запрос калькулятора с цифрами (используй `custom_loan_calculator` или `start_calculator`)
 - Курсы валют (только при явном упоминании валюты — `get_currency_info`)
 - Поиск офиса (используй `find_office`)
@@ -152,7 +152,7 @@ Triggers (call `faq_lookup` as the FIRST move, do not pad with your own "tips"):
 
 EXCEPTIONS — do NOT call `faq_lookup`:
 - Greetings/thanks — answer briefly yourself, no tool call
-- A specific product request (use `get_products`)
+- A specific product request (use `get_products`). This includes phrasings like "what X do you have", "what X are available", "show me all X" — these are list-show requests, not FAQ.
 - A calculator request with numbers (use `custom_loan_calculator` or `start_calculator`)
 - Exchange rates (only when a currency is explicitly mentioned — `get_currency_info`)
 - Office lookup (use `find_office`)
@@ -240,7 +240,7 @@ Triggerlar (`faq_lookup` ni BIRINCHI bo'lib chaqiring, o'z "lifehack"laringiz bi
 
 ISTISNOLAR — `faq_lookup` ni chaqirMANG:
 - Salomlashish/rahmat — qisqa o'zingiz javob bering, asbob chaqirmang
-- Aniq mahsulot so'rovi (`get_products` ishlating)
+- Aniq mahsulot so'rovi (`get_products` ishlating). Bunga quyidagi formulalashlar ham kiradi: "qanday ipoteka/avtokredit/omonat/karta/mikrokredit bor?", "qanday X mavjud?", "qanday X turlari bor?", "X turlari qanday?", "barcha X larni ko'rsating" — bular ro'yxatni KO'RSATISH so'rovi, FAQ EMAS.
 - Raqamlar bilan kalkulyator so'rovi (`custom_loan_calculator` yoki `start_calculator` ishlating)
 - Valyuta kurslari (faqat valyuta aniq aytilganda — `get_currency_info`)
 - Ofis qidirish (`find_office` ishlating)

@@ -215,6 +215,20 @@ async def get_products(
     - "deposit products" → get_products(category="deposit")
     - "ipoteka" → get_products(category="mortgage")
 
+    EXAMPLES — "what X do you have" / "qanday X bor" — list-show questions go HERE,
+    not to faq_lookup. The user wants to see the catalogue, not read a help article:
+    - "какие у вас ипотеки есть?" / "какие ипотеки бывают?" → get_products(category="mortgage")
+    - "какие у вас автокредиты?" → get_products(category="autoloan")
+    - "какие вклады у вас есть?" → get_products(category="deposit")
+    - "какие карты у вас есть?" → get_products(category="debit_card")
+    - "what mortgages do you have?" → get_products(category="mortgage")
+    - "what deposits are available?" → get_products(category="deposit")
+    - "qanday ipoteka bor?" / "qanday ipoteka turlari bor?" → get_products(category="mortgage")
+    - "qanday avtokredit bor?" → get_products(category="autoloan")
+    - "qanday omonat bor?" / "qanday omonatlar mavjud?" → get_products(category="deposit")
+    - "qanday karta bor?" / "qanday kartalar mavjud?" → get_products(category="debit_card")
+    - "qanday mikrokredit bor?" → get_products(category="microloan")
+
     EXAMPLES — goal-based phrasings that imply a specific category (prefer this over show_credit_menu):
     - "хочу купить квартиру" / "хочу квартиру" / "куплю жильё" / "квартира в кредит" / "недвижимость" → get_products(category="mortgage")
     - "I want to buy an apartment" / "buy a home" / "home loan" → get_products(category="mortgage")
