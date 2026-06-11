@@ -423,24 +423,22 @@ async def faq_lookup(
     - "how to change phone number" → faq_lookup(query="change phone number")
     - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
 
-    RETURNS one of three values:
-    - Answer text if score >= FAQ_STRICT_THRESHOLD (0.62 default) — pass it to the user.
-    - The literal string "FAQ_LOW_CONFIDENCE" if LOW_CONFIDENCE_THRESHOLD <= score < STRICT.
-      In that case call clarify(missing_info=...) to disambiguate before answering.
-    - The literal string "NO_MATCH_IN_FAQ" if score < LOW_CONFIDENCE_THRESHOLD.
-      In that case you may answer the user yourself IF the question is a GENERAL
-      banking-knowledge question (what is annuity, what is a downpayment, how
-      escrow works, what is APR, the typical flow of taking a loan, common
-      banking terms / definitions). Give a brief plain explanation in the user's
-      language. DO NOT add a disclaimer or note that "this is general info" —
-      the system automatically wraps your answer with an "Assistant" header and
-      an operator disclaimer. NEVER invent concrete numbers about Asaka Bank:
-      do not make up rates, fees, terms, product names, branch addresses,
-      document lists, or any other bank-specific facts that are not in the tool
-      results above. If the question is bank-specific and FAQ has no answer, OR
-      you are uncertain whether the question is general or bank-specific — call
-      clarify() once; after 1-2 unsuccessful attempts call
-      request_operator(reason="unclear_message").
+    RETURNS one of these values:
+    - Answer text if the match is confident — pass it to the user.
+    - The literal string "FAQ_LOW_CONFIDENCE" or "NO_MATCH_IN_FAQ" if nothing
+      confident was found. In BOTH cases:
+      * If the question is GENERAL banking knowledge (what is annuity, a
+        downpayment, how escrow works, what is APR, the typical flow of taking
+        a loan, common banking terms / definitions) — answer it yourself,
+        briefly, in the user's language. DO NOT add a disclaimer or note that
+        "this is general info" — the system automatically wraps your answer
+        with an "Assistant" header and an operator disclaimer. NEVER invent
+        concrete Asaka Bank facts: no made-up rates, fees, terms, product
+        names, branch addresses, or document lists.
+      * If the question is bank-specific and you cannot answer it — say plainly
+        that you don't have that info yet; the system surfaces an operator
+        button automatically after a couple of unhelpful turns. Escalate with
+        request_operator only if the user explicitly asks for a human.
     """
     lang = _lang_from_state(state)
     answer, score = await _faq_lookup_with_score(query, lang)
@@ -532,20 +530,24 @@ async def request_operator(
     reason: str = "",
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Transfer the user to a live operator.
+    """Transfer the user to a live operator. LAST RESORT.
 
-    WHEN TO CALL:
-    1. User explicitly asks for a live operator/human.
-    2. User requests identity-required operations (SMS toggle, card block/unblock,
-       personal-data change, account status check, transfers).
-    3. You asked the user to rephrase but still cannot understand — after 2-3 attempts.
+    GENERAL RULE: for ANY customer question, call `faq_lookup` FIRST. Only call
+    `request_operator` in these three cases:
+    1. The user EXPLICITLY asks for a live operator/human
+       ("позови оператора", "оператор", "operatorga ulang", "live agent").
+    2. The user asks you to PERFORM an action on their account that needs
+       identity verification — "do it for me NOW" (block my card, transfer
+       money, change my password). The signal is "do it for me", not "how do I".
+    3. `faq_lookup` returned `NO_MATCH_IN_FAQ`, the question is bank-specific,
+       and you cannot answer it from general knowledge.
+
+    A "how do I X / what to do if Y" question is NEVER an operator case by
+    itself — it goes to `faq_lookup`.
 
     EXAMPLES:
-    - "позови оператора" / "хочу живого человека" → request_operator(reason="user_request")
-    - "разблокируй мою карту" → request_operator(reason="identity_required")
-    - "подключи смс к моей карте" → request_operator(reason="identity_required")
-    - "connect me to support" → request_operator(reason="user_request")
-    - "operatorga ulang" → request_operator(reason="user_request")
+    - "позови оператора" → request_operator(reason="user_request")
+    - "заблокируйте мою карту прямо сейчас" → request_operator(reason="identity_required")
 
     reason: short tag — "identity_required" / "unclear_message" / "user_request".
     """
@@ -558,44 +560,37 @@ async def request_operator(
     return at("operator_connecting", lang)
 
 
-@lc_tool
-async def clarify(
-    missing_info: str,
-    options: list[str] = None,
-    state: Annotated[dict, InjectedState] = None,
-) -> str:
-    """Ask the user a structured clarifying question when their message is ambiguous
-    or incomplete, instead of a flat 'I don't understand'.
-
-    PREFER this over a free-form 'please rephrase' answer when:
-    - the user's intent is unclear but bank-related
-    - faq_lookup returned FAQ_LOW_CONFIDENCE — disambiguate before answering
-    - the user asked something that needs a missing parameter (which product? which city? which card type?)
-
-    DO NOT use clarify() for:
-    - clear product or branch requests (use get_products / find_office)
-    - explicit operator request (use request_operator)
-
-    After 1-2 unsuccessful clarifies in a row → call request_operator(reason="unclear_message").
-
-    EXAMPLES:
-    - user: "хочу что-то открыть" → clarify(missing_info="какой продукт", options=["Вклад", "Карта", "Кредит"])
-    - user: "какая ставка" → clarify(missing_info="по какому продукту", options=["Ипотека", "Автокредит", "Микрозайм"])
-    - user: "where is the office" → clarify(missing_info="city or district")
-    - faq_lookup returned FAQ_LOW_CONFIDENCE for "карта" → clarify(missing_info="какая карта", options=["Дебетовая", "Валютная"])
-
-    Parameters:
-        missing_info: short phrase describing what's unclear (e.g. "тип кредита", "city").
-        options: optional list of suggested answers shown as quick-reply buttons.
-    """
-    from app.agent.i18n import at as _at
-    lang = _lang_from_state(state)
-    prompt = _at("clarify_prompt", lang, info=missing_info)
-    if options:
-        header = _at("clarify_options_header", lang)
-        bullet_list = "\n".join(f"• {opt}" for opt in options)
-        return f"{prompt}\n\n{header}\n{bullet_list}"
-    return prompt
+# ---------------------------------------------------------------------------
+# clarify — TEMPORARILY DISABLED (2026-06-11)
+#
+# The clarify tool caused tight loops: the LLM asked "which card — Uzcard/Humo?",
+# the user answered "uzcard", and the model re-asked the same question instead
+# of using the answer. We removed it from `_FAQ_TOOLS` so the LLM can no longer
+# call it. The simpler flow is now: answer from faq_lookup, and if nothing is
+# found, fall through to the generic fallback (which surfaces the operator
+# button after a couple of unhelpful turns — see helpers._finalize_turn).
+#
+# Kept here commented out so it can be restored quickly if we decide structured
+# disambiguation is worth re-adding. If you re-enable it, also re-add it to
+# `_FAQ_TOOLS` below and restore the policy/docstring references.
+#
+# @lc_tool
+# async def clarify(
+#     missing_info: str,
+#     options: list[str] = None,
+#     state: Annotated[dict, InjectedState] = None,
+# ) -> str:
+#     """Ask the user a structured clarifying question when their message is ambiguous
+#     or incomplete, instead of a flat 'I don't understand'.
+#     """
+#     from app.agent.i18n import at as _at
+#     lang = _lang_from_state(state)
+#     prompt = _at("clarify_prompt", lang, info=missing_info)
+#     if options:
+#         header = _at("clarify_options_header", lang)
+#         bullet_list = "\n".join(f"• {opt}" for opt in options)
+#         return f"{prompt}\n\n{header}\n{bullet_list}"
+#     return prompt
 
 
 _FAQ_TOOLS = [
@@ -610,5 +605,5 @@ _FAQ_TOOLS = [
     custom_loan_calculator,
     faq_lookup,
     request_operator,
-    clarify,
+    # clarify,  # TEMPORARILY DISABLED — see comment above
 ]

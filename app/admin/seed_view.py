@@ -8,6 +8,7 @@ the seed completes.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import tempfile
@@ -18,6 +19,7 @@ from typing import Any
 
 from sqladmin import BaseView, expose
 from starlette.requests import Request
+from starlette.responses import Response
 
 _logger = logging.getLogger(__name__)
 
@@ -149,6 +151,57 @@ async def _run_recompute_faq_embeddings() -> dict[str, int]:
                 await session.commit()
 
     return counts
+
+
+async def _export_faq_rows() -> list[dict[str, Any]]:
+    """Fetch all FAQ rows as plain dicts ready for xlsx/json output."""
+    from sqlalchemy import select as sql_select
+
+    from app.db.models import FaqItem
+    from app.db.session import get_session
+
+    async with get_session() as session:
+        result = await session.execute(sql_select(FaqItem).order_by(FaqItem.id))
+        items = result.scalars().all()
+    return [
+        {
+            "id": it.id,
+            "question_ru": it.question_ru or "",
+            "answer_ru": it.answer_ru or "",
+            "question_en": it.question_en or "",
+            "answer_en": it.answer_en or "",
+            "question_uz": it.question_uz or "",
+            "answer_uz": it.answer_uz or "",
+        }
+        for it in items
+    ]
+
+
+def _build_faq_xlsx(rows: list[dict[str, Any]]) -> bytes:
+    """Build a multilingual FAQ xlsx with three sheets: RU / EN / UZ.
+
+    Layout matches what `faq_import._extract_multilingual_items` expects when
+    re-imported via /admin/seed — sheet name = language code, columns are
+    "question" / "answer". So export → import is a round-trip.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    default = wb.active
+    wb.remove(default)
+
+    for lang in ("ru", "en", "uz"):
+        ws = wb.create_sheet(title=lang.upper())
+        ws.append(["question", "answer"])
+        q_key, a_key = f"question_{lang}", f"answer_{lang}"
+        for row in rows:
+            q, a = row.get(q_key) or "", row.get(a_key) or ""
+            if q or a:
+                ws.append([q, a])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 async def _run_seed_branches(
@@ -287,6 +340,34 @@ class SeedAdmin(BaseView):
                     results.append({"label": label, "status": "error", "detail": str(exc)})
 
         return results
+
+    # ── FAQ Export ────────────────────────────────────────────────────────
+
+    @expose("/seed/export-faq.xlsx", methods=["GET"])
+    async def export_faq_xlsx(self, request: Request):
+        rows = await _export_faq_rows()
+        data = await asyncio.to_thread(_build_faq_xlsx, rows)
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @expose("/seed/export-faq.json", methods=["GET"])
+    async def export_faq_json(self, request: Request):
+        rows = await _export_faq_rows()
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(rows),
+            "items": rows,
+        }
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     # ── FAQ ───────────────────────────────────────────────────────────────
 

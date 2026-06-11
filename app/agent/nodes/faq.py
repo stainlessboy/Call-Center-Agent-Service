@@ -277,13 +277,9 @@ async def _update_dialog_from_tools(
     if name == "faq_lookup":
         return _reattach_keyboard(dialog, lang)
 
-    if name == "clarify":
-        options = args.get("options") or []
-        keyboard: Optional[List[str]] = list(options) if options else None
-        if not keyboard:
-            # Preserve flow keyboard if any — clarify shouldn't strip context.
-            _, keyboard = _reattach_keyboard(dialog, lang)
-        return dict(dialog), keyboard
+    # NOTE: clarify is temporarily disabled (removed from _FAQ_TOOLS), so the
+    # LLM can no longer emit a "clarify" tool call. The handler is gone; if the
+    # tool is re-enabled, restore the keyboard-from-options branch here.
 
     if name == "request_operator":
         return {**dialog, "operator_requested": True}, None
@@ -309,7 +305,8 @@ _PRODUCTIVE_TOOLS = frozenset({
     "find_office", "select_office",
     "get_office_types_info", "get_currency_info", "show_credit_menu",
     "get_products", "select_product", "start_calculator",
-    "custom_loan_calculator", "request_operator", "clarify",
+    "custom_loan_calculator", "request_operator",
+    # "clarify" — temporarily disabled, see app/agent/tools.py
 })
 
 

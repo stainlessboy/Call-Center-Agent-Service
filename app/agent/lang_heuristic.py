@@ -75,6 +75,26 @@ _EN_MARKERS = re.compile(
 # Latin-script block (basic ASCII letters).
 _LATIN = re.compile(r"[A-Za-z]")
 
+# Card brands / payment systems shared across all three languages — neither a
+# uz nor an en signal. A user replying "uzcard" to a clarify question is NOT
+# switching to English; same for "humo", "visa", "mastercard", "uniontype".
+# Whole-message match: only triggers when the message is literally just the
+# brand (possibly with leading/trailing punctuation), not when the brand is
+# part of a longer sentence — that case still goes through the regular
+# detector.
+_BANK_BRAND_ONLY = re.compile(
+    r"^\s*[\"'«»]?\s*"
+    r"(uzcard|humo|visa|mastercard|maestro|mir|мир|union\s*pay|unionpay|"
+    r"american\s*express|amex|jcb|discover|paynet|click|payme)"
+    r"\s*[\"'«»!?.,]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_bank_brand_only(text: str) -> bool:
+    """True if the entire message is just a card-brand / payment-system name."""
+    return bool(_BANK_BRAND_ONLY.match((text or "").strip()))
+
 
 def _classify(text: str) -> Optional[str]:
     """Cheap classifier. Returns 'ru' / 'en' / 'uz' or None on no signal."""
@@ -130,6 +150,8 @@ def check_lang_mismatch(text: str, current_lang: Optional[str]) -> Optional[str]
     """
     if current_lang not in VALID_LANGS:
         return None
+    if _is_bank_brand_only(text):
+        return None
     detected = _classify(text)
     if detected is None or detected == current_lang:
         return None
@@ -152,6 +174,10 @@ def looks_worth_llm_recheck(text: str) -> bool:
     """
     s = (text or "").strip()
     if len(s) < 4:
+        return False
+    # Card brands / payment systems are language-neutral. Don't burn an LLM
+    # call (or risk a false "switch to English?" prompt) on them.
+    if _is_bank_brand_only(s):
         return False
     alpha_count = sum(1 for ch in s if ch.isalpha())
     if alpha_count < 4:
