@@ -219,10 +219,8 @@ class CreditProductOffer(Base):
     __table_args__ = (
         UniqueConstraint(
             "section_name",
-            "source_row_order",
-            "rate_order",
-            "income_type",
-            name="uq_credit_product_offers_row_rate",
+            "service_name",
+            name="uq_credit_product_offers_section_service",
         ),
     )
 
@@ -232,26 +230,29 @@ class CreditProductOffer(Base):
     service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
     service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     min_age: Mapped[Optional[int]] = mapped_column(Integer)
-    min_age_text: Mapped[Optional[str]] = mapped_column(String(128))
     purpose_text: Mapped[Optional[str]] = mapped_column(Text)
-    amount_text: Mapped[Optional[str]] = mapped_column(Text)
     amount_min: Mapped[Optional[int]] = mapped_column(BigInteger)
     amount_max: Mapped[Optional[int]] = mapped_column(BigInteger)
-    term_text: Mapped[Optional[str]] = mapped_column(String(255))
-    term_min_months: Mapped[Optional[int]] = mapped_column(Integer)
-    term_max_months: Mapped[Optional[int]] = mapped_column(Integer)
-    downpayment_text: Mapped[Optional[str]] = mapped_column(String(255))
-    downpayment_min_pct: Mapped[Optional[float]] = mapped_column(Float)
-    downpayment_max_pct: Mapped[Optional[float]] = mapped_column(Float)
-    income_type: Mapped[Optional[str]] = mapped_column(String(32), index=True)
-    rate_text: Mapped[Optional[str]] = mapped_column(Text)
-    rate_condition_text: Mapped[Optional[str]] = mapped_column(Text)
-    rate_min_pct: Mapped[Optional[float]] = mapped_column(Float)
-    rate_max_pct: Mapped[Optional[float]] = mapped_column(Float)
+    # Qualification-flow tags — set manually in SQLAdmin. Used by FLOW_QUALIFY to
+    # filter products by the answers the user gives in the pre-listing questionnaire.
+    # NULL/False = product not in that branch.
+    # Autoloan: vehicle brand group.
+    for_brand_gm: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    for_brand_other: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    # Mortgage: housing market type.
+    for_market_primary: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    for_market_secondary: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    for_renovation: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    # Microloan: application channel.
+    channel_cbu: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
+    channel_online: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
     collateral_text: Mapped[Optional[str]] = mapped_column(Text)
+    # The single condition axis all of this product's tariffs vary by:
+    # 'flat' (one rate, no condition) | 'term' | 'age' | 'amount' | 'downpayment'.
+    # Drives which bound fields the admin shows; income_type/currency_code remain
+    # available on every rule as extra overlay filters regardless of this value.
+    rate_condition_kind: Mapped[Optional[str]] = mapped_column(String(16))
     source_path: Mapped[Optional[str]] = mapped_column(String(255))
-    source_row_order: Mapped[int] = mapped_column(Integer)
-    rate_order: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -260,6 +261,59 @@ class CreditProductOffer(Base):
         onupdate=func.now(),
     )
 
+    rate_rules: Mapped[List["CreditRateRule"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    def __str__(self) -> str:  # readable label in SQLAdmin relationship selects
+        return f"{self.section_name} — {self.service_name}" if self.service_name else (self.section_name or f"#{self.id}")
+
+
+class CreditRateRule(Base):
+    """A single rate tier for a credit product: a condition (age/amount/term/
+    downpayment/income/currency bounds) → a resulting interest rate.
+
+    A product has many rules; the calculator picks the matching rule for the
+    user's inputs (see app/agent/rate_rules.py). Any NULL bound = that axis is
+    unconstrained. NULL age bounds = rule does not depend on age.
+    `source` distinguishes Excel-seeded rules ('seed') from hand-entered ones
+    ('manual') so a re-seed only clears its own rows.
+    """
+
+    __tablename__ = "credit_rate_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    credit_product_offer_id: Mapped[int] = mapped_column(
+        ForeignKey("credit_product_offers.id", ondelete="CASCADE"),
+        index=True,
+    )
+    income_type: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    age_min: Mapped[Optional[int]] = mapped_column(Integer)
+    age_max: Mapped[Optional[int]] = mapped_column(Integer)
+    amount_min: Mapped[Optional[int]] = mapped_column(BigInteger)
+    amount_max: Mapped[Optional[int]] = mapped_column(BigInteger)
+    term_min_months: Mapped[Optional[int]] = mapped_column(Integer)
+    term_max_months: Mapped[Optional[int]] = mapped_column(Integer)
+    downpayment_min_pct: Mapped[Optional[float]] = mapped_column(Float)
+    downpayment_max_pct: Mapped[Optional[float]] = mapped_column(Float)
+    currency_code: Mapped[Optional[str]] = mapped_column(String(8))
+    rate_min_pct: Mapped[Optional[float]] = mapped_column(Float)
+    rate_max_pct: Mapped[Optional[float]] = mapped_column(Float)
+    condition_text: Mapped[Optional[str]] = mapped_column(Text)
+    priority: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    source: Mapped[str] = mapped_column(String(16), server_default="manual", default="manual")
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    product: Mapped["CreditProductOffer"] = relationship(back_populates="rate_rules")
+
 
 class DepositProductOffer(Base):
     __tablename__ = "deposit_product_offers"
@@ -267,8 +321,8 @@ class DepositProductOffer(Base):
         UniqueConstraint(
             "service_name",
             "currency_code",
-            "source_row_order",
-            name="uq_deposit_product_offers_row_currency",
+            "term_months",
+            name="uq_deposit_product_offers_service_currency_term",
         ),
     )
 
@@ -277,22 +331,17 @@ class DepositProductOffer(Base):
     service_name_en: Mapped[Optional[str]] = mapped_column(String(512))
     service_name_uz: Mapped[Optional[str]] = mapped_column(String(512))
     currency_code: Mapped[str] = mapped_column(String(8), index=True)  # UZS / USD / EUR
-    min_amount_text: Mapped[Optional[str]] = mapped_column(Text)
     min_amount: Mapped[Optional[int]] = mapped_column(BigInteger)
-    term_text: Mapped[Optional[str]] = mapped_column(String(255))
     term_months: Mapped[Optional[int]] = mapped_column(Integer, index=True)
-    rate_text: Mapped[Optional[str]] = mapped_column(String(128))
     rate_pct: Mapped[Optional[float]] = mapped_column(Float, index=True)
     open_channel_text: Mapped[Optional[str]] = mapped_column(Text)
     payout_text: Mapped[Optional[str]] = mapped_column(Text)
     payout_monthly_available: Mapped[Optional[bool]] = mapped_column(Boolean)
     payout_end_available: Mapped[Optional[bool]] = mapped_column(Boolean)
-    topup_text: Mapped[Optional[str]] = mapped_column(Text)
     topup_allowed: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
     partial_withdrawal_allowed: Mapped[Optional[bool]] = mapped_column(Boolean)
     notes_text: Mapped[Optional[str]] = mapped_column(Text)
     source_path: Mapped[Optional[str]] = mapped_column(String(255))
-    source_row_order: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -338,9 +387,7 @@ class CardProductOffer(Base):
     issue_fee_free: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
     reissue_fee_text: Mapped[Optional[str]] = mapped_column(Text)
     transfer_fee_text: Mapped[Optional[str]] = mapped_column(Text)
-    cashback_text: Mapped[Optional[str]] = mapped_column(String(128))
     cashback_pct: Mapped[Optional[float]] = mapped_column(Float)
-    validity_text: Mapped[Optional[str]] = mapped_column(String(255))
     validity_months: Mapped[Optional[int]] = mapped_column(Integer)
     issuance_time_text: Mapped[Optional[str]] = mapped_column(Text)
     pin_setup_cbu_text: Mapped[Optional[str]] = mapped_column(Text)

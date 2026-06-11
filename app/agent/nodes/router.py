@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langgraph.types import Command
 
-from app.agent.constants import FLOW_CALC, FLOW_PRODUCT_DETAIL
+from app.agent.constants import FLOW_CALC, FLOW_PRODUCT_DETAIL, FLOW_QUALIFY
 from app.agent.i18n import get_calc_questions
 from app.agent.intent import _is_calc_trigger
 from app.agent.state import BotState, _default_dialog
@@ -13,6 +13,7 @@ async def node_router(state: BotState) -> Command:
     Minimal router:
     - human_mode active → human_mode node
     - lead_step or calc_flow active → calc_flow node
+    - qualify flow active → qualify_flow node (deterministic questionnaire)
     - calc trigger button + selected product → calc_flow node (deterministic, no LLM)
     - everything else → faq node (LLM picks the right tool)
     """
@@ -23,6 +24,8 @@ async def node_router(state: BotState) -> Command:
         return Command(goto="calc_flow")
     if dialog.get("flow") == FLOW_CALC:
         return Command(goto="calc_flow")
+    if dialog.get("flow") == FLOW_QUALIFY:
+        return Command(goto="qualify_flow")
 
     # Deterministic calc trigger: only via button press, not free text from LLM
     user_text = (state.get("last_user_text") or "").strip()

@@ -24,10 +24,27 @@
       "mcp__playwright__browser_fill_form",
       "mcp__playwright__browser_take_screenshot",
       "mcp__playwright__browser_console_messages",
-      "mcp__playwright__browser_close"
+      "mcp__playwright__browser_close",
+      "Bash(curl -s -o /tmp/conf_check.json -w \"HTTP %{http_code}\\\\n\" -H \"Authorization: Bearer REDACTED\" \"https://wiki.asakabank.uz/rest/api/user/current\"; echo \"---\"; cat /tmp/conf_check.json)",
+      "Read(//tmp/**)",
+      "Bash(command -v mcp-atlassian)",
+      "Bash(command -v claude)",
+      "Bash(pip3 install *)",
+      "Bash(grep -n \"CONFLUENCE_URL\\\\|CONFLUENCE_PERSONAL_TOKEN\" ~/.zshrc 2>/dev/null || echo \"No existing CONFLUENCE entries in ~/.zshrc\")",
+      "Read(//Users/user/**)",
+      "Bash(cat >> *)",
+      "Bash(claude mcp *)",
+      "Bash(export CONFLUENCE_URL='https://wiki.asakabank.uz')",
+      "Bash(export CONFLUENCE_PERSONAL_TOKEN='REDACTED')",
+      "mcp__atlassian__confluence_search",
+      "mcp__atlassian__confluence_get_space_page_tree",
+      "mcp__atlassian__confluence_get_page",
+      "mcp__atlassian__confluence_create_page",
+      "mcp__atlassian__confluence_update_page"
     ],
     "additionalDirectories": [
-      "/Users/user/.claude/projects/-Users-user-PycharmProjects-complex-agent-api/memory"
+      "/Users/user/.claude/projects/-Users-user-PycharmProjects-complex-agent-api/memory",
+      "/Users/user"
     ]
   },
   "hooks": {

@@ -133,8 +133,7 @@ def _iter_records(manifest_path: Path) -> Iterable[dict[str, Any]]:
         reissue_fee_text = _clean(row[2] if len(row) > 2 else None) or None
         transfer_fee_text = _clean(row[3] if len(row) > 3 else None) or None
         cashback_raw = row[4] if len(row) > 4 else None
-        cashback_text = _clean(cashback_raw) or None
-        validity_text = _clean(row[5] if len(row) > 5 else None) or None
+        validity_raw = _clean(row[5] if len(row) > 5 else None) or ""
         issuance_time_text = _clean(row[6] if len(row) > 6 else None) or None
         pin_setup_cbu_text = _clean(row[7] if len(row) > 7 else None) or None
         sms_setup_cbu_text = _clean(row[8] if len(row) > 8 else None) or None
@@ -163,10 +162,8 @@ def _iter_records(manifest_path: Path) -> Iterable[dict[str, Any]]:
             "issue_fee_free": _is_free(issue_fee_text or ""),
             "reissue_fee_text": reissue_fee_text,
             "transfer_fee_text": transfer_fee_text,
-            "cashback_text": cashback_text,
             "cashback_pct": _parse_pct(cashback_raw),
-            "validity_text": validity_text,
-            "validity_months": _parse_months(validity_text or ""),
+            "validity_months": _parse_months(validity_raw),
             "issuance_time_text": issuance_time_text,
             "pin_setup_cbu_text": pin_setup_cbu_text,
             "sms_setup_cbu_text": sms_setup_cbu_text,

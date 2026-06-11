@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +20,7 @@ from app.db.models import (
     CardProductOffer,
     ChatSession,
     CreditProductOffer,
+    CreditRateRule,
     DepositProductOffer,
     FaqItem,
     Filial,
@@ -542,65 +544,62 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
 
     column_list = [
         CreditProductOffer.id, CreditProductOffer.section_name,
-        CreditProductOffer.service_name, CreditProductOffer.income_type,
-        CreditProductOffer.rate_min_pct, CreditProductOffer.rate_max_pct,
-        CreditProductOffer.term_min_months, CreditProductOffer.term_max_months,
-        CreditProductOffer.downpayment_min_pct, CreditProductOffer.downpayment_max_pct,
-        CreditProductOffer.is_active,
+        CreditProductOffer.service_name, CreditProductOffer.rate_condition_kind,
+        CreditProductOffer.amount_min, CreditProductOffer.amount_max,
+        CreditProductOffer.min_age, CreditProductOffer.is_active,
     ]
     column_searchable_list = [
         CreditProductOffer.service_name, CreditProductOffer.service_name_en,
         CreditProductOffer.service_name_uz, CreditProductOffer.section_name,
-        CreditProductOffer.rate_condition_text, CreditProductOffer.collateral_text,
+        CreditProductOffer.collateral_text,
     ]
     column_filters = [
         _RuAllUniqueFilter(CreditProductOffer.section_name, title="Раздел"),
-        _RuStaticValuesFilter(
-            CreditProductOffer.income_type, title="Тип дохода",
-            values=[("payroll", "Зарплатный проект"), ("official", "Официальный доход"), ("no_official", "Без офиц. дохода")],
-        ),
         _RuBooleanFilter(CreditProductOffer.is_active, title="Активен"),
+        _RuBooleanFilter(CreditProductOffer.for_brand_gm, title="Авто: марка GM"),
+        _RuBooleanFilter(CreditProductOffer.for_brand_other, title="Авто: иная марка"),
+        _RuBooleanFilter(CreditProductOffer.for_market_primary, title="Ипотека: первичный"),
+        _RuBooleanFilter(CreditProductOffer.for_market_secondary, title="Ипотека: вторичный"),
+        _RuBooleanFilter(CreditProductOffer.for_renovation, title="Ипотека: ремонт"),
+        _RuBooleanFilter(CreditProductOffer.channel_cbu, title="Микрозайм: ЦБУ"),
+        _RuBooleanFilter(CreditProductOffer.channel_online, title="Микрозайм: онлайн"),
     ]
     column_sortable_list = [
         CreditProductOffer.id, CreditProductOffer.section_name,
-        CreditProductOffer.source_row_order, CreditProductOffer.rate_order,
+        CreditProductOffer.service_name,
     ]
     column_default_sort = [
         (CreditProductOffer.section_name, False),
-        (CreditProductOffer.source_row_order, False),
-        (CreditProductOffer.rate_order, False),
+        (CreditProductOffer.service_name, False),
+        (CreditProductOffer.id, False),
     ]
 
     column_details_exclude_list = [CreditProductOffer.source_path]
 
-    column_formatters = {
-        CreditProductOffer.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
-    }
-    column_formatters_detail = {
-        CreditProductOffer.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
-    }
-
+    # Tariffs (rate/term/downpayment/income) live in CreditRateRule now — they
+    # are managed in the separate "Тарифы (ставки)" view, not on the product form.
     form_excluded_columns = [
         CreditProductOffer.source_path,
         CreditProductOffer.created_at,
         CreditProductOffer.updated_at,
+        "rate_rules",
     ]
 
     column_labels = {
         "id": "ID",
         "section_name": "Раздел", "service_name": "Название продукта",
         "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
-        "income_type": "Тип дохода", "rate_min_pct": "Ставка мин. %",
-        "rate_max_pct": "Ставка макс. %", "rate_text": "Ставка (текст)",
-        "rate_condition_text": "Условие ставки",
-        "term_min_months": "Срок мин. (мес.)", "term_max_months": "Срок макс. (мес.)",
-        "term_text": "Срок (текст)",
-        "downpayment_min_pct": "Взнос мин. %", "downpayment_max_pct": "Взнос макс. %",
-        "downpayment_text": "Взнос (текст)",
-        "amount_text": "Сумма (текст)", "amount_min": "Сумма мин.", "amount_max": "Сумма макс.",
-        "min_age": "Мин. возраст", "min_age_text": "Возраст (текст)",
+        "amount_min": "Сумма мин.", "amount_max": "Сумма макс.",
+        "min_age": "Мин. возраст",
+        "rate_condition_kind": "Тип условия (тариф)",
         "purpose_text": "Цель кредита", "collateral_text": "Обеспечение",
-        "source_row_order": "Порядок сортировки", "rate_order": "Вариант ставки",
+        "for_brand_gm": "Авто: марка GM",
+        "for_brand_other": "Авто: иная марка",
+        "for_market_primary": "Ипотека: первичный рынок",
+        "for_market_secondary": "Ипотека: вторичный рынок",
+        "for_renovation": "Ипотека: ремонт",
+        "channel_cbu": "Микрозайм: оформление в ЦБУ",
+        "channel_online": "Микрозайм: оформление онлайн",
         "is_active": "Активен", "created_at": "Создано", "updated_at": "Обновлено",
     }
 
@@ -611,12 +610,43 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         ("Образовательный", "Образовательный"),
     ]
 
-    _INCOME_TYPE_CHOICES = [
-        ("", "— для всех —"),
-        ("payroll", "payroll — зарплатный проект"),
-        ("official", "official — официальный доход"),
-        ("no_official", "no_official — без официального дохода"),
+    # The single condition axis the product's tariffs vary by. Drives which bound
+    # fields show in the inline tariff editor (JS in _credit_rules_inline.html).
+    _CONDITION_KIND_CHOICES = [
+        ("flat", "Без условия (одна ставка)"),
+        ("term", "Срок"),
+        ("age", "Возраст"),
+        ("amount", "Сумма"),
+        ("downpayment", "Первоначальный взнос"),
     ]
+    # axis key -> rule bound fields it controls
+    _AXIS_FIELDS = {
+        "term": ("term_min_months", "term_max_months"),
+        "age": ("age_min", "age_max"),
+        "amount": ("amount_min", "amount_max"),
+        "downpayment": ("downpayment_min_pct", "downpayment_max_pct"),
+    }
+
+    # Qualification-flow tags. Rendered as 3-state selects (— / Да / Нет) and
+    # shown/hidden by section via templates/sqladmin/_credit_tags_script.html.
+    _TAG_CHOICES = [("", "— не задано —"), ("true", "Да"), ("false", "Нет")]
+    _TAG_FIELDS = {
+        "for_brand_gm": "Авто: марка GM",
+        "for_brand_other": "Авто: иная марка",
+        "for_market_primary": "Ипотека: первичный рынок",
+        "for_market_secondary": "Ипотека: вторичный рынок",
+        "for_renovation": "Ипотека: ремонт",
+        "channel_cbu": "Микрозайм: оформление в ЦБУ",
+        "channel_online": "Микрозайм: оформление онлайн",
+    }
+
+    @staticmethod
+    def _tag_coerce(value):
+        if value in (True, "true", "True"):
+            return True
+        if value in (False, "false", "False"):
+            return False
+        return None
 
     form_args = {
         "section_name": {
@@ -632,43 +662,6 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         "service_name_uz": {
             "description": "Например: «Uy-joy qurilishi uchun ipoteka»",
         },
-        "income_type": {
-            "label": "Тип дохода",
-            "description": "Вариант дохода заёмщика для этой ставки",
-        },
-        "rate_min_pct": {
-            "description": "Число, например: 21.0",
-        },
-        "rate_max_pct": {
-            "description": "Число, например: 24.0 (если ставка фиксированная — совпадает с мин.)",
-        },
-        "rate_text": {
-            "description": "Текст для отображения, например: «от 21% годовых»",
-        },
-        "rate_condition_text": {
-            "description": "Условие, при котором действует ставка. Например: «При зарплатном проекте банка»",
-        },
-        "term_min_months": {
-            "description": "Минимальный срок в месяцах, например: 12",
-        },
-        "term_max_months": {
-            "description": "Максимальный срок в месяцах, например: 240 (= 20 лет)",
-        },
-        "term_text": {
-            "description": "Текст для отображения, например: «от 1 года до 20 лет»",
-        },
-        "downpayment_min_pct": {
-            "description": "Минимальный % первоначального взноса, например: 20",
-        },
-        "downpayment_max_pct": {
-            "description": "Максимальный %, например: 80 (обычно не нужен)",
-        },
-        "downpayment_text": {
-            "description": "Текст для клиента, например: «от 20%»",
-        },
-        "amount_text": {
-            "description": "Сумма кредита (текст), например: «до 1 500 000 000 сум»",
-        },
         "amount_min": {
             "description": "Минимальная сумма (число), например: 5000000",
         },
@@ -678,20 +671,11 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         "min_age": {
             "description": "Минимальный возраст заёмщика, например: 21",
         },
-        "min_age_text": {
-            "description": "Текст, например: «от 21 года»",
-        },
         "purpose_text": {
             "description": "Например: «Покупка/строительство жилья»",
         },
         "collateral_text": {
             "description": "Например: «Залог приобретаемого жилья»",
-        },
-        "source_row_order": {
-            "description": "Порядок в списке (автоматически для новых). Например: 1, 2, 3",
-        },
-        "rate_order": {
-            "description": "Номер варианта ставки внутри продукта (авто = 1). Если у продукта несколько строк с разным income_type — увеличьте",
         },
         "is_active": {
             "description": "Снимите, чтобы скрыть продукт от клиентов",
@@ -700,12 +684,14 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
 
     form_overrides = {
         "section_name": wtforms.SelectField,
-        "income_type": wtforms.SelectField,
     }
     form_widget_args = {
         "section_name": {"coerce": str},
-        "income_type": {"coerce": str},
     }
+
+    # Conditional tag fields are shown/hidden by section via JS in this template.
+    create_template = "sqladmin/credit_offer_create.html"
+    edit_template = "sqladmin/credit_offer_edit.html"
 
     async def scaffold_form(self, rules=None):
         form_class = await super().scaffold_form(rules)
@@ -714,22 +700,288 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
             choices=self._SECTION_CHOICES,
             description="Категория кредитного продукта",
         )
+        form_class.rate_condition_kind = wtforms.SelectField(
+            "Тип условия (тариф)",
+            choices=self._CONDITION_KIND_CHOICES,
+            default="flat",
+            description="От чего зависит ставка. Определяет, какие поля видны в тарифах ниже.",
+        )
+        for col, label in self._TAG_FIELDS.items():
+            setattr(
+                form_class,
+                col,
+                wtforms.SelectField(
+                    label,
+                    choices=self._TAG_CHOICES,
+                    coerce=self._tag_coerce,
+                    description="Показывается только для соответствующего раздела",
+                ),
+            )
+        return form_class
+
+    # --- Inline rate-rule editor --------------------------------------------
+    # Tariffs are edited on the product page (not a separate view). The rule
+    # inputs are rendered by the custom template as ``rule-{i}-{field}`` and are
+    # NOT WTForms fields, so they arrive only via the raw request form, which we
+    # parse here and sync into CreditRateRule children.
+
+    _RULE_INT_FIELDS = (
+        "age_min", "age_max", "amount_min", "amount_max",
+        "term_min_months", "term_max_months", "priority",
+    )
+    _RULE_FLOAT_FIELDS = (
+        "downpayment_min_pct", "downpayment_max_pct", "rate_min_pct", "rate_max_pct",
+    )
+    _RULE_STR_FIELDS = ("income_type", "currency_code", "condition_text")
+
+    @staticmethod
+    def _to_int(value):
+        try:
+            return int(str(value).strip()) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_float(value):
+        try:
+            return float(str(value).strip().replace(",", ".")) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    async def get_object_for_edit(self, request: Request):
+        obj = await super().get_object_for_edit(request)
+        if obj is not None:
+            async with self.session_maker() as session:
+                rules = (
+                    await session.execute(
+                        select(CreditRateRule)
+                        .where(CreditRateRule.credit_product_offer_id == obj.id)
+                        .order_by(CreditRateRule.priority.desc(), CreditRateRule.id)
+                    )
+                ).scalars().all()
+            # The shown axis is the product's rate_condition_kind (read by the
+            # template's JS); rule rows just expose every bound field.
+            obj._editor_rules = rules
+        return obj
+
+    def _parse_rule_rows(self, form) -> list[dict]:
+        indices = set()
+        for key in form.keys():
+            m = re.match(r"rule-(\d+)-", key)
+            if m:
+                indices.add(int(m.group(1)))
+        rows = []
+        for i in sorted(indices):
+            def g(name):
+                return form.get(f"rule-{i}-{name}")
+            row = {
+                "_id": self._to_int(g("id")),
+                "_delete": (g("delete") in ("on", "true", "1", "y")),
+                "is_active": (g("is_active") in ("on", "true", "1", "y")),
+            }
+            for f in self._RULE_INT_FIELDS:
+                row[f] = self._to_int(g(f))
+            for f in self._RULE_FLOAT_FIELDS:
+                row[f] = self._to_float(g(f))
+            for f in self._RULE_STR_FIELDS:
+                v = g(f)
+                row[f] = v.strip() if isinstance(v, str) and v.strip() else None
+            rows.append(row)
+        return rows
+
+    async def _sync_rules_from_request(self, request: Request, product_id: int) -> None:
+        form = await request.form()
+        rows = self._parse_rule_rows(form)
+        if not rows:
+            return
+        managed = (
+            "income_type", "currency_code", "condition_text",
+            "age_min", "age_max", "amount_min", "amount_max",
+            "term_min_months", "term_max_months",
+            "downpayment_min_pct", "downpayment_max_pct",
+            "rate_min_pct", "rate_max_pct", "priority", "is_active",
+        )
+        # Enforce the product's single condition axis: NULL out every bound that
+        # is not on the chosen axis (currency_code/income_type stay as overlays).
+        kind = (form.get("rate_condition_kind") or "").strip()
+        keep = set(self._AXIS_FIELDS.get(kind, ()))
+        off_axis = {c for cols in self._AXIS_FIELDS.values() for c in cols} - keep
+        for row in rows:
+            for c in off_axis:
+                row[c] = None
+        async with self.session_maker() as session:
+            existing = {
+                r.id: r
+                for r in (
+                    await session.execute(
+                        select(CreditRateRule).where(
+                            CreditRateRule.credit_product_offer_id == product_id
+                        )
+                    )
+                ).scalars().all()
+            }
+            for row in rows:
+                rid = row["_id"]
+                if row["_delete"]:
+                    if rid and rid in existing:
+                        await session.delete(existing[rid])
+                    continue
+                # default rate_max to rate_min when omitted
+                if row.get("rate_min_pct") is not None and row.get("rate_max_pct") is None:
+                    row["rate_max_pct"] = row["rate_min_pct"]
+                if rid and rid in existing:
+                    r = existing[rid]
+                    for f in managed:
+                        setattr(r, f, row.get(f))
+                else:
+                    # new row — only persist if it carries a rate
+                    if row.get("rate_min_pct") is None:
+                        continue
+                    session.add(
+                        CreditRateRule(
+                            credit_product_offer_id=product_id,
+                            source="manual",
+                            **{f: row.get(f) for f in managed},
+                        )
+                    )
+            await session.commit()
+
+    async def insert_model(self, request: Request, data: dict):
+        obj = await super().insert_model(request, data)
+        await self._sync_rules_from_request(request, obj.id)
+        return obj
+
+    async def update_model(self, request: Request, pk: str, data: dict):
+        obj = await super().update_model(request, pk, data)
+        await self._sync_rules_from_request(request, obj.id)
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# CreditRateRule
+# ---------------------------------------------------------------------------
+
+class CreditRateRuleAdmin(ModelView, model=CreditRateRule):
+    name = "Тариф (ставка)"
+    name_plural = "Тарифы (ставки)"
+    icon = "fa-solid fa-percent"
+
+    column_list = [
+        CreditRateRule.id, CreditRateRule.credit_product_offer_id,
+        CreditRateRule.income_type,
+        CreditRateRule.rate_min_pct, CreditRateRule.rate_max_pct,
+        CreditRateRule.term_min_months, CreditRateRule.term_max_months,
+        CreditRateRule.age_min, CreditRateRule.age_max,
+        CreditRateRule.source, CreditRateRule.is_active,
+    ]
+    column_searchable_list = [CreditRateRule.condition_text]
+    column_filters = [
+        _RuStaticValuesFilter(
+            CreditRateRule.income_type, title="Тип дохода",
+            values=[("payroll", "Зарплатный проект"), ("official", "Официальный доход"), ("no_official", "Без офиц. дохода")],
+        ),
+        _RuAllUniqueFilter(CreditRateRule.currency_code, title="Валюта"),
+        _RuStaticValuesFilter(
+            CreditRateRule.source, title="Источник",
+            values=[("seed", "Из Excel"), ("manual", "Вручную")],
+        ),
+        _RuBooleanFilter(CreditRateRule.is_active, title="Активен"),
+    ]
+    column_sortable_list = [
+        CreditRateRule.id, CreditRateRule.credit_product_offer_id,
+        CreditRateRule.priority, CreditRateRule.rate_min_pct,
+    ]
+    column_default_sort = [
+        (CreditRateRule.credit_product_offer_id, False),
+        (CreditRateRule.priority, True),
+        (CreditRateRule.id, False),
+    ]
+
+    column_formatters = {
+        CreditRateRule.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
+    }
+    column_formatters_detail = {
+        CreditRateRule.income_type: lambda m, _: _INCOME_TYPE_MAP.get(m.income_type or "", m.income_type or ""),
+    }
+
+    form_columns = [
+        "product",
+        "income_type",
+        "age_min", "age_max",
+        "amount_min", "amount_max",
+        "term_min_months", "term_max_months",
+        "downpayment_min_pct", "downpayment_max_pct",
+        "currency_code",
+        "rate_min_pct", "rate_max_pct",
+        "condition_text", "priority", "source", "is_active",
+    ]
+
+    column_labels = {
+        "id": "ID",
+        "credit_product_offer_id": "Продукт (ID)",
+        "product": "Продукт",
+        "income_type": "Тип дохода",
+        "age_min": "Возраст от", "age_max": "Возраст до",
+        "amount_min": "Сумма от", "amount_max": "Сумма до",
+        "term_min_months": "Срок от (мес.)", "term_max_months": "Срок до (мес.)",
+        "downpayment_min_pct": "Взнос от %", "downpayment_max_pct": "Взнос до %",
+        "currency_code": "Валюта",
+        "rate_min_pct": "Ставка мин. %", "rate_max_pct": "Ставка макс. %",
+        "condition_text": "Условие ставки",
+        "priority": "Приоритет", "source": "Источник",
+        "is_active": "Активен", "created_at": "Создано", "updated_at": "Обновлено",
+    }
+
+    _INCOME_TYPE_CHOICES = [
+        ("", "— для всех —"),
+        ("payroll", "payroll — зарплатный проект"),
+        ("official", "official — официальный доход"),
+        ("no_official", "no_official — без официального дохода"),
+    ]
+    _CURRENCY_CHOICES = [("", "— любая —"), ("UZS", "UZS"), ("USD", "USD"), ("EUR", "EUR")]
+    _SOURCE_CHOICES = [("manual", "Вручную"), ("seed", "Из Excel")]
+
+    @staticmethod
+    def _blank_to_none(value):
+        return value if value not in (None, "", "None") else None
+
+    form_args = {
+        "product": {"description": "Кредитный продукт, к которому относится тариф"},
+        "rate_min_pct": {"description": "Ставка, например: 21.0. Без неё тариф не действует."},
+        "rate_max_pct": {"description": "Верх диапазона ставки (если фиксированная — = мин.)"},
+        "age_min": {"description": "Возраст от (включительно). Заполняйте только если ставка зависит от возраста."},
+        "age_max": {"description": "Возраст до (включительно)."},
+        "amount_min": {"description": "Сумма от (число). Пусто = без ограничения."},
+        "amount_max": {"description": "Сумма до (число). Пусто = без ограничения."},
+        "term_min_months": {"description": "Срок от (мес.). Пусто = без ограничения."},
+        "term_max_months": {"description": "Срок до (мес.). Пусто = без ограничения."},
+        "downpayment_min_pct": {"description": "Взнос от %. Пусто = без ограничения."},
+        "downpayment_max_pct": {"description": "Взнос до %. Пусто = без ограничения."},
+        "condition_text": {"description": "Текстовое описание условия (для показа клиенту)."},
+        "priority": {"description": "При совпадении нескольких тарифов выбирается больший приоритет."},
+        "is_active": {"description": "Снимите, чтобы временно отключить тариф."},
+    }
+
+    async def scaffold_form(self, rules=None):
+        form_class = await super().scaffold_form(rules)
         form_class.income_type = wtforms.SelectField(
             "Тип дохода",
             choices=self._INCOME_TYPE_CHOICES,
+            coerce=self._blank_to_none,
             description="Вариант дохода заёмщика для этой ставки",
         )
+        form_class.currency_code = wtforms.SelectField(
+            "Валюта",
+            choices=self._CURRENCY_CHOICES,
+            coerce=self._blank_to_none,
+            description="Валюта, для которой действует ставка",
+        )
+        form_class.source = wtforms.SelectField(
+            "Источник",
+            choices=self._SOURCE_CHOICES,
+            description="«Из Excel» перезаписывается при сидинге; «Вручную» сохраняется",
+        )
         return form_class
-
-    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
-        if is_created:
-            if not model.source_row_order:
-                model.source_row_order = await _next_row_order(
-                    CreditProductOffer, section_name=model.section_name,
-                )
-            if not model.rate_order:
-                model.rate_order = 1
-
 
 # ---------------------------------------------------------------------------
 # DepositProductOffer
@@ -742,14 +994,14 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
 
     column_list = [
         DepositProductOffer.id, DepositProductOffer.service_name,
-        DepositProductOffer.currency_code, DepositProductOffer.term_text,
+        DepositProductOffer.currency_code,
         DepositProductOffer.term_months, DepositProductOffer.rate_pct,
         DepositProductOffer.topup_allowed, DepositProductOffer.is_active,
     ]
     column_searchable_list = [
         DepositProductOffer.service_name, DepositProductOffer.service_name_en,
-        DepositProductOffer.service_name_uz, DepositProductOffer.term_text,
-        DepositProductOffer.payout_text, DepositProductOffer.topup_text,
+        DepositProductOffer.service_name_uz,
+        DepositProductOffer.payout_text,
         DepositProductOffer.notes_text,
     ]
     column_filters = [
@@ -761,12 +1013,12 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
     ]
     column_sortable_list = [
         DepositProductOffer.id, DepositProductOffer.service_name,
-        DepositProductOffer.currency_code, DepositProductOffer.source_row_order,
+        DepositProductOffer.currency_code, DepositProductOffer.term_months,
     ]
     column_default_sort = [
         (DepositProductOffer.service_name, False),
         (DepositProductOffer.currency_code, False),
-        (DepositProductOffer.source_row_order, False),
+        (DepositProductOffer.term_months, False),
     ]
 
     column_details_exclude_list = [DepositProductOffer.source_path]
@@ -782,17 +1034,17 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         "service_name": "Название вклада",
         "service_name_en": "Название (EN)", "service_name_uz": "Название (UZ)",
         "currency_code": "Валюта",
-        "term_text": "Срок (текст)", "term_months": "Срок (мес.)",
-        "rate_text": "Ставка (текст)", "rate_pct": "Ставка %",
-        "min_amount_text": "Мин. сумма (текст)", "min_amount": "Мин. сумма",
+        "term_months": "Срок (мес.)",
+        "rate_pct": "Ставка %",
+        "min_amount": "Мин. сумма",
         "open_channel_text": "Способ оформления",
         "payout_text": "Выплата процентов",
         "payout_monthly_available": "Ежемесячная выплата",
         "payout_end_available": "Выплата в конце",
-        "topup_text": "Пополнение (текст)", "topup_allowed": "Пополнение",
+        "topup_allowed": "Пополнение",
         "partial_withdrawal_allowed": "Частичное снятие",
         "notes_text": "Примечания",
-        "source_row_order": "Порядок сортировки", "is_active": "Активен",
+        "is_active": "Активен",
         "created_at": "Создано", "updated_at": "Обновлено",
     }
 
@@ -816,20 +1068,11 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
             "label": "Валюта",
             "description": "Валюта вклада",
         },
-        "term_text": {
-            "description": "Текст для клиента, например: «6 месяцев», «1 год»",
-        },
         "term_months": {
             "description": "Число месяцев, например: 6, 12, 24",
         },
-        "rate_text": {
-            "description": "Текст ставки, например: «24% годовых»",
-        },
         "rate_pct": {
             "description": "Число, например: 24.0",
-        },
-        "min_amount_text": {
-            "description": "Текст, например: «от 500 000 сум»",
         },
         "min_amount": {
             "description": "Число, например: 500000",
@@ -840,14 +1083,8 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
         "payout_text": {
             "description": "Например: «Ежемесячно или в конце срока»",
         },
-        "topup_text": {
-            "description": "Например: «Пополнение доступно без ограничений»",
-        },
         "notes_text": {
             "description": "Дополнительные условия, например: «Досрочное расторжение — по ставке до востребования»",
-        },
-        "source_row_order": {
-            "description": "Порядок в списке (автоматически для новых)",
         },
         "is_active": {
             "description": "Снимите, чтобы скрыть вклад от клиентов",
@@ -866,15 +1103,6 @@ class DepositProductOfferAdmin(ModelView, model=DepositProductOffer):
             description="Валюта вклада",
         )
         return form_class
-
-    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
-        if is_created and not model.source_row_order:
-            model.source_row_order = await _next_row_order(
-                DepositProductOffer,
-                service_name=model.service_name,
-                currency_code=model.currency_code,
-            )
-
 
 # ---------------------------------------------------------------------------
 # Lead
@@ -995,8 +1223,8 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         "issue_fee_text": "Стоимость выпуска", "issue_fee_free": "Бесплатный выпуск",
         "reissue_fee_text": "Стоимость перевыпуска",
         "transfer_fee_text": "Комиссия за переводы",
-        "cashback_text": "Кэшбэк (текст)", "cashback_pct": "Кэшбэк %",
-        "validity_text": "Срок действия", "validity_months": "Срок (мес.)",
+        "cashback_pct": "Кэшбэк %",
+        "validity_months": "Срок (мес.)",
         "issuance_time_text": "Время выпуска",
         "pin_setup_cbu_text": "Установка PIN (ЦБУ)",
         "sms_setup_cbu_text": "Установка SMS (ЦБУ)",
@@ -1060,14 +1288,8 @@ class CardProductOfferAdmin(ModelView, model=CardProductOffer):
         "transfer_fee_text": {
             "description": "Например: «0.5% от суммы» или «Бесплатно до 5 млн»",
         },
-        "cashback_text": {
-            "description": "Например: «1% на все покупки», «до 3% на АЗС»",
-        },
         "cashback_pct": {
             "description": "Число, например: 1.0",
-        },
-        "validity_text": {
-            "description": "Например: «3 года», «5 лет»",
         },
         "validity_months": {
             "description": "Число месяцев, например: 36, 60",

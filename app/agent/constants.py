@@ -28,6 +28,7 @@ FALLBACK_STREAK_THRESHOLD = 3  # show operator button after this many consecutiv
 FLOW_SHOW_PRODUCTS = "show_products"
 FLOW_PRODUCT_DETAIL = "product_detail"
 FLOW_CALC = "calc_flow"
+FLOW_QUALIFY = "qualify"
 FLOW_SHOW_OFFICES = "show_offices"
 FLOW_OFFICE_DETAIL = "office_detail"
 

@@ -589,10 +589,11 @@ class TestGraphStructure:
         from app.agent import build_graph
         g = build_graph()
         nodes = set(g.get_graph().nodes) - {"__start__", "__end__"}
-        assert len(nodes) == 4  # router + faq + calc_flow + human_mode
+        assert len(nodes) == 5  # router + faq + calc_flow + qualify_flow + human_mode
         assert "router" in nodes
         assert "faq" in nodes
         assert "calc_flow" in nodes
+        assert "qualify_flow" in nodes
         assert "human_mode" in nodes
 
 
@@ -602,49 +603,65 @@ from app.agent.nodes.calc_flow import _lookup_credit_rate, _lookup_deposit_rate
 
 
 class TestLookupCreditRate:
+    """Rate selection now goes through the rate_rules engine; the lookup takes
+    (product, calc_slots, dialog) and reads rules from product['rate_rules']."""
+
     def test_exact_match_term_and_downpayment(self):
-        product = {"rate_matrix": [
-            {"income_type": None, "rate_min_pct": 14.0, "rate_max_pct": 14.0,
-             "term_min_months": 12, "term_max_months": 60,
-             "downpayment_min_pct": 20, "downpayment_max_pct": 50},
-            {"income_type": None, "rate_min_pct": 18.0, "rate_max_pct": 18.0,
-             "term_min_months": 61, "term_max_months": 120,
-             "downpayment_min_pct": 20, "downpayment_max_pct": 50},
+        product = {"rate_rules": [
+            {"rate_min_pct": 14.0, "term_min_months": 12, "term_max_months": 60,
+             "downpayment_min_pct": 20, "downpayment_max_pct": 50, "priority": 0},
+            {"rate_min_pct": 18.0, "term_min_months": 61, "term_max_months": 120,
+             "downpayment_min_pct": 20, "downpayment_max_pct": 50, "priority": 0},
         ]}
-        assert _lookup_credit_rate(product, {"term_months": 36, "downpayment": 25}) == 14.0
-        assert _lookup_credit_rate(product, {"term_months": 84, "downpayment": 25}) == 18.0
+        assert _lookup_credit_rate(product, {"term_months": 36, "downpayment": 25}, {}) == 14.0
+        assert _lookup_credit_rate(product, {"term_months": 84, "downpayment": 25}, {}) == 18.0
 
     def test_term_only_match(self):
-        product = {"rate_matrix": [
-            {"income_type": None, "rate_min_pct": 20.0, "rate_max_pct": 20.0,
-             "term_min_months": 12, "term_max_months": 60,
-             "downpayment_min_pct": None, "downpayment_max_pct": None},
+        product = {"rate_rules": [
+            {"rate_min_pct": 20.0, "term_min_months": 12, "term_max_months": 60, "priority": 0},
         ]}
-        assert _lookup_credit_rate(product, {"term_months": 24}) == 20.0
+        assert _lookup_credit_rate(product, {"term_months": 24}, {}) == 20.0
 
-    def test_fallback_no_matrix(self):
+    def test_fallback_no_rules(self):
         product = {"rate_min_pct": 22.0}
-        assert _lookup_credit_rate(product, {"term_months": 12}) == 22.0
+        assert _lookup_credit_rate(product, {"term_months": 12}, {}) == 22.0
 
-    def test_fallback_empty_matrix(self):
-        product = {"rate_matrix": [], "rate_min_pct": 25.0}
-        assert _lookup_credit_rate(product, {"term_months": 12}) == 25.0
+    def test_fallback_empty_rules(self):
+        product = {"rate_rules": [], "rate_min_pct": 25.0}
+        assert _lookup_credit_rate(product, {"term_months": 12}, {}) == 25.0
 
     def test_fallback_default(self):
         product = {}
-        assert _lookup_credit_rate(product, {"term_months": 12}) == 20.0
+        assert _lookup_credit_rate(product, {"term_months": 12}, {}) == 20.0
 
     def test_out_of_range_uses_min(self):
-        product = {"rate_matrix": [
-            {"income_type": None, "rate_min_pct": 14.0, "rate_max_pct": 14.0,
-             "term_min_months": 12, "term_max_months": 60,
-             "downpayment_min_pct": None, "downpayment_max_pct": None},
-            {"income_type": None, "rate_min_pct": 18.0, "rate_max_pct": 18.0,
-             "term_min_months": 61, "term_max_months": 120,
-             "downpayment_min_pct": None, "downpayment_max_pct": None},
+        product = {"rate_rules": [
+            {"rate_min_pct": 14.0, "term_min_months": 12, "term_max_months": 60, "priority": 0},
+            {"rate_min_pct": 18.0, "term_min_months": 61, "term_max_months": 120, "priority": 0},
         ]}
-        # term_months=200 is out of range for both entries → fallback to min
-        assert _lookup_credit_rate(product, {"term_months": 200}) == 14.0
+        # term_months=200 is out of range for both rules → fallback to min usable rate
+        assert _lookup_credit_rate(product, {"term_months": 200}, {}) == 14.0
+
+    def test_income_type_from_dialog_single(self):
+        product = {"rate_rules": [
+            {"rate_min_pct": 22.0, "income_type": "payroll", "priority": 0},
+            {"rate_min_pct": 18.0, "income_type": "official", "priority": 0},
+        ]}
+        # Unambiguous qualify answer picks the payroll tariff...
+        dialog = {"qualify_answers": {"income_types": ["payroll"]}}
+        assert _lookup_credit_rate(product, {}, dialog) == 22.0
+        # ...ambiguous (multiple) → income unset → no income rule matches → min fallback.
+        dialog_ambig = {"qualify_answers": {"income_types": ["payroll", "official"]}}
+        assert _lookup_credit_rate(product, {}, dialog_ambig) == 18.0
+
+    def test_age_dependent_rule(self):
+        product = {"rate_rules": [
+            {"rate_min_pct": 25.0, "priority": 0},
+            {"rate_min_pct": 19.0, "age_min": 18, "age_max": 30, "priority": 0},
+        ]}
+        # With age the more specific age rule wins; without age it can't match.
+        assert _lookup_credit_rate(product, {"age": 25}, {}) == 19.0
+        assert _lookup_credit_rate(product, {}, {}) == 25.0
 
 
 class TestLookupDepositRate:

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from app.db.models import CreditProductOffer
+from app.db.models import CreditProductOffer, CreditRateRule
 from app.db.session import get_session
 
 SECTION_FIELD_INDEXES: Dict[str, Dict[str, int]] = {
@@ -367,14 +368,14 @@ def _iter_structured_records(manifest_path: Path) -> Iterable[Dict[str, Any]]:
             if service_name.lower() in {"тип кредита", "тип карты", "тип вклада"}:
                 continue
 
-            min_age, min_age_text = _parse_age(_get_cell(raw_row, mapping.get("min_age")))
+            min_age, _ = _parse_age(_get_cell(raw_row, mapping.get("min_age")))
             purpose_text = _clean(_get_cell(raw_row, mapping.get("purpose"))) or None
-            amount_text = _clean(_get_cell(raw_row, mapping.get("amount"))) or None
-            amount_min, amount_max = _parse_amount_range(amount_text or "")
-            term_text = _clean(_get_cell(raw_row, mapping.get("term"))) or None
-            term_min_months, term_max_months = _parse_term_range_months(term_text or "")
-            downpayment_text = _clean(_get_cell(raw_row, mapping.get("downpayment"))) or None
-            down_min, down_max = _parse_pct_range(downpayment_text or "")
+            amount_text = _clean(_get_cell(raw_row, mapping.get("amount"))) or ""
+            amount_min, amount_max = _parse_amount_range(amount_text)
+            term_text = _clean(_get_cell(raw_row, mapping.get("term"))) or ""
+            term_min_months, term_max_months = _parse_term_range_months(term_text)
+            downpayment_text = _clean(_get_cell(raw_row, mapping.get("downpayment"))) or ""
+            down_min, down_max = _parse_pct_range(downpayment_text)
             collateral_text = _clean(_get_cell(raw_row, mapping.get("collateral"))) or None
 
             rules = _extract_rules_for_section(section_name, raw_row, mapping)
@@ -382,7 +383,6 @@ def _iter_structured_records(manifest_path: Path) -> Iterable[Dict[str, Any]]:
                 rules = [
                     {
                         "income_type": None,
-                        "rate_text": None,
                         "rate_condition_text": None,
                         "rate_min_pct": None,
                         "rate_max_pct": None,
@@ -393,45 +393,138 @@ def _iter_structured_records(manifest_path: Path) -> Iterable[Dict[str, Any]]:
                     }
                 ]
 
-            for idx, rule in enumerate(rules, start=1):
+            for rule in rules:
                 yield {
                     "section_name": section_name,
                     "service_name": service_name,
                     "min_age": min_age,
-                    "min_age_text": min_age_text,
                     "purpose_text": purpose_text,
-                    "amount_text": amount_text,
                     "amount_min": amount_min,
                     "amount_max": amount_max,
-                    "term_text": term_text,
                     "term_min_months": rule.get("term_min_months", term_min_months),
                     "term_max_months": rule.get("term_max_months", term_max_months),
-                    "downpayment_text": downpayment_text,
                     "downpayment_min_pct": rule.get("downpayment_min_pct", down_min),
                     "downpayment_max_pct": rule.get("downpayment_max_pct", down_max),
                     "income_type": rule.get("income_type"),
-                    "rate_text": rule.get("rate_text"),
                     "rate_condition_text": rule.get("rate_condition_text"),
                     "rate_min_pct": rule.get("rate_min_pct"),
                     "rate_max_pct": rule.get("rate_max_pct"),
                     "collateral_text": collateral_text,
                     "source_path": source_path,
-                    "source_row_order": row_order,
-                    "rate_order": idx,
                 }
 
 
+_PRODUCT_STATIC_KEYS = (
+    "min_age",
+    "purpose_text",
+    "amount_min",
+    "amount_max",
+    "collateral_text",
+    "source_path",
+)
+
+# Single condition axis per credit section for Excel-seeded products. income_type
+# stays on each rule as an overlay filter regardless. 'flat' = one rate, no axis
+# (e.g. Автокредит, where rates differ only by income type).
+_SECTION_CONDITION_KIND: Dict[str, str] = {
+    "Микрозайм": "term",
+    "Ипотека": "downpayment",
+    "Автокредит": "flat",
+    "Образовательный": "flat",
+}
+_KIND_AXIS_COLS: Dict[str, Tuple[str, ...]] = {
+    "term": ("term_min_months", "term_max_months"),
+    "age": ("age_min", "age_max"),
+    "amount": ("amount_min", "amount_max"),
+    "downpayment": ("downpayment_min_pct", "downpayment_max_pct"),
+}
+_ALL_AXIS_COLS: Tuple[str, ...] = tuple(c for cols in _KIND_AXIS_COLS.values() for c in cols)
+
+
+def _group_by_product(
+    records: Iterable[Dict[str, Any]]
+) -> "OrderedDict[Tuple[str, str], List[Dict[str, Any]]]":
+    grouped: "OrderedDict[Tuple[str, str], List[Dict[str, Any]]]" = OrderedDict()
+    for rec in records:
+        key = (rec["section_name"], rec["service_name"])
+        grouped.setdefault(key, []).append(rec)
+    return grouped
+
+
 async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
+    """Upsert one CreditProductOffer per (section, service) and (re)load its
+    Excel-derived rate rules.
+
+    Manual data is preserved: qualification tags on the product are never
+    overwritten, and only ``source='seed'`` rules are replaced — hand-entered
+    ('manual') rules survive a re-seed. ``replace`` mode additionally clears
+    seed rules for products that dropped out of the manifest.
+    """
     inserted = 0
     skipped = 0
-    records = list(_iter_structured_records(manifest_path))
+    grouped = _group_by_product(_iter_structured_records(manifest_path))
 
     async with get_session() as session:
         if replace:
-            await session.execute(delete(CreditProductOffer))
+            # Clear all seed-origin rules up front so tariffs removed from the
+            # Excel disappear; product rows and manual rules/tags stay intact.
+            await session.execute(delete(CreditRateRule).where(CreditRateRule.source == "seed"))
 
-        for payload in records:
-            session.add(CreditProductOffer(**payload, is_active=True))
-            inserted += 1
+        for (section_name, service_name), recs in grouped.items():
+            first = recs[0]
+            kind = _SECTION_CONDITION_KIND.get(section_name, "flat")
+            keep_cols = set(_KIND_AXIS_COLS.get(kind, ()))
+            product = (
+                await session.execute(
+                    select(CreditProductOffer).where(
+                        CreditProductOffer.section_name == section_name,
+                        CreditProductOffer.service_name == service_name,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if product is None:
+                product = CreditProductOffer(
+                    section_name=section_name,
+                    service_name=service_name,
+                    rate_condition_kind=kind,
+                    is_active=True,
+                    **{k: first.get(k) for k in _PRODUCT_STATIC_KEYS},
+                )
+                session.add(product)
+                await session.flush()  # assign product.id for the FK
+            else:
+                # Refresh static fields from Excel; leave qualify tags untouched.
+                for k in _PRODUCT_STATIC_KEYS:
+                    setattr(product, k, first.get(k))
+                product.rate_condition_kind = kind
+                if not replace:
+                    # In replace mode seed rules were already cleared globally.
+                    await session.execute(
+                        delete(CreditRateRule).where(
+                            CreditRateRule.credit_product_offer_id == product.id,
+                            CreditRateRule.source == "seed",
+                        )
+                    )
+
+            for rec in recs:
+                # Keep only the bounds on the product's chosen axis; income stays.
+                axis_vals = {
+                    col: (rec.get(col) if col in keep_cols else None)
+                    for col in _ALL_AXIS_COLS
+                }
+                session.add(
+                    CreditRateRule(
+                        credit_product_offer_id=product.id,
+                        income_type=rec.get("income_type"),
+                        rate_min_pct=rec.get("rate_min_pct"),
+                        rate_max_pct=rec.get("rate_max_pct"),
+                        condition_text=rec.get("rate_condition_text"),
+                        source="seed",
+                        **axis_vals,
+                    )
+                )
+                inserted += 1
+
         await session.commit()
     return inserted, skipped

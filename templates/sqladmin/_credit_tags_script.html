@@ -1,0 +1,40 @@
+<script>
+// Show only the qualification-flow tag fields relevant to the chosen section.
+(function () {
+  var SECTION_TAGS = {
+    "Автокредит": ["for_brand_gm", "for_brand_other"],
+    "Ипотека": ["for_market_primary", "for_market_secondary", "for_renovation"],
+    "Микрозайм": ["channel_cbu", "channel_online"]
+  };
+  var ALL = [
+    "for_brand_gm", "for_brand_other",
+    "for_market_primary", "for_market_secondary", "for_renovation",
+    "channel_cbu", "channel_online"
+  ];
+
+  function rowOf(id) {
+    var el = document.getElementById(id);
+    return el ? el.closest(".form-group") : null;
+  }
+
+  function apply() {
+    var sec = document.getElementById("section_name");
+    var val = sec ? sec.value : "";
+    var show = SECTION_TAGS[val] || [];
+    ALL.forEach(function (id) {
+      var row = rowOf(id);
+      if (row) {
+        row.style.display = (show.indexOf(id) >= 0) ? "" : "none";
+      }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var sec = document.getElementById("section_name");
+    if (sec) {
+      sec.addEventListener("change", apply);
+      apply();
+    }
+  });
+})();
+</script>

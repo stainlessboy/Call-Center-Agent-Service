@@ -45,7 +45,7 @@ FAQ_LOW_CONFIDENCE = "FAQ_LOW_CONFIDENCE"
 
 # Tri-tier FAQ similarity thresholds (overridable via env).
 import os as _os_thresh
-_FAQ_STRICT_THRESHOLD: float = float(_os_thresh.getenv("FAQ_STRICT_THRESHOLD", "0.62"))
+_FAQ_STRICT_THRESHOLD: float = float(_os_thresh.getenv("FAQ_STRICT_THRESHOLD", "0.42"))
 _FAQ_LOW_CONFIDENCE_THRESHOLD: float = float(_os_thresh.getenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45"))
 
 
@@ -428,11 +428,25 @@ async def faq_lookup(
     - The literal string "FAQ_LOW_CONFIDENCE" if LOW_CONFIDENCE_THRESHOLD <= score < STRICT.
       In that case call clarify(missing_info=...) to disambiguate before answering.
     - The literal string "NO_MATCH_IN_FAQ" if score < LOW_CONFIDENCE_THRESHOLD.
-      In that case ask the user to rephrase OR call clarify. After 1-2 failed
-      clarifications call request_operator(reason="unclear_message"). DO NOT fabricate an answer.
+      In that case you may answer the user yourself IF the question is a GENERAL
+      banking-knowledge question (what is annuity, what is a downpayment, how
+      escrow works, what is APR, the typical flow of taking a loan, common
+      banking terms / definitions). Give a brief plain explanation in the user's
+      language. DO NOT add a disclaimer or note that "this is general info" —
+      the system automatically wraps your answer with an "Assistant" header and
+      an operator disclaimer. NEVER invent concrete numbers about Asaka Bank:
+      do not make up rates, fees, terms, product names, branch addresses,
+      document lists, or any other bank-specific facts that are not in the tool
+      results above. If the question is bank-specific and FAQ has no answer, OR
+      you are uncertain whether the question is general or bank-specific — call
+      clarify() once; after 1-2 unsuccessful attempts call
+      request_operator(reason="unclear_message").
     """
     lang = _lang_from_state(state)
     answer, score = await _faq_lookup_with_score(query, lang)
+    print('__query__',query)
+    print('__score__',score)
+    print('__answer__',answer)
     if score >= _FAQ_STRICT_THRESHOLD:
         return answer or NO_MATCH_IN_FAQ
     if score >= _FAQ_LOW_CONFIDENCE_THRESHOLD:

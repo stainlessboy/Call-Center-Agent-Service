@@ -29,6 +29,25 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
+def _env_truthy(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_gpt() -> bool:
+    """Provider switch. When USE_GPT is truthy (default) we use OpenAI/GPT;
+    otherwise we fall back to the Qwen model served by Together AI."""
+    return _env_truthy(os.getenv("USE_GPT") or "true")
+
+
+# Qwen / Together AI defaults (used when USE_GPT is falsy)
+_QWEN_MODEL = "Qwen/Qwen3.5-9B"
+_QWEN_BASE_URL = "https://api.together.xyz/v1"
+
+
+def _qwen_model_name() -> str:
+    return os.getenv("QWEN_MODEL") or _QWEN_MODEL
+
+
 def _is_reasoning_model(model_name: str) -> bool:
     """True if the model accepts the `reasoning_effort` parameter (GPT-5 / o-series)."""
     return model_name.startswith(("gpt-5", "o1", "o3", "o4"))
@@ -56,8 +75,31 @@ def _needs_responses_api(model_name: str) -> bool:
 
 @lru_cache(maxsize=1)
 def _get_chat_openai() -> Optional[ChatOpenAI]:
-    """Return a LangChain ChatOpenAI instance."""
+    """Return a LangChain ChatOpenAI instance.
+
+    Provider is chosen by the USE_GPT env flag:
+      * USE_GPT truthy (default) → OpenAI GPT model
+      * USE_GPT falsy           → Qwen model served by Together AI
+    """
     try:
+        common = {
+            "temperature": 0.3,
+            "max_tokens": 512,
+            "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
+            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
+        }
+
+        # ---- Qwen / Together AI path -------------------------------------
+        if not _use_gpt():
+            qwen_kwargs: dict[str, Any] = {
+                "model": _qwen_model_name(),
+                "base_url": os.getenv("QWEN_BASE_URL") or _QWEN_BASE_URL,
+                "api_key": os.getenv("QWEN_API_KEY") or os.getenv("TOGETHER_API_KEY"),
+                **common,
+            }
+            return ChatOpenAI(**qwen_kwargs)
+
+        # ---- OpenAI / GPT path -------------------------------------------
         model_name = (
             os.getenv("OPENAI_MODEL")
             or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL")
@@ -65,11 +107,8 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
         )
         kwargs: dict[str, Any] = {
             "model": model_name,
-            "temperature": 0.3,
-            "max_tokens": 512,
-            "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
-            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
             "api_key": os.getenv("OPENAI_API_KEY"),
+            **common,
         }
         base_url = os.getenv("OPENAI_BASE_URL")
         if base_url:
@@ -94,6 +133,8 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
 
 
 def get_model_name() -> str:
+    if not _use_gpt():
+        return _qwen_model_name()
     return os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL") or "gpt-4o-mini"
 
 

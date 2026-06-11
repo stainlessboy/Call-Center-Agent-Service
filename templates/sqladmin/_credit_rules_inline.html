@@ -1,0 +1,217 @@
+{# Inline rate-rule editor rendered on the CreditProductOffer create/edit page.
+   Inputs are named rule-{i}-{field}; they are parsed from the raw request form
+   by CreditProductOfferAdmin._sync_rules_from_request (not WTForms fields).
+
+   Which axis fields are visible is driven by the product-level select
+   `rate_condition_kind` (one axis per product). Currency and income type are
+   always shown as overlay filters. #}
+
+{% macro rule_row(idx, r) %}
+<div class="card rule-row" data-row="{{ idx }}" style="margin-bottom:12px;border:1px solid #dde;">
+  <div class="card-body" style="padding:12px;">
+    <input type="hidden" name="rule-{{ idx }}-id" value="{{ r.id if r else '' }}">
+    <input type="hidden" name="rule-{{ idx }}-delete" value="">
+
+    <div class="row" style="align-items:flex-end;">
+      <div class="col-md-9 mb-2">
+        <span class="text-muted rule-axis-hint" style="font-size:0.85rem;"></span>
+      </div>
+      <div class="col-md-3 mb-2" style="text-align:right;">
+        <button type="button" class="btn btn-outline-danger btn-sm rule-remove">Удалить тариф</button>
+      </div>
+    </div>
+
+    <div class="row">
+      {# --- term --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="term">
+        <label class="form-label">Срок от (мес.)</label>
+        <input type="number" step="1" name="rule-{{ idx }}-term_min_months" class="form-control" value="{{ r.term_min_months if r and r.term_min_months is not none else '' }}">
+      </div>
+      <div class="col-md-3 mb-2 rule-field" data-axis="term">
+        <label class="form-label">Срок до (мес.)</label>
+        <input type="number" step="1" name="rule-{{ idx }}-term_max_months" class="form-control" value="{{ r.term_max_months if r and r.term_max_months is not none else '' }}">
+      </div>
+      {# --- age --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="age">
+        <label class="form-label">Возраст от</label>
+        <input type="number" step="1" name="rule-{{ idx }}-age_min" class="form-control" value="{{ r.age_min if r and r.age_min is not none else '' }}">
+      </div>
+      <div class="col-md-3 mb-2 rule-field" data-axis="age">
+        <label class="form-label">Возраст до</label>
+        <input type="number" step="1" name="rule-{{ idx }}-age_max" class="form-control" value="{{ r.age_max if r and r.age_max is not none else '' }}">
+      </div>
+      {# --- amount --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="amount">
+        <label class="form-label">Сумма от</label>
+        <input type="number" step="1" name="rule-{{ idx }}-amount_min" class="form-control" value="{{ r.amount_min if r and r.amount_min is not none else '' }}">
+      </div>
+      <div class="col-md-3 mb-2 rule-field" data-axis="amount">
+        <label class="form-label">Сумма до</label>
+        <input type="number" step="1" name="rule-{{ idx }}-amount_max" class="form-control" value="{{ r.amount_max if r and r.amount_max is not none else '' }}">
+      </div>
+      {# --- downpayment --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="downpayment">
+        <label class="form-label">Взнос от %</label>
+        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_min_pct" class="form-control" value="{{ r.downpayment_min_pct if r and r.downpayment_min_pct is not none else '' }}">
+      </div>
+      <div class="col-md-3 mb-2 rule-field" data-axis="downpayment">
+        <label class="form-label">Взнос до %</label>
+        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_max_pct" class="form-control" value="{{ r.downpayment_max_pct if r and r.downpayment_max_pct is not none else '' }}">
+      </div>
+      {# --- income (overlay filter, always shown) --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="income">
+        <label class="form-label">Тип дохода</label>
+        {% set it = (r.income_type if r else '') or '' %}
+        <select name="rule-{{ idx }}-income_type" class="form-select">
+          <option value="" {{ 'selected' if it == '' }}>— для всех —</option>
+          <option value="payroll" {{ 'selected' if it == 'payroll' }}>Зарплатный проект</option>
+          <option value="official" {{ 'selected' if it == 'official' }}>Официальный доход</option>
+          <option value="no_official" {{ 'selected' if it == 'no_official' }}>Без офиц. дохода</option>
+        </select>
+      </div>
+      {# --- currency (overlay filter, always shown) --- #}
+      <div class="col-md-3 mb-2 rule-field" data-axis="currency">
+        <label class="form-label">Валюта</label>
+        {% set cc = (r.currency_code if r else '') or '' %}
+        <select name="rule-{{ idx }}-currency_code" class="form-select">
+          <option value="" {{ 'selected' if cc == '' }}>— любая —</option>
+          <option value="UZS" {{ 'selected' if cc == 'UZS' }}>UZS</option>
+          <option value="USD" {{ 'selected' if cc == 'USD' }}>USD</option>
+          <option value="EUR" {{ 'selected' if cc == 'EUR' }}>EUR</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-md-2 mb-2">
+        <label class="form-label">Ставка мин. %</label>
+        <input type="number" step="0.1" name="rule-{{ idx }}-rate_min_pct" class="form-control" value="{{ r.rate_min_pct if r and r.rate_min_pct is not none else '' }}">
+      </div>
+      <div class="col-md-2 mb-2">
+        <label class="form-label">Ставка макс. %</label>
+        <input type="number" step="0.1" name="rule-{{ idx }}-rate_max_pct" class="form-control" value="{{ r.rate_max_pct if r and r.rate_max_pct is not none else '' }}">
+      </div>
+      <div class="col-md-5 mb-2">
+        <label class="form-label">Условие ставки (текст)</label>
+        <input type="text" name="rule-{{ idx }}-condition_text" class="form-control" value="{{ r.condition_text if r and r.condition_text else '' }}">
+      </div>
+      <div class="col-md-2 mb-2">
+        <label class="form-label">Приоритет</label>
+        <input type="number" step="1" name="rule-{{ idx }}-priority" class="form-control" value="{{ r.priority if r and r.priority is not none else 0 }}">
+      </div>
+      <div class="col-md-1 mb-2">
+        <label class="form-label">Активен</label><br>
+        <input type="checkbox" name="rule-{{ idx }}-is_active" value="on" {{ 'checked' if (r.is_active if r else True) }}>
+      </div>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+<div id="rate-rules-block" style="margin-top:18px;">
+  <h3 class="card-title" style="margin-bottom:8px;">Тарифы (ставки)</h3>
+  <p class="text-muted" style="margin-bottom:10px;">
+    Поля условия зависят от «Тип условия (тариф)» вверху формы — показывается только выбранная ось.
+    «Тип дохода» и «Валюта» — дополнительные фильтры, доступны всегда.
+    Тариф действует только при заполненной ставке; продукт без действующего тарифа не показывается клиентам.
+  </p>
+  <div id="rate-rules-container">
+    {% if obj is defined and obj is not none and obj._editor_rules is defined %}
+      {% for r in obj._editor_rules %}
+        {{ rule_row(loop.index0, r) }}
+      {% endfor %}
+    {% endif %}
+  </div>
+  <button type="button" id="rule-add-btn" class="btn btn-outline-primary btn-sm">+ Добавить тариф</button>
+
+  <template id="rule-row-template">
+    {{ rule_row('__IDX__', none) }}
+  </template>
+</div>
+
+<script>
+(function () {
+  // Bound fields shown per product axis. Currency + income are overlay filters
+  // shown for every axis (including "flat").
+  var KIND_AXES = {
+    term: ["term"], age: ["age"], amount: ["amount"],
+    downpayment: ["downpayment"], flat: [], "": []
+  };
+  var ALWAYS = ["income", "currency"];
+
+  var AXIS_LABELS = {
+    term: "Условие: срок кредита", age: "Условие: возраст заёмщика",
+    amount: "Условие: сумма кредита", downpayment: "Условие: первоначальный взнос",
+    flat: "Без условия — одна ставка", "": "Без условия — одна ставка"
+  };
+
+  function kindSelect() {
+    return document.querySelector('[name="rate_condition_kind"]');
+  }
+  function currentKind() {
+    var s = kindSelect();
+    return s ? s.value : "";
+  }
+
+  function applyRow(row, kind) {
+    var show = (KIND_AXES[kind] || []).concat(ALWAYS);
+    row.querySelectorAll(".rule-field").forEach(function (f) {
+      f.style.display = (show.indexOf(f.getAttribute("data-axis")) >= 0) ? "" : "none";
+    });
+    var hint = row.querySelector(".rule-axis-hint");
+    if (hint) hint.textContent = AXIS_LABELS[kind] || "";
+  }
+
+  function applyAll() {
+    var kind = currentKind();
+    document.querySelectorAll("#rate-rules-container .rule-row").forEach(function (r) {
+      applyRow(r, kind);
+    });
+  }
+
+  function init() {
+    var block = document.getElementById("rate-rules-block");
+    var container = document.getElementById("rate-rules-container");
+    if (!block || !container) return;
+
+    // Move the block inside the form so its inputs are submitted.
+    var form = document.querySelector("form");
+    if (form) {
+      var submit = form.querySelector('input[type=submit]');
+      var anchor = submit ? submit.closest(".row") : null;
+      if (anchor) { form.insertBefore(block, anchor); } else { form.appendChild(block); }
+    }
+
+    var counter = container.querySelectorAll(".rule-row").length;
+    applyAll();
+
+    var sel = kindSelect();
+    if (sel) sel.addEventListener("change", applyAll);
+
+    document.getElementById("rule-add-btn").addEventListener("click", function () {
+      var tpl = document.getElementById("rule-row-template").innerHTML.replace(/__IDX__/g, counter++);
+      var wrap = document.createElement("div");
+      wrap.innerHTML = tpl.trim();
+      var row = wrap.firstElementChild;
+      container.appendChild(row);
+      applyRow(row, currentKind());
+    });
+
+    container.addEventListener("click", function (e) {
+      if (!e.target.classList.contains("rule-remove")) return;
+      var row = e.target.closest(".rule-row");
+      var idField = row.querySelector('input[name$="-id"]');
+      if (idField && idField.value) {
+        // existing rule → mark for deletion, keep in form, hide it
+        var del = row.querySelector('input[name$="-delete"]');
+        if (del) del.value = "on";
+        row.style.display = "none";
+      } else {
+        row.remove();
+      }
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+</script>

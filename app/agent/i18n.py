@@ -75,7 +75,9 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 `faq_lookup` возвращает одну из трёх вещей:
 - Текст ответа — передай его клиенту.
 - Строка `FAQ_LOW_CONFIDENCE` — запрос понят частично, но совпадение неточное. Вызови `clarify(missing_info=...)` чтобы уточнить, прежде чем отвечать.
-- Строка `NO_MATCH_IN_FAQ` — ничего не нашлось. НЕ ВЫДУМЫВАЙ ответ. Попроси переформулировать или вызови `clarify`. Если после 1-2 уточнений ответа нет — вызови `request_operator(reason="unclear_message")`.
+- Строка `NO_MATCH_IN_FAQ` — ничего не нашлось. Дальше действуй так:
+  - Если вопрос — это ОБЩАЯ финансово-банковская тема (термин, определение, как работает аннуитет, что такое первоначальный взнос/ESCROW/APR, типичная процедура): ответь сам — кратко, на языке клиента, ПО СУЩЕСТВУ. Никогда не выдумывай конкретику банка: ставки, тарифы, сроки, названия продуктов, адреса филиалов, списки документов — всё, чего НЕТ в результатах инструментов. НЕ добавляй сам дисклеймер про оператора и не пиши «это общий ответ» — система автоматически обернёт твой ответ шапкой «Ассистент» и припиской про оператора.
+  - Если вопрос узко-банковский (конкретные условия, тарифы, документы по продуктам Asaka) ИЛИ ты не уверен, общий он или нет — вызови `clarify` один раз; если после 1-2 уточнений по-прежнему не понял — `request_operator(reason="unclear_message")`.
 После 1-2 неудачных `clarify` подряд → вызывай `request_operator(reason="unclear_message")`.
 
 ## ОБРАБОТКА НЕДОВОЛЬСТВА
@@ -160,7 +162,9 @@ EXCEPTIONS — do NOT call `faq_lookup`:
 `faq_lookup` returns one of three things:
 - Answer text — pass it to the user.
 - The literal string `FAQ_LOW_CONFIDENCE` — partial match, confidence too low to answer. Call `clarify(missing_info=...)` to disambiguate before answering.
-- The literal string `NO_MATCH_IN_FAQ` — nothing matched. DO NOT fabricate an answer. Ask the user to rephrase, or call `clarify`. After 1-2 failed clarifications — call `request_operator(reason="unclear_message")`.
+- The literal string `NO_MATCH_IN_FAQ` — nothing matched. Then act as follows:
+  - If the question is GENERAL banking knowledge (a definition, how-it-works, what is annuity / downpayment / escrow / APR, the typical flow of taking a loan, common financial terms): answer it yourself — briefly and to the point, in the user's language. Never invent bank-specific facts: rates, fees, term lengths, product names, branch addresses, document lists, or anything else that is NOT in the tool results. DO NOT add a disclaimer about contacting an operator or note that "this is general information" — the system automatically wraps your answer with an "Assistant" header and the operator disclaimer.
+  - If the question is bank-specific (concrete terms / fees / documents for Asaka products) OR you are unsure whether it is general or bank-specific — call `clarify` once; after 1-2 failed clarifications — call `request_operator(reason="unclear_message")`.
 After 1-2 consecutive unsuccessful `clarify` calls → call `request_operator(reason="unclear_message")`.
 
 ## HANDLING DISSATISFACTION
@@ -248,7 +252,9 @@ ISTISNOLAR — `faq_lookup` ni chaqirMANG:
 `faq_lookup` uchta narsadan birini qaytaradi:
 - Javob matni — uni mijozga yuboring.
 - `FAQ_LOW_CONFIDENCE` satri — qisman moslik topildi, lekin ishonch past. Javob berishdan oldin `clarify(missing_info=...)` ni chaqirib aniqlashtiring.
-- `NO_MATCH_IN_FAQ` satri — hech narsa topilmadi. Javobni O'YLAB TOPMANG. Qayta shakllantirish yoki `clarify` so'rang. 1-2 urinishdan keyin ham javob yo'q bo'lsa — `request_operator(reason="unclear_message")` ni chaqiring.
+- `NO_MATCH_IN_FAQ` satri — hech narsa topilmadi. Quyidagicha harakat qiling:
+  - Agar savol UMUMIY bank/moliya bilimi bo'lsa (ta'rif, qanday ishlaydi, annuitet nima, boshlang'ich to'lov nima, ESCROW/APR nima, kredit olishning odatiy tartibi, umumiy bank atamalari): foydalanuvchi tilida qisqa va aniq javob bering. Bank haqidagi aniq ma'lumotlarni HECH QACHON o'ylab topmang: foiz stavkalari, tariflar, muddatlar, mahsulot nomlari, filial manzillari, hujjatlar ro'yxati — natijalarda BO'LMAGAN hech narsani. O'zingiz operator haqida eslatma yoki "bu umumiy javob" izohini QO'SHMANG — tizim sizning javobingizni avtomatik ravishda "Yordamchi" sarlavhasi va operator haqida eslatma bilan o'rab oladi.
+  - Agar savol mahsus bank-savol bo'lsa (Asaka mahsulotlari uchun aniq shartlar/tariflar/hujjatlar) YOKI umumiy yoki bank-savol ekanligiga ishonchingiz bo'lmasa — bir marta `clarify` ni chaqiring; 1-2 muvaffaqiyatsiz urinishdan keyin — `request_operator(reason="unclear_message")` ni chaqiring.
 Ketma-ket 1-2 muvaffaqiyatsiz `clarify` chaqiruvidan keyin → `request_operator(reason="unclear_message")` ni chaqiring.
 
 ## NOROZILIK BILAN ISHLASH
@@ -342,6 +348,16 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "Down payment (in %)?",
         "uz": "Boshlang'ich to'lov (% da)?",
     },
+    "calc_age": {
+        "ru": "Сколько вам полных лет? (ставка зависит от возраста)",
+        "en": "How old are you? (the rate depends on age)",
+        "uz": "Necha yoshdasiz? (stavka yoshga bog'liq)",
+    },
+    "calc_invalid_age": {
+        "ru": "Пожалуйста, укажите возраст числом — например <b>30</b>.",
+        "en": "Please enter your age as a number — e.g. <b>30</b>.",
+        "uz": "Iltimos, yoshingizni raqam bilan kiriting — masalan <b>30</b>.",
+    },
     "calc_amount_deposit": {
         "ru": "Какую сумму планируете разместить (в сумах)?",
         "en": "What amount would you like to deposit (in UZS)?",
@@ -367,6 +383,109 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "btn_yes_call": {"ru": "✅ Да, позвоните мне", "en": "✅ Yes, call me", "uz": "✅ Ha, menga qo'ng'iroq qiling"},
     "btn_no_thanks": {"ru": "❌ Нет, спасибо", "en": "❌ No, thanks", "uz": "❌ Yo'q, rahmat"},
     "btn_recalculate": {"ru": "🔄 Пересчитать", "en": "🔄 Recalculate", "uz": "🔄 Qayta hisoblash"},
+
+    # ── FLOW_QUALIFY: questions ───────────────────────────────────────────
+    "q_salary_autoloan": {
+        "ru": "Уважаемый клиент, автокредиты доступны для первичного рынка. Подскажите, пожалуйста, есть ли у вас официальная заработная плата?",
+        "en": "Dear customer, auto loans are available for the primary market. Could you tell me — do you have an official salary?",
+        "uz": "Hurmatli mijoz, avtokreditlar birlamchi bozor uchun mavjud. Ayting-chi, sizda rasmiy ish haqi bormi?",
+    },
+    "q_salary_mortgage": {
+        "ru": "Уважаемый клиент, ипотеки доступны для первичного и вторичного рынка, а также для ремонта. Подскажите, пожалуйста, есть ли у вас официальная заработная плата?",
+        "en": "Dear customer, mortgages are available for the primary and secondary markets, as well as for renovation. Could you tell me — do you have an official salary?",
+        "uz": "Hurmatli mijoz, ipotekalar birlamchi va ikkilamchi bozor uchun, shuningdek ta'mirlash uchun mavjud. Ayting-chi, sizda rasmiy ish haqi bormi?",
+    },
+    "q_salary_microloan": {
+        "ru": "Уважаемый клиент, в банке доступны микрозаймы суммой от 500 тысяч сум и сроком до 60 месяцев. Подскажите, пожалуйста, есть ли у вас официальная заработная плата?",
+        "en": "Dear customer, the bank offers microloans starting from 500,000 UZS for up to 60 months. Could you tell me — do you have an official salary?",
+        "uz": "Hurmatli mijoz, bankda 500 ming so'mdan boshlab va 60 oygacha muddatga mikroqarzlar mavjud. Ayting-chi, sizda rasmiy ish haqi bormi?",
+    },
+    "q_salary_card": {
+        "ru": "Уважаемый клиент, вы получаете зарплату на карту Асакабанка или другого банка?",
+        "en": "Dear customer, do you receive your salary on an Asakabank card or another bank's card?",
+        "uz": "Hurmatli mijoz, siz ish haqini Asakabank kartasiga olasizmi yoki boshqa bank kartasiga?",
+    },
+    "q_self_employed": {
+        "ru": "В таком случае, у нас есть альтернативные предложения. Вы зарегистрированы как самозанятое лицо?",
+        "en": "In that case, we have alternative offers. Are you registered as self-employed?",
+        "uz": "Bu holatda bizda muqobil takliflar bor. Siz yakka tartibdagi tadbirkor sifatida ro'yxatdan o'tganmisiz?",
+    },
+    "q_auto_brand": {
+        "ru": "Вы планируете приобрести автомобиль марки GM или иной марки?",
+        "en": "Are you planning to buy a GM-brand car or another brand?",
+        "uz": "Siz GM rusumidagi avtomobil sotib olmoqchimisiz yoki boshqa rusumdagi?",
+    },
+    "q_mortgage_market": {
+        "ru": "Уважаемый клиент, вы планируете приобрести жильё с первичного рынка, со вторичного рынка или вам нужны средства для ремонта?",
+        "en": "Dear customer, are you planning to buy property on the primary market, the secondary market, or do you need funds for renovation?",
+        "uz": "Hurmatli mijoz, siz uy-joyni birlamchi bozordan, ikkilamchi bozordan sotib olmoqchimisiz yoki ta'mirlash uchun mablag' kerakmi?",
+    },
+    "q_microloan_channel": {
+        "ru": "Вам удобно оформление через ЦБУ или онлайн?",
+        "en": "Which is more convenient for you — applying at a branch (CBU) or online?",
+        "uz": "Sizga rasmiylashtirish qulayroqmi — BXM (filial) orqali yoki onlayn?",
+    },
+    "q_deposit_goal": {
+        "ru": "Уважаемый клиент, наш банк предлагает депозиты в трёх валютах: сумах, долларах США и евро; с возможностью частичного снятия и пополнения средств, сроком до 30 месяцев. Вы планируете накапливать средства или будете частично снимать их?",
+        "en": "Dear customer, our bank offers deposits in three currencies: UZS, US dollars and euros; with partial withdrawal and top-up options, for up to 30 months. Are you planning to accumulate funds or will you withdraw them partially?",
+        "uz": "Hurmatli mijoz, bankimiz uch valyutada omonatlarni taklif qiladi: so'm, AQSh dollari va yevro; mablag'ni qisman yechib olish va to'ldirish imkoniyati bilan, 30 oygacha muddatga. Siz mablag' to'plamoqchimisiz yoki qisman yechib olasizmi?",
+    },
+    "q_deposit_currency": {
+        "ru": "Уважаемый клиент, в какой валюте вы хотите оформить вклад? Евро — только в отделении банка.",
+        "en": "Dear customer, in which currency would you like to open the deposit? Euro — only at a bank branch.",
+        "uz": "Hurmatli mijoz, omonatni qaysi valyutada rasmiylashtirmoqchisiz? Yevro — faqat bank bo'limida.",
+    },
+    "q_placeholder": {
+        "ru": "Уважаемый клиент, чтобы подобрать подходящий вариант, нажмите «Продолжить».",
+        "en": "Dear customer, please tap «Continue» to see suitable options.",
+        "uz": "Hurmatli mijoz, mos variantni tanlash uchun «Davom etish» tugmasini bosing.",
+    },
+
+    # ── FLOW_QUALIFY: buttons ─────────────────────────────────────────────
+    "btn_q_yes": {"ru": "Да", "en": "Yes", "uz": "Ha"},
+    "btn_q_no": {"ru": "Нет", "en": "No", "uz": "Yo'q"},
+    "btn_asaka": {"ru": "Асакабанк", "en": "Asakabank", "uz": "Asakabank"},
+    "btn_other_bank": {"ru": "Другой банк", "en": "Another bank", "uz": "Boshqa bank"},
+    "btn_brand_gm": {"ru": "GM", "en": "GM", "uz": "GM"},
+    "btn_brand_other": {"ru": "Иная марка", "en": "Another brand", "uz": "Boshqa rusum"},
+    "btn_market_primary": {"ru": "Первичный", "en": "Primary", "uz": "Birlamchi"},
+    "btn_market_secondary": {"ru": "Вторичный", "en": "Secondary", "uz": "Ikkilamchi"},
+    "btn_renovation": {"ru": "Ремонт", "en": "Renovation", "uz": "Ta'mirlash"},
+    "btn_channel_cbu": {"ru": "ЦБУ", "en": "Branch (CBU)", "uz": "BXM (filial)"},
+    "btn_channel_online": {"ru": "Онлайн", "en": "Online", "uz": "Onlayn"},
+    "btn_deposit_topup": {"ru": "Копить", "en": "Save up", "uz": "Jamg'arish"},
+    "btn_deposit_withdraw": {"ru": "Снимать", "en": "Withdraw", "uz": "Yechib olish"},
+    "btn_currency_uzs": {"ru": "Сум", "en": "UZS", "uz": "So'm"},
+    "btn_currency_usd": {"ru": "Доллар США", "en": "US dollar", "uz": "AQSh dollari"},
+    "btn_currency_eur": {"ru": "Евро", "en": "Euro", "uz": "Yevro"},
+    "btn_continue": {"ru": "Продолжить", "en": "Continue", "uz": "Davom etish"},
+
+    # ── FLOW_QUALIFY: results & dead-ends ──────────────────────────────────
+    "qualify_results_header": {
+        "ru": "Спасибо за информацию. Мы можем предложить вам следующие варианты:",
+        "en": "Thank you for the information. We can offer you the following options:",
+        "uz": "Ma'lumot uchun rahmat. Sizga quyidagi variantlarni taklif qila olamiz:",
+    },
+    "qualify_results_empty": {
+        "ru": "К сожалению, по выбранным условиям подходящих продуктов не нашлось.",
+        "en": "Unfortunately, no products were found for the selected conditions.",
+        "uz": "Afsuski, tanlangan shartlar bo'yicha mos mahsulotlar topilmadi.",
+    },
+    "qualify_no_offers": {
+        "ru": "К сожалению, у нас нет предложений по данным условиям.",
+        "en": "Unfortunately, we have no offers for these conditions.",
+        "uz": "Afsuski, ushbu shartlar bo'yicha takliflarimiz yo'q.",
+    },
+    "qualify_consider_others": {
+        "ru": "Просим вас рассмотреть другие виды кредитов.",
+        "en": "Please consider other types of loans.",
+        "uz": "Iltimos, boshqa kredit turlarini ko'rib chiqishingizni so'raymiz.",
+    },
+    "qualify_deposit_eur_note": {
+        "ru": "Вклады в евро можно оформить только в отделении банка.",
+        "en": "Euro deposits can be opened only at a bank branch.",
+        "uz": "Yevrodagi omonatlarni faqat bank bo'limida rasmiylashtirish mumkin.",
+    },
 
     # ── Tool responses ────────────────────────────────────────────────────
     "branch_found_header": {
@@ -789,6 +908,17 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
               "mobile app, card, transfer, loan, or branch?",
         "uz": "Savolingizni to'g'ri tushundim deb ishonchim komil emas. Iltimos, aniqroq ayting: "
               "mobil ilova, karta, o'tkazma, kredit yoki filial haqidami?",
+    },
+
+    # ── AI-generated fallback (outside the FAQ knowledge base) ────────────
+    # Used by node_faq when faq_lookup misses and the LLM falls back to
+    # general-knowledge banking answer. The wrapper makes it visually
+    # distinct so the user sees this is an assistant-generated answer, not
+    # something pulled from the verified FAQ.
+    "ai_answer_wrapped": {
+        "ru": "💡 <b>Ассистент</b>\n\n{body}\n\n<i>— Это общий ответ. Точные условия по продуктам Asaka Bank уточняйте у оператора.</i>",
+        "en": "💡 <b>Assistant</b>\n\n{body}\n\n<i>— This is general information. Exact terms for Asaka Bank products — please ask a live operator.</i>",
+        "uz": "💡 <b>Yordamchi</b>\n\n{body}\n\n<i>— Bu umumiy javob. Asaka Bank mahsulotlari bo'yicha aniq shartlarni operatordan tekshiring.</i>",
     },
 
     # ── clarify tool responses ────────────────────────────────────────────

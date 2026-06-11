@@ -11,7 +11,10 @@ from app.agent.i18n import (
     category_label,
     income_type_label,
 )
+from app.agent.rate_rules import has_usable_rate, needs_age, rate_bounds
 from app.utils.data_loaders import (
+    _fmt_pct_range,
+    _fmt_term_months_range,
     _load_credit_product_offers,
     _load_deposit_product_offers,
     _load_card_product_offers,
@@ -33,47 +36,64 @@ async def _get_products_by_category(category: str) -> list[dict]:
 
     if category in CREDIT_SECTION_MAP:
         section = CREDIT_SECTION_MAP[category]
-        groups: dict[str, list[dict]] = defaultdict(list)
-        for offer in await _load_credit_product_offers():
-            if offer.get("section_name") != section:
-                continue
-            name = str(offer.get("service_name") or "").strip()
-            if name:
-                groups[name].append(offer)
-
         result: list[dict] = []
-        for name, rows in groups.items():
-            first = rows[0]
-            all_min = [r["rate_min_pct"] for r in rows if r.get("rate_min_pct") is not None]
-            all_max = [r["rate_max_pct"] for r in rows if r.get("rate_max_pct") is not None]
-            g_min = min(all_min) if all_min else None
-            g_max = max(all_max) if all_max else None
+        for product in await _load_credit_product_offers():
+            if product.get("section_name") != section:
+                continue
+            name = str(product.get("service_name") or "").strip()
+            if not name:
+                continue
+            rules = product.get("rate_rules") or []
+            # A tariff is mandatory: hide products with no usable rate.
+            if not has_usable_rate(rules):
+                continue
+
+            g_min, g_max = rate_bounds(rules)
+            term_mins = [r["term_min_months"] for r in rules if r.get("term_min_months") is not None]
+            term_maxs = [r["term_max_months"] for r in rules if r.get("term_max_months") is not None]
+            dp_mins = [r["downpayment_min_pct"] for r in rules if r.get("downpayment_min_pct") is not None]
+            dp_maxs = [r["downpayment_max_pct"] for r in rules if r.get("downpayment_max_pct") is not None]
+            term_text = _fmt_term_months_range(
+                min(term_mins) if term_mins else None,
+                max(term_maxs) if term_maxs else None,
+            )
+            downpayment_text = _fmt_pct_range(
+                min(dp_mins) if dp_mins else None,
+                max(dp_maxs) if dp_maxs else None,
+                prefix="от",
+            )
+            # rate_matrix is the per-condition display list (only rules with a rate).
             rate_matrix = [
                 {
                     "income_type": r.get("income_type"),
                     "rate_min_pct": r.get("rate_min_pct"),
                     "rate_max_pct": r.get("rate_max_pct"),
-                    "rate_condition_text": r.get("rate_condition_text") or r.get("rate_text") or "",
+                    "rate_condition_text": r.get("condition_text") or "",
                     "term_min_months": r.get("term_min_months"),
                     "term_max_months": r.get("term_max_months"),
                     "downpayment_min_pct": r.get("downpayment_min_pct"),
                     "downpayment_max_pct": r.get("downpayment_max_pct"),
                 }
-                for r in rows
+                for r in rules
+                if r.get("rate_min_pct") is not None
             ]
             result.append({
+                "id": product.get("id"),
                 "name": name,
-                "name_en": first.get("service_name_en"),
-                "name_uz": first.get("service_name_uz"),
-                "rate": _fmt_rate({"rate_min_pct": g_min, "rate_max_pct": g_max, "rate_text": first.get("rate_text")}),
+                "name_en": product.get("service_name_en"),
+                "name_uz": product.get("service_name_uz"),
+                "rate": _fmt_rate({"rate_min_pct": g_min, "rate_max_pct": g_max}),
                 "rate_min_pct": g_min,
                 "rate_max_pct": g_max,
-                "term": first.get("term_text") or "",
-                "amount": first.get("amount_text") or "",
-                "downpayment": first.get("downpayment_text") or "",
-                "collateral": first.get("collateral_text") or "",
-                "purpose": first.get("purpose_text") or "",
+                "term": term_text,
+                "amount": product.get("amount_text") or "",
+                "downpayment": downpayment_text,
+                "collateral": product.get("collateral_text") or "",
+                "purpose": product.get("purpose_text") or "",
                 "rate_matrix": rate_matrix,
+                "rate_rules": rules,
+                "rate_condition_kind": product.get("rate_condition_kind"),
+                "needs_age": product.get("rate_condition_kind") == "age" or needs_age(rules),
             })
         return result
 

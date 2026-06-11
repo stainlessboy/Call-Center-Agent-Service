@@ -24,6 +24,8 @@ from app.agent.i18n import (
     get_main_menu_buttons,
     get_system_policy,
 )
+from app.agent.intent import _is_back_trigger
+from app.agent.qualify import QUALIFY_CATEGORIES
 from app.agent.llm import (
     _get_chat_openai,
     accumulate_usage,
@@ -33,7 +35,11 @@ from app.agent.llm import (
 )
 from app.agent.nodes.helpers import _finalize_turn
 from app.agent.pii_masker import mask_pii
-from app.agent.products import _find_product_by_name, _get_products_by_category
+from app.agent.products import (
+    _find_product_by_name,
+    _format_product_list_text,
+    _get_products_by_category,
+)
 from app.agent.state import BotState, _default_dialog
 from app.agent.tools import FAQ_LOW_CONFIDENCE, NO_MATCH_IN_FAQ, _FAQ_TOOLS
 from app.utils.faq_tools import _faq_lookup, get_faq_fallback
@@ -347,6 +353,20 @@ async def node_faq(state: BotState) -> dict:
     dialog = dict(state.get("dialog") or _default_dialog())
     lang = state.get("lang") or dialog.get("last_lang") or "ru"
 
+    # Deterministic "◀ All products" shortcut: after a qualify-filtered list the
+    # back button must re-show the STORED filtered list, not restart the
+    # questionnaire (a fresh get_products would otherwise re-enter FLOW_QUALIFY).
+    if (
+        _is_back_trigger(user_text)
+        and dialog.get("products")
+        and dialog.get("flow") in (FLOW_SHOW_PRODUCTS, FLOW_PRODUCT_DETAIL)
+    ):
+        products = list(dialog.get("products") or [])
+        body = _format_product_list_text(products, dialog.get("category", ""), lang)
+        new_dialog = {**dialog, "flow": FLOW_SHOW_PRODUCTS, "selected_product": None, "last_lang": lang}
+        keyboard = [p["name"] for p in products] or None
+        return _finalize_turn(state, body, new_dialog, keyboard, is_fallback=False)
+
     llm = _get_chat_openai()
 
     # Build message list for LLM.
@@ -440,9 +460,42 @@ async def node_faq(state: BotState) -> dict:
                 answer = recovered
 
         # ---------------------------------------------------------------------------
-        # Determine is_fallback based on what actually happened this turn.
+        # ENTRY into FLOW_QUALIFY: a fresh get_products(category) browse request
+        # starts the qualification questionnaire instead of listing immediately.
+        # Informational tools (select_product, faq_lookup, find_office, …) are
+        # untouched. The back-button case is handled by the shortcut at the top.
+        # ---------------------------------------------------------------------------
+        qualify_category = next(
+            (
+                (tc.get("args") or {}).get("category", "")
+                for tc in tool_calls_made
+                if tc.get("name") == "get_products"
+                and (tc.get("args") or {}).get("category", "") in QUALIFY_CATEGORIES
+            ),
+            None,
+        )
+        if qualify_category:
+            from app.agent.nodes.qualify_flow import start_qualify
+            q_answer, q_dialog, q_keyboard = await start_qualify(
+                qualify_category, user_text, lang
+            )
+            q_dialog["last_lang"] = lang
+            result = _finalize_turn(state, q_answer, q_dialog, q_keyboard, is_fallback=False)
+            if turn_usage:
+                finalize_usage(turn_usage)
+                result["token_usage"] = turn_usage
+            return result
+
+        # ---------------------------------------------------------------------------
+        # Determine is_fallback and is_ai_generated based on what happened.
+        #
+        # `is_ai_generated` flags answers produced by the LLM from general
+        # knowledge (not a FAQ hit, not a tool's pre-formatted output). We wrap
+        # those with a visible "Assistant" header + operator disclaimer so the
+        # user can tell verified FAQ content from generated content.
         # ---------------------------------------------------------------------------
         called_names = {tc.get("name") for tc in tool_calls_made}
+        is_ai_generated = False
 
         if hit_limit_with_pending_tools:
             is_fallback = True
@@ -456,13 +509,33 @@ async def node_faq(state: BotState) -> dict:
                 for msg in loop_msgs
                 if isinstance(msg, ToolMessage)
             }
-            # All faq results were sentinels → no useful answer was found.
-            is_fallback = faq_results <= {NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE}
+            all_sentinels = faq_results <= {NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE}
+            if not all_sentinels:
+                # At least one faq_lookup returned a real answer.
+                is_fallback = False
+            else:
+                # All faq results were sentinels. The LLM is now allowed (per
+                # the softened policy) to give a general banking answer. Treat
+                # as fallback ONLY if the answer reads as a give-up reply —
+                # otherwise the model produced useful content and we should NOT
+                # show the generic "I didn't understand" UI.
+                is_fallback = (
+                    not answer
+                    or answer == fallback_reply
+                    or _looks_like_giving_up(answer, lang)
+                )
+                if not is_fallback:
+                    is_ai_generated = True
         elif not tool_calls_made:
             # Free-text answer only — check if it reads as a give-up reply.
             is_fallback = _looks_like_giving_up(answer, lang)
+            if not is_fallback and answer and answer != fallback_reply:
+                is_ai_generated = True
         else:
             is_fallback = False
+
+        if is_ai_generated:
+            answer = at("ai_answer_wrapped", lang, body=answer)
 
     except (asyncio.TimeoutError, APIError, json.JSONDecodeError) as exc:
         _agent_logger.warning("node_faq LLM failed: %s", exc)

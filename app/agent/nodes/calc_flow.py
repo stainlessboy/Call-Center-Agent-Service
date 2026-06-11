@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging as _logging
+import os as _os
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -23,11 +24,18 @@ from app.agent.llm import (
 )
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.pii_masker import mask_pii
+from app.agent.rate_rules import rate_bounds, select_rate
 from app.agent.state import BotState, _default_dialog
 from app.utils.faq_tools import _faq_lookup
 from app.utils.pdf_generator import generate_amortization_pdf
 
 _agent_logger = _logging.getLogger(__name__)
+
+# Fallback rate when no rule matches and product has no aggregate rate either.
+_DEFAULT_CREDIT_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
+
+# Synthetic step key for the age collection step (credit only, needs_age products).
+STEP_AGE = "age"
 
 
 def _get_product_term_range(product: dict, category: str) -> tuple[int | None, int | None]:
@@ -86,46 +94,47 @@ def _clamp_downpayment(dp: float, product: dict) -> tuple[float, bool]:
     return dp, False
 
 
-def _lookup_credit_rate(product: dict, calc_slots: dict) -> float:
-    """Find the best matching rate from rate_matrix for user's inputs."""
-    rate_matrix = product.get("rate_matrix") or []
-    if not rate_matrix:
-        return float(product.get("rate_min_pct") or product.get("rate_pct") or 20.0)
+def _income_type_from_dialog(dialog: dict) -> str | None:
+    """Return an unambiguous income_type string from qualify answers, or None."""
+    qualify_answers = (dialog or {}).get("qualify_answers") or {}
+    income_types = qualify_answers.get("income_types") or []
+    if len(income_types) == 1:
+        return income_types[0]
+    return None
 
-    term_months = calc_slots.get("term_months")
-    downpayment = calc_slots.get("downpayment")
 
-    best_rate = None
-    best_score = -1
+def _lookup_credit_rate(product: dict, calc_slots: dict, dialog: dict) -> float:
+    """Find the best matching rate from rate_rules for the user's inputs.
 
-    for entry in rate_matrix:
-        score = 0
-        t_min = entry.get("term_min_months")
-        t_max = entry.get("term_max_months")
-        if term_months is not None and t_min is not None and t_max is not None:
-            if t_min <= term_months <= t_max:
-                score += 2
-            else:
-                continue
-        d_min = entry.get("downpayment_min_pct")
-        d_max = entry.get("downpayment_max_pct")
-        if downpayment is not None and d_min is not None:
-            if d_min <= downpayment <= (d_max or 100):
-                score += 2
-            else:
-                continue
-        rate = entry.get("rate_min_pct")
-        if rate is not None and score > best_score:
-            best_score = score
-            best_rate = rate
+    Uses the rate-rule engine (select_rate). Falls back to rate_bounds minimum,
+    then to the product aggregate rate_min_pct, then to _DEFAULT_CREDIT_RATE_PCT.
+    """
+    rules = product.get("rate_rules") or []
 
-    if best_rate is not None:
-        return float(best_rate)
+    matched_rule = select_rate(
+        rules,
+        age=calc_slots.get("age"),
+        amount=calc_slots.get("amount"),
+        term_months=calc_slots.get("term_months"),
+        downpayment_pct=calc_slots.get("downpayment"),
+        income_type=_income_type_from_dialog(dialog),
+    )
+    if matched_rule is not None:
+        rate = matched_rule.get("rate_min_pct")
+        if rate is not None:
+            return float(rate)
 
-    all_rates = [e["rate_min_pct"] for e in rate_matrix if e.get("rate_min_pct") is not None]
-    if all_rates:
-        return float(min(all_rates))
-    return float(product.get("rate_min_pct") or 20.0)
+    # Fallback 1: lowest rate across all usable rules.
+    low, _ = rate_bounds(rules)
+    if low is not None:
+        return float(low)
+
+    # Fallback 2: aggregate product rate.
+    aggregate = product.get("rate_min_pct") or product.get("rate_pct")
+    if aggregate is not None:
+        return float(aggregate)
+
+    return _DEFAULT_CREDIT_RATE_PCT
 
 
 def _lookup_deposit_rate(product: dict, calc_slots: dict) -> float:
@@ -213,7 +222,7 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
                 "product_name": selected_product.get("name"),
                 "amount": calc_slots.get("amount"),
                 "term_months": calc_slots.get("term_months"),
-                "rate_pct": _lookup_credit_rate(selected_product, calc_slots)
+                "rate_pct": _lookup_credit_rate(selected_product, calc_slots, dialog)
                 if category != "deposit"
                 else _lookup_deposit_rate(selected_product, calc_slots),
                 "name": lead_slots.get("name", ""),
@@ -300,6 +309,14 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                         adjustment_note = at("dp_adjusted", lang, user_val=f"{float(val):.0f}", new_val=f"{clamped:.0f}", d_min=f"{d_min:.0f}" if d_min else "?")
                     calc_slots["downpayment"] = clamped
                     parsed_value = True
+                elif calc_step == STEP_AGE:
+                    age_int = int(float(val))
+                    if 14 <= age_int <= 100:
+                        calc_slots["age"] = age_int
+                        parsed_value = True
+                    else:
+                        # Out-of-range age — treat as unparseable so we re-ask.
+                        parsed_value = False
             except (ValueError, TypeError):
                 _agent_logger.warning("Invalid value from extractor: step=%s val=%r", calc_step, val)
                 parsed_value = False
@@ -341,7 +358,10 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
                         except Exception as exc:
                             _agent_logger.debug("Side-question LLM failed: %s", exc)
-                current_q = next((q for k, q in calc_qs if k == calc_step), "")
+                if calc_step == STEP_AGE:
+                    current_q = at("calc_age", lang)
+                else:
+                    current_q = next((q for k, q in calc_qs if k == calc_step), "")
                 prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
                 if turn_usage:
                     finalize_usage(turn_usage)
@@ -354,6 +374,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                 STEP_AMOUNT: at("hint_amount", lang),
                 STEP_TERM: at("hint_term", lang),
                 STEP_DOWNPAYMENT: at("hint_downpayment", lang),
+                STEP_AGE: at("calc_invalid_age", lang),
             }
             if turn_usage:
                 finalize_usage(turn_usage)
@@ -393,6 +414,17 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                 result["token_usage"] = turn_usage
             return result
 
+    # Age step — credit only, products that have age-dependent rules.
+    # Injected after all calc_qs slots are collected, before the final computation.
+    if category != "deposit" and selected_product.get("needs_age") and "age" not in calc_slots:
+        new_dialog = {**dialog, "calc_step": STEP_AGE, "calc_slots": calc_slots}
+        age_q = at("calc_age", lang)
+        msg = f"{adjustment_note}\n\n{age_q}" if adjustment_note else age_q
+        result = _finalize_turn(state, msg, new_dialog)
+        if turn_usage:
+            result["token_usage"] = turn_usage
+        return result
+
     # All slots collected → generate result
     product_name = _localized_name(selected_product, lang) or selected_product.get("name") or "—"
     amount = int(calc_slots.get("amount") or 10_000_000)
@@ -430,7 +462,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         return result
 
     # Credit → PDF amortization schedule
-    rate_pct = _lookup_credit_rate(selected_product, calc_slots)
+    rate_pct = _lookup_credit_rate(selected_product, calc_slots, dialog)
     dp_pct = float(calc_slots.get("downpayment") or 0)
     dp_abs = int(amount * dp_pct / 100)
     principal = amount - dp_abs
