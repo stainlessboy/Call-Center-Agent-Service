@@ -8,6 +8,7 @@ offered there (codified from the bank's regulation — see screenshot
 """
 from __future__ import annotations
 
+import html
 from typing import List, Union
 
 from sqlalchemy import or_, select
@@ -163,7 +164,8 @@ def format_branch_card(obj: OfficeObj, lang: str = "ru") -> str:
         lines.append(f"🧭 {landmark}")
     if location_url:
         map_label = {"ru": "Карта", "uz": "Xaritada", "en": "Map"}.get(lang, "Карта")
-        lines.append(f"🗺 <a href=\"{location_url}\">{map_label}</a>")
+        safe_url = html.escape(str(location_url), quote=True)
+        lines.append(f'🗺 <a href="{safe_url}">{map_label}</a>')
     if getattr(obj, "phone", None):
         lines.append(f"📞 {obj.phone}")
     if getattr(obj, "hours", None):

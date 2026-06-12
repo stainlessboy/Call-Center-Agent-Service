@@ -15,6 +15,7 @@ from app.bot.i18n import normalize_lang, t
 from app.config import get_settings
 from app.db.models import ChatSession, Filial, Message, SalesOffice, SalesPoint, SessionStatus, User
 from app.services.agent_client import AgentClient
+from app.services.middleware_registry import get_middleware_client
 from app.agent import AgentTurnResult as _AgentTurnResult  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -187,8 +188,7 @@ class ChatService:
 
         if chat_session.human_mode:
             # Forward to Chat Middleware if available
-            from app.api.fastapi_app import app as _fastapi_app
-            middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+            middleware_client = get_middleware_client()
             if middleware_client is not None and middleware_client.has_active_chat(chat_session.id):
                 await middleware_client.send_message(chat_session.id, text)
             else:

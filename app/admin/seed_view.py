@@ -360,45 +360,6 @@ class SeedAdmin(BaseView):
 
         return results
 
-    # ── FAQ Export ────────────────────────────────────────────────────────
-
-    @expose("/seed/export-faq.xlsx", methods=["GET"])
-    async def export_faq_xlsx(self, request: Request):
-        rows = await _export_faq_rows()
-        data = await asyncio.to_thread(_build_faq_xlsx, rows)
-        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
-        return Response(
-            content=data,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    @expose("/seed/export-faq.csv", methods=["GET"])
-    async def export_faq_csv(self, request: Request):
-        rows = await _export_faq_rows()
-        data = await asyncio.to_thread(_build_faq_csv, rows)
-        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
-        return Response(
-            content=data,
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    @expose("/seed/export-faq.json", methods=["GET"])
-    async def export_faq_json(self, request: Request):
-        rows = await _export_faq_rows()
-        payload = {
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-            "count": len(rows),
-            "items": rows,
-        }
-        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
-        return Response(
-            content=json.dumps(payload, ensure_ascii=False, indent=2),
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
     # ── FAQ ───────────────────────────────────────────────────────────────
 
     async def _seed_faq(self, form: Any) -> list[dict]:
@@ -526,3 +487,56 @@ class SeedAdmin(BaseView):
                 })
 
         return results
+
+
+class FaqExportAdmin(BaseView):
+    """FAQ export download endpoints, hidden from the admin menu.
+
+    Kept in a separate BaseView on purpose: sqladmin overwrites `view.identity`
+    with every @expose-d method (alphabetically first one wins) and builds the
+    menu link from it — extra routes on SeedAdmin would turn the «Импорт
+    данных» menu item into a file download.
+    """
+
+    name = "FAQ Export"
+    icon = "fa-solid fa-file-export"
+
+    def is_visible(self, request: Request) -> bool:
+        return False
+
+    @expose("/seed/export-faq.xlsx", methods=["GET"])
+    async def export_faq_xlsx(self, request: Request):
+        rows = await _export_faq_rows()
+        data = await asyncio.to_thread(_build_faq_xlsx, rows)
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @expose("/seed/export-faq.csv", methods=["GET"])
+    async def export_faq_csv(self, request: Request):
+        rows = await _export_faq_rows()
+        data = await asyncio.to_thread(_build_faq_csv, rows)
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            content=data,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @expose("/seed/export-faq.json", methods=["GET"])
+    async def export_faq_json(self, request: Request):
+        rows = await _export_faq_rows()
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(rows),
+            "items": rows,
+        }
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )

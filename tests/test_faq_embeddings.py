@@ -77,122 +77,136 @@ class TestEmbedOneSync:
         get_settings.cache_clear()
 
 
-# ── _faq_lookup_with_score (hybrid) ───────────────────────────────────────
+# ── _faq_similarity: containment is scaled, not absolute ──────────────────
+
+class TestFaqSimilarityContainment:
+    def test_identical_text_is_perfect(self):
+        from app.utils.faq_tools import _faq_similarity
+        assert _faq_similarity("как заблокировать карту", "Как заблокировать карту?") == 1.0
+
+    def test_short_substring_is_not_perfect(self):
+        """A one-word query inside a long FAQ question must NOT score 1.0 —
+        the old flat rule made it a STRICT hit on the first matching row."""
+        from app.utils.faq_tools import _faq_similarity
+        score = _faq_similarity("кредит", "как досрочно погасить кредит в приложении банка")
+        assert score < 0.75  # below lex strict
+
+
+# ── faq_search (hybrid) ───────────────────────────────────────────────────
 
 class TestHybridLookup:
     def test_falls_back_to_lex_when_sem_unavailable(self, monkeypatch):
-        """Without an API key the semantic leg returns (None, 0.0); only lex contributes."""
+        """Without an API key the semantic leg returns []; only lex contributes."""
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         from app.config import get_settings
         get_settings.cache_clear()
 
-        from app.utils.faq_tools import _faq_lookup_with_score
+        from app.utils.faq_tools import faq_search
         with patch(
             "app.utils.faq_tools._load_faq_items",
             new=AsyncMock(return_value=[
                 {"q": "как заблокировать карту", "a": "Зайдите в приложение"}
             ]),
         ):
-            answer, score = _run(_faq_lookup_with_score("как заблокировать карту", "ru"))
+            result = _run(faq_search("как заблокировать карту", "ru"))
 
-        assert answer == "Зайдите в приложение"
-        assert score >= 0.99  # exact substring match → lex returns 1.0
+        assert result.answer == "Зайдите в приложение"
+        assert result.tier == "strict"  # exact match → lex 1.0 ≥ lex strict
         get_settings.cache_clear()
 
-    def test_picks_higher_of_two_legs(self, monkeypatch):
-        """When both legs return answers, the one with higher score wins."""
+    def test_sem_wins_tier_tie(self, monkeypatch):
+        """On equal tiers the semantic answer is preferred."""
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
 
-        from app.utils.faq_tools import _faq_lookup_with_score
+        from app.utils.faq_tools import FaqCandidate, faq_search
         with patch(
             "app.utils.faq_tools._lexical_lookup",
-            new=AsyncMock(return_value=("lex answer", 0.40)),
+            new=AsyncMock(return_value=("lex answer", 0.80)),  # lex strict (≥0.75)
         ), patch(
             "app.utils.faq_tools._semantic_lookup",
-            new=AsyncMock(return_value=("sem answer", 0.85)),
+            new=AsyncMock(return_value=[FaqCandidate("q", "sem answer", 0.85)]),  # sem strict (≥0.60)
         ):
-            answer, score = _run(_faq_lookup_with_score("hello", "ru"))
+            result = _run(faq_search("hello", "ru"))
 
-        assert answer == "sem answer"
-        assert score == pytest.approx(0.85)
+        assert result.answer == "sem answer"
+        assert result.tier == "strict"
         get_settings.cache_clear()
 
-    def test_lex_wins_when_higher(self, monkeypatch):
-        # When lex strictly beats sem AND sem produced a competing candidate,
-        # the returned score is shifted down by FAQ_LEX_WIN_PENALTY (0.10 by
-        # default). Lex-only wins are prone to false positives on short
-        # canonical FAQ entries, so we demand more headroom for STRICT.
+    def test_per_leg_thresholds(self, monkeypatch):
+        """sem 0.55 is only LOW (<0.60), while lex 0.80 is STRICT (≥0.75) — lex
+        wins despite the lower raw number: the legs are on different scales."""
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
 
-        from app.utils.faq_tools import _faq_lookup_with_score
+        from app.utils.faq_tools import FaqCandidate, faq_search
         with patch(
             "app.utils.faq_tools._lexical_lookup",
-            new=AsyncMock(return_value=("lex answer", 0.95)),
+            new=AsyncMock(return_value=("lex answer", 0.80)),
         ), patch(
             "app.utils.faq_tools._semantic_lookup",
-            new=AsyncMock(return_value=("sem answer", 0.60)),
+            new=AsyncMock(return_value=[FaqCandidate("q", "sem answer", 0.55)]),
         ):
-            answer, score = _run(_faq_lookup_with_score("hello", "ru"))
+            result = _run(faq_search("hello", "ru"))
 
-        assert answer == "lex answer"
-        assert score == pytest.approx(0.85)  # 0.95 - 0.10 penalty
+        assert result.answer == "lex answer"
+        assert result.tier == "strict"
         get_settings.cache_clear()
 
-    def test_lex_win_penalty_skipped_when_sem_unavailable(self, monkeypatch):
-        # If the semantic leg returns no candidate (None), the penalty must
-        # NOT apply — otherwise the no-API-key fallback would be broken.
+    def test_mid_sem_score_is_low_tier_with_candidates(self, monkeypatch):
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
 
-        from app.utils.faq_tools import _faq_lookup_with_score
+        from app.utils.faq_tools import FaqCandidate, faq_search
+        candidates = [
+            FaqCandidate("q1", "a1", 0.50),
+            FaqCandidate("q2", "a2", 0.47),
+        ]
         with patch(
             "app.utils.faq_tools._lexical_lookup",
-            new=AsyncMock(return_value=("lex answer", 0.95)),
-        ), patch(
-            "app.utils.faq_tools._semantic_lookup",
             new=AsyncMock(return_value=(None, 0.0)),
+        ), patch(
+            "app.utils.faq_tools._semantic_lookup",
+            new=AsyncMock(return_value=candidates),
         ):
-            answer, score = _run(_faq_lookup_with_score("hello", "ru"))
+            result = _run(faq_search("hello", "ru"))
 
-        assert answer == "lex answer"
-        assert score == pytest.approx(0.95)  # unpenalized — sem didn't compete
+        assert result.tier == "low"
+        assert result.answer == "a1"
+        assert result.candidates == candidates
         get_settings.cache_clear()
 
     def test_no_items_returns_none(self, monkeypatch):
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "false")
         from app.config import get_settings
         get_settings.cache_clear()
-        from app.utils.faq_tools import _faq_lookup_with_score
+        from app.utils.faq_tools import faq_search
         with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[])):
-            answer, score = _run(_faq_lookup_with_score("anything", "ru"))
-        assert answer is None
-        assert score == 0.0
+            result = _run(faq_search("anything", "ru"))
+        assert result.answer is None
+        assert result.tier == "none"
         get_settings.cache_clear()
 
 
 # ── _semantic_lookup short-circuits ───────────────────────────────────────
 
 class TestSemanticLookupGuards:
-    def test_returns_zero_when_disabled(self, monkeypatch):
+    def test_returns_empty_when_disabled(self, monkeypatch):
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "false")
         from app.config import get_settings
         get_settings.cache_clear()
         from app.utils.faq_tools import _semantic_lookup
-        answer, score = _run(_semantic_lookup("hello", "ru"))
-        assert answer is None
-        assert score == 0.0
+        assert _run(_semantic_lookup("hello", "ru")) == []
         get_settings.cache_clear()
 
-    def test_returns_zero_when_embed_fails(self, monkeypatch):
+    def test_returns_empty_when_embed_fails(self, monkeypatch):
         monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
@@ -202,9 +216,7 @@ class TestSemanticLookupGuards:
             "app.utils.embeddings.embed_texts",
             new=AsyncMock(return_value=[None]),
         ):
-            answer, score = _run(_semantic_lookup("hello", "ru"))
-        assert answer is None
-        assert score == 0.0
+            assert _run(_semantic_lookup("hello", "ru")) == []
         get_settings.cache_clear()
 
 

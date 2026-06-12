@@ -314,7 +314,7 @@ async def extract_prefill_from_history(
         role = getattr(msg, "type", None) or getattr(msg, "role", "unknown")
         content = str(getattr(msg, "content", "") or "").strip()
         if content:
-            history_lines.append(f"{role}: {content}")
+            history_lines.append(f"{role}: {mask_pii(content)}")
 
     if not history_lines:
         return {}

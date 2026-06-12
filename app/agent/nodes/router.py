@@ -31,7 +31,7 @@ async def node_router(state: BotState) -> Command:
     user_text = (state.get("last_user_text") or "").strip()
     if _is_calc_trigger(user_text) and dialog.get("flow") == FLOW_PRODUCT_DETAIL:
         category = dialog.get("category", "")
-        calc_qs = get_calc_questions(category, state.get("_lang", "ru"))
+        calc_qs = get_calc_questions(category, state.get("lang", "ru"))
         if calc_qs:
             first_step, _ = calc_qs[0]
             selected_product = dialog.get("selected_product")

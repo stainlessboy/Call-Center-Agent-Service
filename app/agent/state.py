@@ -51,3 +51,25 @@ def _default_dialog() -> dict:
         "selected_office": None,
         "office_type": None,
     }
+
+
+# Keys that survive a dialog reset — they are session-scoped flags that must
+# not be wiped when the LLM transitions between product/office browsing flows.
+_STICKY_DIALOG_KEYS = ("lang_switch_offered",)
+
+
+def _reset_dialog(current: dict, **overrides) -> dict:
+    """Return a fresh default dialog, preserving sticky per-session keys from `current`.
+
+    Use this instead of bare ``{**_default_dialog(), ...}`` whenever the dialog
+    is being reset mid-session (e.g. after find_office / get_products) so that
+    flags like ``lang_switch_offered`` are not accidentally cleared.
+
+    Keyword arguments are merged last, identical to ``{**_default_dialog(), **overrides}``.
+    """
+    base = _default_dialog()
+    for key in _STICKY_DIALOG_KEYS:
+        if key in current:
+            base[key] = current[key]
+    base.update(overrides)
+    return base

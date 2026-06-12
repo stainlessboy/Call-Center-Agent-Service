@@ -40,7 +40,10 @@ class Agent:
             snapshot = await self._graph.aget_state(config)
             return dict(snapshot.values or {})
         except Exception as exc:
-            _agent_logger.debug("Failed to load existing state: %s", exc)
+            session_id = (config.get("configurable") or {}).get("thread_id", "unknown")
+            _agent_logger.warning(
+                "Failed to load existing state for session %s: %s", session_id, exc
+            )
             return {}
 
     async def _ainvoke(

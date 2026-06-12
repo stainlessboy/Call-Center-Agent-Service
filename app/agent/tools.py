@@ -16,7 +16,7 @@ from app.agent.products import (
     _format_product_list_text,
     _get_products_by_category,
 )
-from app.utils.faq_tools import _faq_lookup_with_score
+from app.utils.faq_tools import faq_search
 
 # All supported product categories, ordered from most common to least.
 # Used in the 3-tier fallback search in select_product.
@@ -37,16 +37,19 @@ import os as _os
 _DEFAULT_CUSTOM_LOAN_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
 
 # Sentinels returned by faq_lookup — explicit strings so the LLM can detect
-# and handle each case without hallucinating an answer.
+# and handle each case without hallucinating an answer. Thresholds and tier
+# logic live in app/utils/faq_tools.py (FAQ_SEM_*/FAQ_LEX_* env vars).
 NO_MATCH_IN_FAQ = "NO_MATCH_IN_FAQ"
-# Returned when the best FAQ match score is between LOW and STRICT thresholds.
-# The LLM should call clarify() to disambiguate before answering.
+# Returned (as a prefix, possibly followed by candidate questions) when the
+# best FAQ match is plausible but not confident.
 FAQ_LOW_CONFIDENCE = "FAQ_LOW_CONFIDENCE"
 
-# Tri-tier FAQ similarity thresholds (overridable via env).
-import os as _os_thresh
-_FAQ_STRICT_THRESHOLD: float = float(_os_thresh.getenv("FAQ_STRICT_THRESHOLD", "0.42"))
-_FAQ_LOW_CONFIDENCE_THRESHOLD: float = float(_os_thresh.getenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45"))
+
+def is_faq_sentinel(content: str | None) -> bool:
+    """True when a tool output is a faq_lookup sentinel (possibly with an
+    appended candidate list) rather than a user-facing answer."""
+    t = (content or "").strip()
+    return t.startswith(NO_MATCH_IN_FAQ) or t.startswith(FAQ_LOW_CONFIDENCE)
 
 
 def _lang_from_state(state: dict | None) -> str:
@@ -425,8 +428,11 @@ async def faq_lookup(
 
     RETURNS one of these values:
     - Answer text if the match is confident — pass it to the user.
-    - The literal string "FAQ_LOW_CONFIDENCE" or "NO_MATCH_IN_FAQ" if nothing
-      confident was found. In BOTH cases:
+    - "FAQ_LOW_CONFIDENCE" followed by a numbered list of the closest FAQ
+      questions. If ONE of them clearly asks the same thing as the user, call
+      faq_lookup again with that exact question text to fetch its answer. If
+      none of them matches, treat this as NO_MATCH_IN_FAQ (below).
+    - "NO_MATCH_IN_FAQ" if nothing relevant was found. In that case:
       * If the question is GENERAL banking knowledge (what is annuity, a
         downpayment, how escrow works, what is APR, the typical flow of taking
         a loan, common banking terms / definitions) — answer it yourself,
@@ -441,13 +447,22 @@ async def faq_lookup(
         request_operator only if the user explicitly asks for a human.
     """
     lang = _lang_from_state(state)
-    answer, score = await _faq_lookup_with_score(query, lang)
-    print('__query__',query)
-    print('__score__',score)
-    print('__answer__',answer)
-    if score >= _FAQ_STRICT_THRESHOLD:
-        return answer or NO_MATCH_IN_FAQ
-    if score >= _FAQ_LOW_CONFIDENCE_THRESHOLD:
+    result = await faq_search(query, lang)
+    if result.tier == "strict":
+        return result.answer or NO_MATCH_IN_FAQ
+    if result.tier == "low" and result.candidates:
+        lines = [
+            FAQ_LOW_CONFIDENCE,
+            "No confident match. Closest FAQ questions:",
+        ]
+        lines += [f"{i}. {c.question}" for i, c in enumerate(result.candidates, 1) if c.question]
+        lines.append(
+            "If one of these clearly asks the same thing as the user, call "
+            "faq_lookup again with that exact question text. Otherwise treat "
+            "this as NO_MATCH_IN_FAQ."
+        )
+        return "\n".join(lines)
+    if result.tier == "low":
         return FAQ_LOW_CONFIDENCE
     return NO_MATCH_IN_FAQ
 

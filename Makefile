@@ -22,7 +22,7 @@ help:
 	@echo "    make prod-restart  Restart api, reload nginx"
 	@echo "    make prod-status   Show container statuses"
 	@echo "    make prod-migrate  Run alembic upgrade head"
-	@echo "    make prod-seed     Load seed data (products, FAQ)"
+	@echo "    make prod-seed     How to load seed data (admin form)"
 	@echo "    make prod-shell    Open bash in api container"
 	@echo "    make prod-down     Stop all prod containers"
 	@echo "    make prod-renew-ssl  Renew SSL certificate"
@@ -37,7 +37,7 @@ dev-down:
 	$(COMPOSE_DEV) down
 
 test:
-	python3 -m pytest tests/test_agent.py -v
+	python3 -m pytest tests/ -v
 
 migrate:
 	alembic upgrade head
@@ -68,11 +68,9 @@ prod-status:
 prod-migrate:
 	$(COMPOSE_PROD) exec -T api alembic upgrade head
 
+# CLI seed scripts were removed — the /admin/seed form is the only entry point.
 prod-seed:
-	$(COMPOSE_PROD) exec -T api python scripts/seed_credit_product_offers.py --replace
-	$(COMPOSE_PROD) exec -T api python scripts/seed_deposit_product_offers.py --replace
-	$(COMPOSE_PROD) exec -T api python scripts/seed_card_product_offers.py --replace
-	$(COMPOSE_PROD) exec -T api python scripts/import_faq_xlsx.py "scripts/FAQ.xlsx" --replace
+	@echo "Seed data is loaded via the admin panel: open https://<host>/admin/seed and upload the xlsx files."
 
 prod-shell:
 	$(COMPOSE_PROD) exec api bash

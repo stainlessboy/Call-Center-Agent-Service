@@ -10,7 +10,7 @@ from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import at
 from app.agent.intent import _is_operator_request
 from app.agent.pii_masker import mask_pii
-from app.agent.state import BotState
+from app.agent.state import BotState, _STICKY_DIALOG_KEYS
 
 _logger = _logging.getLogger(__name__)
 
@@ -65,6 +65,12 @@ def _finalize_turn(
         or dialog.get("operator_requested", False)
     )
     dialog = {**dialog, "fallback_streak": streak, "operator_requested": False}
+    # Sticky session flags must survive dialog resets regardless of which node
+    # rebuilt the dialog (qualify/calc helpers construct it from scratch).
+    prior_dialog = state.get("dialog") or {}
+    for _key in _STICKY_DIALOG_KEYS:
+        if _key not in dialog and _key in prior_dialog:
+            dialog[_key] = prior_dialog[_key]
 
     return {
         "messages": msgs,

@@ -17,13 +17,16 @@ def main() -> None:
 
     host = (os.getenv("APP_HOST") or "0.0.0.0").strip()
     port = int((os.getenv("APP_PORT") or "8001").strip())
+    # Only trust X-Forwarded-* headers from the reverse proxy; "*" would let
+    # any client spoof its source IP.
+    forwarded_allow_ips = (os.getenv("FORWARDED_ALLOW_IPS") or "127.0.0.1").strip()
     uvicorn.run(
         "app.api.fastapi_app:app",
         host=host,
         port=port,
         log_level=settings.log_level.lower(),
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        forwarded_allow_ips=forwarded_allow_ips,
     )
 
 

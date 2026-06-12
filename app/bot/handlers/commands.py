@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -67,6 +68,7 @@ from app.bot.links import (
 )
 from app.config import get_settings
 from app.services.chat_service import ChatService
+from app.services.middleware_registry import get_middleware_client
 
 router = Router()
 TELEGRAM_SAFE_CHUNK = 3800
@@ -520,8 +522,7 @@ async def handle_media(message: Message, chat_service: ChatService) -> None:
         await message.answer(t("agent_unavailable", lang))
         return
 
-    from app.api.fastapi_app import app as _fastapi_app
-    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+    middleware_client = get_middleware_client()
     if middleware_client is None or not middleware_client.has_active_chat(chat_session.id):
         await message.answer(t("connection_lost", lang))
         return
@@ -531,60 +532,55 @@ async def handle_media(message: Message, chat_service: ChatService) -> None:
         await message.answer(t("message_send_failed", lang))
         return
 
-    file_path: str | None = None
     try:
-        if message.photo:
-            ph = message.photo[-1]
-            file_path = f"/tmp/{ph.file_id}.jpg"
-            await message.bot.download(ph, file_path)
-        elif message.video:
-            file_path = f"/tmp/{message.video.file_id}.mp4"
-            await message.bot.download(message.video, file_path)
-        elif message.audio:
-            file_path = f"/tmp/{message.audio.file_id}.mp3"
-            await message.bot.download(message.audio, file_path)
-        elif message.voice:
-            file_path = f"/tmp/{message.voice.file_id}.mp3"
-            await message.bot.download(message.voice, file_path)
-        elif message.document:
-            ext = os.path.splitext(message.document.file_name or "")[1] or ".bin"
-            file_path = f"/tmp/{message.document.file_id}{ext}"
-            await message.bot.download(message.document, file_path)
+        with tempfile.TemporaryDirectory(prefix="tg-media-") as tmp_dir:
+            file_path: str | None = None
+            if message.photo:
+                ph = message.photo[-1]
+                file_path = os.path.join(tmp_dir, f"{ph.file_id}.jpg")
+                await message.bot.download(ph, file_path)
+            elif message.video:
+                file_path = os.path.join(tmp_dir, f"{message.video.file_id}.mp4")
+                await message.bot.download(message.video, file_path)
+            elif message.audio:
+                file_path = os.path.join(tmp_dir, f"{message.audio.file_id}.mp3")
+                await message.bot.download(message.audio, file_path)
+            elif message.voice:
+                file_path = os.path.join(tmp_dir, f"{message.voice.file_id}.mp3")
+                await message.bot.download(message.voice, file_path)
+            elif message.document:
+                ext = os.path.splitext(message.document.file_name or "")[1] or ".bin"
+                file_path = os.path.join(tmp_dir, f"{message.document.file_id}{ext}")
+                await message.bot.download(message.document, file_path)
 
-        if not file_path:
-            return
+            if not file_path:
+                return
 
-        from app.services.middleware_files import upload_file_to_minio
+            from app.services.middleware_files import upload_file_to_minio
 
-        minio_path = await upload_file_to_minio(
-            file_path,
-            base_url=settings.minio_base_url,
-            username=settings.minio_username,
-            password=settings.minio_password,
-            verify_ssl=settings.middleware_verify_ssl,
-        )
-        if not minio_path:
-            await message.answer(t("message_send_failed", lang))
-            return
-
-        ok = await middleware_client.send_message(chat_session.id, minio_path)
-        if not ok:
-            await message.answer(t("message_send_failed", lang))
-        else:
-            await chat_service._save_message(
-                session_id=chat_session.id,
-                role="user",
-                text=f"[file] {minio_path}",
-                telegram_message_id=message.message_id,
+            minio_path = await upload_file_to_minio(
+                file_path,
+                base_url=settings.minio_base_url,
+                username=settings.minio_username,
+                password=settings.minio_password,
+                verify_ssl=settings.middleware_verify_ssl,
             )
+            if not minio_path:
+                await message.answer(t("message_send_failed", lang))
+                return
+
+            ok = await middleware_client.send_message(chat_session.id, minio_path)
+            if not ok:
+                await message.answer(t("message_send_failed", lang))
+            else:
+                await chat_service._save_message(
+                    session_id=chat_session.id,
+                    role="user",
+                    text=f"[file] {minio_path}",
+                    telegram_message_id=message.message_id,
+                )
     except Exception:
         await message.answer(t("message_send_failed", lang))
-    finally:
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except OSError:
-                pass
 
 
 async def _show_cbu_rates(message: Message, lang: str, texts: dict[str, str]) -> None:
@@ -1131,8 +1127,7 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
         return
 
     # Chat Middleware
-    from app.api.fastapi_app import app as _fastapi_app
-    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+    middleware_client = get_middleware_client()
 
     if middleware_client is None:
         # Middleware not configured — tell user operators are unavailable
@@ -1190,8 +1185,7 @@ async def disable_human_mode(callback: CallbackQuery, chat_service: ChatService)
         )
         return
     # End middleware chat if active
-    from app.api.fastapi_app import app as _fastapi_app
-    middleware_client = getattr(getattr(_fastapi_app, "state", None), "middleware_client", None)
+    middleware_client = get_middleware_client()
     if middleware_client is not None:
         await middleware_client.end_chat(session_id)
 

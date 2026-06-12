@@ -50,6 +50,8 @@ class Settings:
     faq_embedding_dim: int
     faq_sem_strict_threshold: float
     faq_sem_low_threshold: float
+    faq_lex_strict_threshold: float
+    faq_lex_low_threshold: float
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -132,6 +134,8 @@ def get_settings() -> Settings:
         faq_embedding_enabled=_parse_bool(os.getenv("FAQ_EMBEDDING_ENABLED"), default=True),
         faq_embedding_model=(os.getenv("FAQ_EMBEDDING_MODEL") or "text-embedding-3-small").strip(),
         faq_embedding_dim=_parse_positive_int(os.getenv("FAQ_EMBEDDING_DIM"), default=1536),
-        faq_sem_strict_threshold=_parse_float(os.getenv("FAQ_SEM_STRICT_THRESHOLD"), default=0.70),
-        faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.50),
+        faq_sem_strict_threshold=_parse_float(os.getenv("FAQ_SEM_STRICT_THRESHOLD"), default=0.60),
+        faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.45),
+        faq_lex_strict_threshold=_parse_float(os.getenv("FAQ_LEX_STRICT_THRESHOLD"), default=0.75),
+        faq_lex_low_threshold=_parse_float(os.getenv("FAQ_LEX_LOW_THRESHOLD"), default=0.55),
     )

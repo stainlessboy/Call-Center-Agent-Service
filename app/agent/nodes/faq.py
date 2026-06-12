@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging as _logging
 import os
@@ -40,11 +39,15 @@ from app.agent.products import (
     _format_product_list_text,
     _get_products_by_category,
 )
-from app.agent.state import BotState, _default_dialog
-from app.agent.tools import FAQ_LOW_CONFIDENCE, NO_MATCH_IN_FAQ, _FAQ_TOOLS
+from app.agent.state import BotState, _default_dialog, _reset_dialog
+from app.agent.tools import _FAQ_TOOLS, is_faq_sentinel
 from app.utils.faq_tools import _faq_lookup, get_faq_fallback
 
 _agent_logger = _logging.getLogger(__name__)
+
+# Instantiated once at module load — ToolNode is stateless and safe to reuse
+# across turns, avoiding repeated construction inside the per-turn tool loop.
+_FAQ_TOOL_NODE = ToolNode(_FAQ_TOOLS)
 
 
 def _normalize_user_text(text: str) -> str:
@@ -186,16 +189,16 @@ async def _update_dialog_from_tools(
                     return val
             return getattr(obj, "name_ru", None) or ""
 
-        new_dialog = {
-            **_default_dialog(),
-            "flow": FLOW_SHOW_OFFICES,
-            "office_type": office_type,
-            "offices": [
+        new_dialog = _reset_dialog(
+            dialog,
+            flow=FLOW_SHOW_OFFICES,
+            office_type=office_type,
+            offices=[
                 {"name": _office_name(o, lang), "office_type": o.OFFICE_TYPE_CODE, "id": o.id}
                 for o in offices
             ],
-            "last_lang": lang,
-        }
+            last_lang=lang,
+        )
         keyboard = [item["name"] for item in new_dialog["offices"]] or None
         return new_dialog, keyboard
 
@@ -221,7 +224,7 @@ async def _update_dialog_from_tools(
         return new_dialog, None
 
     if name == "get_office_types_info":
-        return {**_default_dialog(), "last_lang": lang}, None
+        return _reset_dialog(dialog, last_lang=lang), None
 
     if name == "get_currency_info":
         return dict(dialog), None
@@ -232,12 +235,12 @@ async def _update_dialog_from_tools(
     if name == "get_products":
         category = args.get("category", "")
         products = await _get_products_by_category(category)
-        new_dialog = {
-            **_default_dialog(),
-            "flow": FLOW_SHOW_PRODUCTS,
-            "category": category,
-            "products": products,
-        }
+        new_dialog = _reset_dialog(
+            dialog,
+            flow=FLOW_SHOW_PRODUCTS,
+            category=category,
+            products=products,
+        )
         return new_dialog, [p["name"] for p in products] if products else None
 
     if name == "select_product":
@@ -245,8 +248,10 @@ async def _update_dialog_from_tools(
         products = list(dialog.get("products") or [])
         category = dialog.get("category", "")
         matched = _find_product_by_name(product_name, products)
-        if not matched and products:
-            matched = products[0]
+        if not matched:
+            # Tool already returned a "not found" user-facing message.
+            # Do not switch flow or clobber selected_product with a wrong product.
+            return _reattach_keyboard(dialog, lang)
         new_dialog = {**dialog, "flow": FLOW_PRODUCT_DETAIL, "selected_product": matched}
         if category in ("debit_card", "fx_card"):
             return new_dialog, [at("btn_submit_app", lang), at("btn_all_products", lang)]
@@ -256,7 +261,7 @@ async def _update_dialog_from_tools(
         category = dialog.get("category", "")
         calc_qs = get_calc_questions(category, lang)
         if not calc_qs:
-            return _default_dialog(), None
+            return _reset_dialog(dialog), None
         first_step, _ = calc_qs[0]
         # Defensive: if selected_product was lost (e.g. LLM gave a text reply before
         # calling start_calculator), pick the first product from the dialog products list.
@@ -330,7 +335,7 @@ def _last_useful_tool_output(loop_msgs: list) -> Optional[str]:
     for msg in reversed(loop_msgs):
         if isinstance(msg, ToolMessage):
             content = (str(msg.content or "")).strip()
-            if content and content not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE):
+            if content and not is_faq_sentinel(content):
                 return content
             # The last tool result was a sentinel — nothing useful to recover.
             return None
@@ -423,8 +428,7 @@ async def node_faq(state: BotState) -> dict:
                 break
 
             tool_calls_made.extend(tool_calls)
-            tool_node = ToolNode(_FAQ_TOOLS)
-            tool_results = await tool_node.ainvoke({"messages": loop_msgs, "dialog": dialog})
+            tool_results = await _FAQ_TOOL_NODE.ainvoke({"messages": loop_msgs, "dialog": dialog})
             new_tool_msgs = tool_results.get("messages", [])
             loop_msgs.extend(new_tool_msgs)
 
@@ -436,7 +440,7 @@ async def node_faq(state: BotState) -> dict:
             # LLM should chain to clarify/request_operator, so keep looping.
             if new_tool_msgs:
                 last_content = str(getattr(new_tool_msgs[-1], "content", "") or "").strip()
-                if last_content and last_content not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE):
+                if last_content and not is_faq_sentinel(last_content):
                     answer = last_content
                     break
 
@@ -506,7 +510,7 @@ async def node_faq(state: BotState) -> dict:
                 for msg in loop_msgs
                 if isinstance(msg, ToolMessage)
             }
-            all_sentinels = faq_results <= {NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE}
+            all_sentinels = all(is_faq_sentinel(r) for r in faq_results)
             if not all_sentinels:
                 # At least one faq_lookup returned a real answer.
                 is_fallback = False
@@ -534,7 +538,13 @@ async def node_faq(state: BotState) -> dict:
         if is_ai_generated:
             answer = at("ai_answer_wrapped", lang, body=answer)
 
-    except (asyncio.TimeoutError, APIError, json.JSONDecodeError) as exc:
+    except (APIError, json.JSONDecodeError) as exc:
+        # APIError covers all openai network/timeout/status errors:
+        #   APIConnectionError (incl. APITimeoutError) — transport-level failures
+        #   APIStatusError (incl. RateLimitError, InternalServerError) — 4xx/5xx
+        # json.JSONDecodeError covers malformed LLM response parsing.
+        # asyncio.TimeoutError is NOT raised here because no asyncio.wait_for
+        # wraps the loop; openai's own timeout raises APITimeoutError instead.
         _agent_logger.warning("node_faq LLM failed: %s", exc)
         # Fall through to FAQ lookup fallback
         faq_ans = await _faq_lookup(user_text, lang)

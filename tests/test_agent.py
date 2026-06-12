@@ -2164,22 +2164,24 @@ class TestCustomLoanCalculatorNoRate:
 
 # ---- faq_lookup NO_MATCH_IN_FAQ marker -----------------------------------
 
-class TestFaqLookupNoMatch:
-    def test_returns_marker_when_score_zero(self):
-        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.0))):
-            result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
-        assert result == NO_MATCH_IN_FAQ
+def _faq_result(answer=None, tier="none", candidates=()):
+    from app.utils.faq_tools import FaqSearch
+    return FaqSearch(answer=answer, tier=tier, candidates=list(candidates))
 
-    def test_returns_marker_when_score_below_low_threshold(self):
+
+class TestFaqLookupNoMatch:
+    def test_returns_marker_when_tier_none(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.30))):
+        with patch("app.agent.tools.faq_search", new=AsyncMock(return_value=_faq_result())):
             result = _run(faq_lookup.coroutine(query="anything", state={"lang": "ru"}))
         assert result == NO_MATCH_IN_FAQ
 
     def test_returns_answer_when_found(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Use the app menu", 0.9))):
+        with patch(
+            "app.agent.tools.faq_search",
+            new=AsyncMock(return_value=_faq_result("Use the app menu", "strict")),
+        ):
             result = _run(faq_lookup.coroutine(query="blocking card", state={"lang": "en"}))
         assert result == "Use the app menu"
         assert result != NO_MATCH_IN_FAQ
@@ -2199,67 +2201,89 @@ class TestFaqLookupNoMatch:
 # tool is re-enabled, restore them from git history.
 
 
-# ---- Task 2: _faq_lookup_with_score --------------------------------------
+# ---- Task 2: faq_search hybrid -------------------------------------------
 
-class TestFaqLookupWithScore:
-    def test_returns_tuple_with_score_between_0_and_1(self):
-        from app.utils.faq_tools import _faq_lookup_with_score
+class TestFaqSearchBasics:
+    def test_exact_lexical_match_is_strict(self):
+        from app.utils.faq_tools import faq_search
         with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[
             {"q": "как заблокировать карту", "a": "Через приложение"}
-        ])):
-            answer, score = _run(_faq_lookup_with_score("как заблокировать карту", "ru"))
-        assert 0.0 <= score <= 1.0
+        ])), patch("app.utils.faq_tools._semantic_lookup", new=AsyncMock(return_value=[])):
+            result = _run(faq_search("как заблокировать карту", "ru"))
+        assert result.tier == "strict"
+        assert result.answer == "Через приложение"
+        assert 0.0 <= result.lex_score <= 1.0
 
-    def test_returns_none_answer_when_no_items(self):
-        from app.utils.faq_tools import _faq_lookup_with_score
-        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[])):
-            answer, score = _run(_faq_lookup_with_score("anything", "ru"))
-        assert answer is None
-        assert score == 0.0
+    def test_no_items_returns_none_tier(self):
+        from app.utils.faq_tools import faq_search
+        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[])), \
+             patch("app.utils.faq_tools._semantic_lookup", new=AsyncMock(return_value=[])):
+            result = _run(faq_search("anything", "ru"))
+        assert result.answer is None
+        assert result.tier == "none"
 
 
 # ---- Task 2: faq_lookup tri-tier dispatch --------------------------------
 
 class TestFaqLookupTriTier:
-    def test_zero_score_returns_no_match(self):
+    def test_none_tier_returns_no_match(self):
         from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=(None, 0.0))):
+        with patch("app.agent.tools.faq_search", new=AsyncMock(return_value=_faq_result())):
             result = _run(faq_lookup.coroutine(query="???", state={"lang": "ru"}))
         assert result == NO_MATCH_IN_FAQ
 
-    @pytest.mark.xfail(
-        reason="Pre-existing bug: default FAQ_STRICT_THRESHOLD (0.42) < "
-        "FAQ_LOW_CONFIDENCE_THRESHOLD (0.45), so the mid tier is unreachable "
-        "with default env. Tracked separately; thresholds untouched in the "
-        "clarify-removal change.",
-        strict=False,
-    )
-    def test_mid_score_returns_low_confidence(self):
+    def test_low_tier_returns_low_confidence_with_candidates(self):
+        from app.agent.tools import faq_lookup, FAQ_LOW_CONFIDENCE, is_faq_sentinel
+        from app.utils.faq_tools import FaqCandidate
+        candidates = [
+            FaqCandidate("Как заблокировать карту?", "Через приложение", 0.50),
+            FaqCandidate("Как разблокировать карту?", "В офисе банка", 0.48),
+        ]
+        with patch(
+            "app.agent.tools.faq_search",
+            new=AsyncMock(return_value=_faq_result("Через приложение", "low", candidates)),
+        ):
+            result = _run(faq_lookup.coroutine(query="карта", state={"lang": "ru"}))
+        assert result.startswith(FAQ_LOW_CONFIDENCE)
+        assert "Как заблокировать карту?" in result
+        assert "Как разблокировать карту?" in result
+        assert is_faq_sentinel(result)
+
+    def test_low_tier_without_candidates_returns_bare_sentinel(self):
         from app.agent.tools import faq_lookup, FAQ_LOW_CONFIDENCE
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("some answer", 0.5))):
+        with patch(
+            "app.agent.tools.faq_search",
+            new=AsyncMock(return_value=_faq_result("some answer", "low")),
+        ):
             result = _run(faq_lookup.coroutine(query="карта", state={"lang": "ru"}))
         assert result == FAQ_LOW_CONFIDENCE
 
-    def test_high_score_returns_answer(self):
-        from app.agent.tools import faq_lookup, NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Через приложение", 0.9))):
+    def test_strict_tier_returns_answer(self):
+        from app.agent.tools import faq_lookup, is_faq_sentinel
+        with patch(
+            "app.agent.tools.faq_search",
+            new=AsyncMock(return_value=_faq_result("Через приложение", "strict")),
+        ):
             result = _run(faq_lookup.coroutine(query="заблокировать карту", state={"lang": "ru"}))
         assert result == "Через приложение"
-        assert result not in (NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE)
+        assert not is_faq_sentinel(result)
 
-    def test_env_override_strict_threshold(self, monkeypatch):
-        """Setting FAQ_STRICT_THRESHOLD=0.95 makes a 0.7-score match return FAQ_LOW_CONFIDENCE."""
-        monkeypatch.setenv("FAQ_STRICT_THRESHOLD", "0.95")
-        monkeypatch.setenv("FAQ_LOW_CONFIDENCE_THRESHOLD", "0.45")
-        import importlib
-        import app.agent.tools as tools_module
-        importlib.reload(tools_module)
-        with patch("app.agent.tools._faq_lookup_with_score", new=AsyncMock(return_value=("Some answer", 0.7))):
-            result = _run(tools_module.faq_lookup.coroutine(query="test", state={"lang": "ru"}))
-        assert result == tools_module.FAQ_LOW_CONFIDENCE
-        monkeypatch.delenv("FAQ_STRICT_THRESHOLD")
-        monkeypatch.delenv("FAQ_LOW_CONFIDENCE_THRESHOLD")
-        importlib.reload(tools_module)
+
+class TestIsFaqSentinel:
+    def test_detects_bare_sentinels(self):
+        from app.agent.tools import is_faq_sentinel, NO_MATCH_IN_FAQ, FAQ_LOW_CONFIDENCE
+        assert is_faq_sentinel(NO_MATCH_IN_FAQ)
+        assert is_faq_sentinel(FAQ_LOW_CONFIDENCE)
+
+    def test_detects_sentinel_with_candidate_list(self):
+        from app.agent.tools import is_faq_sentinel
+        assert is_faq_sentinel("FAQ_LOW_CONFIDENCE\nClosest FAQ questions:\n1. Q?")
+
+    def test_rejects_real_answers_and_empty(self):
+        from app.agent.tools import is_faq_sentinel
+        assert not is_faq_sentinel("Используйте приложение")
+        assert not is_faq_sentinel("")
+        assert not is_faq_sentinel(None)
 
 
 # ---- Task 3: _looks_like_giving_up ---------------------------------------

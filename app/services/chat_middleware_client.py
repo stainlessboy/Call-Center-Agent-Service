@@ -70,6 +70,9 @@ class ChatMiddlewareClient:
     """
 
     _TOKEN_TTL_SECONDS = 3600
+    # Hard cap on the auth request: get_token() holds _token_lock while
+    # fetching, so a hung request would block every caller waiting on the lock.
+    _AUTH_TIMEOUT_SECONDS = 15
 
     def __init__(
         self,
@@ -110,7 +113,8 @@ class ChatMiddlewareClient:
 
     async def _fetch_token(self) -> str:
         connector = aiohttp.TCPConnector(verify_ssl=self.verify_ssl)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=self._AUTH_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(
                 f"{self.middleware_url}/api/users/login",
                 json={"login": self.login, "password": self.password},

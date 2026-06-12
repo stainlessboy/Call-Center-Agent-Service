@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
@@ -27,6 +28,7 @@ from app.services.agent_client import AgentClient
 from app.services.chat_service import ChatService
 from app.services.chat_middleware_client import ChatMiddlewareClient
 from app.services.middleware_files import download_and_send_to_user
+from app.services.middleware_registry import set_middleware_client
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +197,7 @@ async def lifespan(app: FastAPI):
         logger.warning("MIDDLEWARE_ENABLED=true but missing URL/LOGIN/PASSWORD — middleware disabled")
 
     app.state.middleware_client = middleware_client
+    set_middleware_client(middleware_client)
     app.state.bot = bot
     app.state.dp = dp
     app.state.chat_service = chat_service
@@ -230,6 +233,7 @@ async def lifespan(app: FastAPI):
             watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await watcher
+        set_middleware_client(None)
         if middleware_client:
             with suppress(Exception):
                 await middleware_client.close_all()
@@ -285,7 +289,9 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token"),
 ) -> dict[str, bool]:
     settings = get_settings()
-    if settings.webhook_secret and x_telegram_bot_api_secret_token != settings.webhook_secret:
+    if settings.webhook_secret and not hmac.compare_digest(
+        x_telegram_bot_api_secret_token or "", settings.webhook_secret
+    ):
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     bot: Optional[Bot] = getattr(request.app.state, "bot", None)
@@ -297,7 +303,8 @@ async def telegram_webhook(
     try:
         update = Update.model_validate(data, context={"bot": bot})
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid update payload: {exc}") from exc
+        logger.warning("Invalid webhook update payload: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid update payload") from exc
     try:
         await dp.feed_update(bot, update)
     except Exception as exc:

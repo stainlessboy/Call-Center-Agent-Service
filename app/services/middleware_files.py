@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -90,7 +91,8 @@ async def download_and_send_to_user(
                 if is_cheque_url and not file_extension and "image" in content_type:
                     file_extension = ".jpg"
 
-                temp_file_path = f"/tmp/operator_file_{os.urandom(8).hex()}{file_extension}"
+                fd, temp_file_path = tempfile.mkstemp(prefix="operator_file_", suffix=file_extension)
+                os.close(fd)
 
                 async with aiofiles.open(temp_file_path, "wb") as f:
                     async for chunk in response.content.iter_chunked(8192):
