@@ -513,6 +513,15 @@ class FaqItemAdmin(ModelView, model=FaqItem):
     column_sortable_list = [FaqItem.id, FaqItem.created_at]
     column_default_sort = ("id", True)
 
+    # Built-in CSV export must contain answers too (column_list shows only
+    # questions to keep the table readable).
+    column_export_list = [
+        FaqItem.id,
+        FaqItem.question_ru, FaqItem.answer_ru,
+        FaqItem.question_en, FaqItem.answer_en,
+        FaqItem.question_uz, FaqItem.answer_uz,
+    ]
+
     # 1536-dim numpy arrays — useless to render and break Jinja's `if obj`.
     column_details_exclude_list = ["embedding_ru", "embedding_en", "embedding_uz"]
     form_excluded_columns = ["embedding_ru", "embedding_en", "embedding_uz", "created_at"]

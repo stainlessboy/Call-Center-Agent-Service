@@ -116,9 +116,9 @@
         </div>
         <div class="card-body">
           <p class="text-muted">
-            Импорт вопросов-ответов из Excel.
+            Импорт вопросов-ответов: xlsx, csv или json.
             <br>Поддержка языков: RU, EN, UZ.
-            <br>Языки определяются по названиям листов.
+            <br>Файлы экспорта (ниже) загружаются обратно как есть.
           </p>
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="action" value="faq">
@@ -140,9 +140,12 @@
               </div>
             </div>
             <div class="mb-3">
-              <label class="form-label">Excel-файл FAQ (обязательно)</label>
-              <input type="file" name="faq_file" class="form-control" accept=".xlsx,.xls" required>
-              <small class="form-hint">Названия листов — коды языков: «RU», «EN», «UZ».</small>
+              <label class="form-label">Файл FAQ (обязательно)</label>
+              <input type="file" name="faq_file" class="form-control" accept=".xlsx,.xls,.csv,.json" required>
+              <small class="form-hint">
+                xlsx/csv с колонками question_ru, answer_ru, … — или старый xlsx
+                с листами «RU», «EN», «UZ» — или json из экспорта.
+              </small>
             </div>
             <button type="submit" class="btn btn-primary w-100"
                     onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
@@ -160,11 +163,18 @@
               <i class="fa-solid fa-file-excel me-1"></i>
               xlsx
             </a>
+            <a href="/admin/seed/export-faq.csv" class="btn btn-outline-success btn-sm flex-fill">
+              <i class="fa-solid fa-file-csv me-1"></i>
+              CSV
+            </a>
             <a href="/admin/seed/export-faq.json" class="btn btn-outline-success btn-sm flex-fill">
               <i class="fa-solid fa-file-code me-1"></i>
               JSON
             </a>
           </div>
+          <small class="form-hint d-block mt-2">
+            Любой из файлов можно загрузить обратно через форму импорта выше.
+          </small>
         </div>
       </div>
     </div>

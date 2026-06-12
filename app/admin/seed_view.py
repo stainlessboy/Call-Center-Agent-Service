@@ -68,10 +68,11 @@ async def _run_seed_cards(manifest_path: Path, replace: bool) -> tuple[int, int]
     return await _seed(manifest_path, replace=replace)
 
 
-async def _run_seed_faq(xlsx_path: Path, replace: bool) -> dict[str, Any]:
-    from app.admin.services.faq_import import _extract_multilingual_items, _import_items
+async def _run_seed_faq(file_path: Path, replace: bool) -> dict[str, Any]:
+    """Import FAQ from xlsx / csv / json (dispatched by file extension)."""
+    from app.admin.services.faq_import import _extract_multilingual_items_any, _import_items
 
-    items = await asyncio.to_thread(_extract_multilingual_items, xlsx_path, None, None, None)
+    items = await asyncio.to_thread(_extract_multilingual_items_any, file_path)
     await _import_items(items, replace=replace, dry_run=False)
     lang_counts = {
         "ru": sum(1 for i in items if i.get("question_ru") and i.get("answer_ru")),
@@ -177,31 +178,49 @@ async def _export_faq_rows() -> list[dict[str, Any]]:
     ]
 
 
-def _build_faq_xlsx(rows: list[dict[str, Any]]) -> bytes:
-    """Build a multilingual FAQ xlsx with three sheets: RU / EN / UZ.
+# Wide multilingual layout: one row = one FAQ item, languages never drift
+# apart on re-import (the old 3-sheet layout merged sheets by row index and
+# misaligned as soon as one item lacked a translation).
+FAQ_EXPORT_COLUMNS = [
+    "question_ru", "answer_ru",
+    "question_en", "answer_en",
+    "question_uz", "answer_uz",
+]
 
-    Layout matches what `faq_import._extract_multilingual_items` expects when
-    re-imported via /admin/seed — sheet name = language code, columns are
-    "question" / "answer". So export → import is a round-trip.
+
+def _build_faq_xlsx(rows: list[dict[str, Any]]) -> bytes:
+    """Build a single-sheet wide multilingual FAQ xlsx.
+
+    Header matches `faq_import` wide-format detection, so the file can be
+    uploaded back via /admin/seed as-is (export → import round-trip).
     """
     from openpyxl import Workbook
 
     wb = Workbook()
-    default = wb.active
-    wb.remove(default)
-
-    for lang in ("ru", "en", "uz"):
-        ws = wb.create_sheet(title=lang.upper())
-        ws.append(["question", "answer"])
-        q_key, a_key = f"question_{lang}", f"answer_{lang}"
-        for row in rows:
-            q, a = row.get(q_key) or "", row.get(a_key) or ""
-            if q or a:
-                ws.append([q, a])
+    ws = wb.active
+    ws.title = "FAQ"
+    ws.append(FAQ_EXPORT_COLUMNS)
+    for row in rows:
+        ws.append([row.get(col) or "" for col in FAQ_EXPORT_COLUMNS])
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _build_faq_csv(rows: list[dict[str, Any]]) -> bytes:
+    """Build a wide multilingual FAQ csv (same columns as the xlsx export).
+
+    UTF-8 with BOM so Excel opens Cyrillic correctly.
+    """
+    import csv
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(FAQ_EXPORT_COLUMNS)
+    for row in rows:
+        writer.writerow([row.get(col) or "" for col in FAQ_EXPORT_COLUMNS])
+    return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
 
 
 async def _run_seed_branches(
@@ -354,6 +373,17 @@ class SeedAdmin(BaseView):
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @expose("/seed/export-faq.csv", methods=["GET"])
+    async def export_faq_csv(self, request: Request):
+        rows = await _export_faq_rows()
+        data = await asyncio.to_thread(_build_faq_csv, rows)
+        filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            content=data,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @expose("/seed/export-faq.json", methods=["GET"])
     async def export_faq_json(self, request: Request):
         rows = await _export_faq_rows()
@@ -381,13 +411,22 @@ class SeedAdmin(BaseView):
             results.append({
                 "label": "Файл FAQ",
                 "status": "error",
-                "detail": "Загрузите xlsx-файл через форму — дефолтного больше нет.",
+                "detail": "Загрузите файл (xlsx / csv / json) через форму — дефолтного больше нет.",
+            })
+            return results
+
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in (".xlsx", ".xls", ".csv", ".json"):
+            results.append({
+                "label": "Файл FAQ",
+                "status": "error",
+                "detail": f"Неподдерживаемый формат '{suffix}'. Допустимы: xlsx, csv, json.",
             })
             return results
 
         with tempfile.TemporaryDirectory(prefix="seed_faq_") as tmp:
-            xlsx_path = Path(tmp) / upload.filename
-            size = await _save_upload(upload, xlsx_path)
+            file_path = Path(tmp) / upload.filename
+            size = await _save_upload(upload, file_path)
             results.append({
                 "label": "Загрузка файла",
                 "status": "ok",
@@ -395,7 +434,7 @@ class SeedAdmin(BaseView):
             })
 
             try:
-                faq_result = await _run_seed_faq(xlsx_path, replace)
+                faq_result = await _run_seed_faq(file_path, replace)
                 lang_info = ", ".join(
                     f"{lang.upper()}: {cnt}" for lang, cnt in faq_result["languages"].items() if cnt
                 )

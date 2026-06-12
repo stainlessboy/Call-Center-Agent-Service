@@ -42,6 +42,23 @@ SHEET_LANGUAGE_ALIASES = {
     "uz": {"uz", "uzb", "uzbek", "uzbekskiy", "узбекский", "узб"},
 }
 
+# Wide multilingual format: one row = one FAQ item, per-language columns.
+# Produced by the /admin/seed export (xlsx/csv) and by the SQLAdmin list
+# export (column names or "Вопрос (RU)"-style labels).
+WIDE_FIELDS = (
+    "question_ru", "answer_ru",
+    "question_en", "answer_en",
+    "question_uz", "answer_uz",
+)
+
+_WIDE_HEADER_ALIASES: dict[str, str] = {}
+for _field in WIDE_FIELDS:
+    _kind, _lang = _field.split("_")
+    _ru_word = "вопрос" if _kind == "question" else "ответ"
+    for _alias in (_field, f"{_kind} {_lang}", f"{_ru_word} {_lang}"):
+        _WIDE_HEADER_ALIASES[_alias] = _field
+del _field, _kind, _lang, _ru_word, _alias
+
 
 def _normalize_header(value: object) -> Optional[str]:
     if value is None:
@@ -154,12 +171,76 @@ def _extract_items(path: Path, sheet: Optional[str], limit: Optional[int]) -> Li
     return _extract_items_from_rows(list(_iter_rows(path, sheet)), limit)
 
 
+def _find_wide_header_row(rows: Sequence[Sequence[object]]) -> Optional[Tuple[int, dict[str, int]]]:
+    """Detect a wide multilingual header (question_ru / answer_ru / ...).
+
+    Returns (header_row_index, {field: column_index}) or None. Requires at
+    least one language to have both its question and answer columns present,
+    so plain "question"/"answer" sheets fall through to the legacy parser.
+    """
+    for row_index, row in enumerate(rows[: min(len(rows), 10)]):
+        positions: dict[str, int] = {}
+        for col_index, value in enumerate(row):
+            normalized = _normalize_header(value)
+            if not normalized:
+                continue
+            field = _WIDE_HEADER_ALIASES.get(normalized)
+            if field and field not in positions:
+                positions[field] = col_index
+        for lang in ("ru", "en", "uz"):
+            if f"question_{lang}" in positions and f"answer_{lang}" in positions:
+                return row_index, positions
+    return None
+
+
+def _extract_wide_items_from_rows(
+    rows: Sequence[Sequence[object]],
+    limit: Optional[int],
+) -> Optional[List[dict[str, Optional[str]]]]:
+    """Parse wide-format rows into multilingual items.
+
+    Returns None when the rows are not in wide format. Rows without a complete
+    RU pair are skipped (question_ru/answer_ru are NOT NULL in the DB);
+    half-filled pairs in other languages are dropped to None.
+    """
+    header = _find_wide_header_row(rows)
+    if header is None:
+        return None
+    header_row, positions = header
+
+    items: List[dict[str, Optional[str]]] = []
+    for row in rows[header_row + 1 :]:
+        item: dict[str, Optional[str]] = {field: None for field in WIDE_FIELDS}
+        for field, idx in positions.items():
+            if idx < len(row) and row[idx] is not None:
+                text = str(row[idx]).strip()
+                item[field] = text or None
+        for lang in ("ru", "en", "uz"):
+            q_key, a_key = f"question_{lang}", f"answer_{lang}"
+            if not (item[q_key] and item[a_key]):
+                item[q_key] = None
+                item[a_key] = None
+        if not item["question_ru"]:
+            continue
+        items.append(item)
+        if limit and len(items) >= limit:
+            break
+    return items
+
+
 def _extract_multilingual_items(
     path: Path,
     sheet: Optional[str],
     lang: Optional[str],
     limit: Optional[int],
 ) -> List[dict[str, Optional[str]]]:
+    # Wide multilingual layout takes priority: detected by header on the
+    # requested (or active) sheet. Legacy layouts (per-language sheets or a
+    # single question/answer sheet) fall through below.
+    wide = _extract_wide_items_from_rows(list(_iter_rows(path, sheet)), limit)
+    if wide is not None:
+        return wide
+
     if sheet:
         rows = _extract_items(path, sheet, limit)
         resolved_lang = _normalize_language(lang) or _normalize_language(sheet) or "ru"
@@ -236,6 +317,71 @@ def _extract_multilingual_items(
         }
         for q, a in rows
     ]
+
+
+def _extract_items_from_csv(path: Path, limit: Optional[int]) -> List[dict[str, Optional[str]]]:
+    """Parse a FAQ csv: wide multilingual layout, or a legacy two-column one."""
+    import csv
+
+    # utf-8-sig strips the BOM our own export writes for Excel.
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        rows = [tuple(row) for row in csv.reader(fh)]
+
+    wide = _extract_wide_items_from_rows(rows, limit)
+    if wide is not None:
+        return wide
+    return [
+        {
+            "question_ru": q,
+            "answer_ru": a,
+            "question_en": None,
+            "answer_en": None,
+            "question_uz": None,
+            "answer_uz": None,
+        }
+        for q, a in _extract_items_from_rows(rows, limit)
+    ]
+
+
+def _extract_items_from_json(path: Path, limit: Optional[int]) -> List[dict[str, Optional[str]]]:
+    """Parse a FAQ json export: either the /admin/seed payload or a bare list."""
+    import json
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(raw_items, list):
+        raise ValueError("JSON должен быть списком записей или объектом с ключом 'items'.")
+
+    items: List[dict[str, Optional[str]]] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        item: dict[str, Optional[str]] = {}
+        for field in WIDE_FIELDS:
+            value = raw.get(field)
+            text = str(value).strip() if value is not None else ""
+            item[field] = text or None
+        for lang in ("en", "uz"):
+            q_key, a_key = f"question_{lang}", f"answer_{lang}"
+            if not (item[q_key] and item[a_key]):
+                item[q_key] = None
+                item[a_key] = None
+        if not (item["question_ru"] and item["answer_ru"]):
+            continue
+        items.append(item)
+        if limit and len(items) >= limit:
+            break
+    return items
+
+
+def _extract_multilingual_items_any(path: Path, limit: Optional[int] = None) -> List[dict[str, Optional[str]]]:
+    """Dispatch FAQ extraction by file extension: xlsx / csv / json."""
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return _extract_items_from_json(path, limit)
+    if suffix == ".csv":
+        return _extract_items_from_csv(path, limit)
+    return _extract_multilingual_items(path, None, None, limit)
 
 
 async def _attach_embeddings(items: List[dict[str, Optional[str]]]) -> None:
