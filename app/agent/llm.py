@@ -48,6 +48,48 @@ def _qwen_model_name() -> str:
     return os.getenv("QWEN_MODEL") or _QWEN_MODEL
 
 
+def use_gpt() -> bool:
+    """Public accessor for the provider switch (see _use_gpt)."""
+    return _use_gpt()
+
+
+def qwen_extra_body() -> dict[str, Any]:
+    """``extra_body`` for Qwen3 chat requests served by Together AI.
+
+    Qwen3 defaults to "thinking" mode: it emits hundreds of hidden reasoning
+    tokens before any visible answer. Under our small ``max_tokens`` budget that
+    truncates real answers (and leaves the 5-token language detector empty, so
+    it always fell back to the default language). Disable thinking unless
+    QWEN_ENABLE_THINKING is set. Returns {} when thinking is left on so callers
+    can omit the param entirely.
+    """
+    if _env_truthy(os.getenv("QWEN_ENABLE_THINKING") or "false"):
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def provider_connection() -> dict[str, Any]:
+    """Connection kwargs (``api_key`` + optional ``base_url``) for the active
+    chat provider, honouring USE_GPT.
+
+    Shared by the main agent LLM and the language detector so they always talk
+    to the same backend. The model name is NOT included — each caller picks its
+    own (the agent uses the full model, the detector may use a cheaper one).
+    Note: FAQ embeddings deliberately ignore this and always use OPENAI_* —
+    semantic search stays on OpenAI even when chat runs on Qwen.
+    """
+    if not _use_gpt():
+        return {
+            "base_url": os.getenv("QWEN_BASE_URL") or _QWEN_BASE_URL,
+            "api_key": os.getenv("QWEN_API_KEY") or os.getenv("TOGETHER_API_KEY"),
+        }
+    out: dict[str, Any] = {"api_key": os.getenv("OPENAI_API_KEY")}
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if base_url:
+        out["base_url"] = base_url
+    return out
+
+
 def _is_reasoning_model(model_name: str) -> bool:
     """True if the model accepts the `reasoning_effort` parameter (GPT-5 / o-series)."""
     return model_name.startswith(("gpt-5", "o1", "o3", "o4"))
@@ -91,13 +133,11 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
 
         # ---- Qwen / Together AI path -------------------------------------
         if not _use_gpt():
-            qwen_kwargs: dict[str, Any] = {
-                "model": _qwen_model_name(),
-                "base_url": os.getenv("QWEN_BASE_URL") or _QWEN_BASE_URL,
-                "api_key": os.getenv("QWEN_API_KEY") or os.getenv("TOGETHER_API_KEY"),
-                **common,
-            }
-            return ChatOpenAI(**qwen_kwargs)
+            qwen_kwargs: dict[str, Any] = {**provider_connection(), **common}
+            extra = qwen_extra_body()
+            if extra:
+                qwen_kwargs["extra_body"] = extra
+            return ChatOpenAI(model=_qwen_model_name(), **qwen_kwargs)
 
         # ---- OpenAI / GPT path -------------------------------------------
         model_name = (
@@ -107,12 +147,9 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
         )
         kwargs: dict[str, Any] = {
             "model": model_name,
-            "api_key": os.getenv("OPENAI_API_KEY"),
+            **provider_connection(),
             **common,
         }
-        base_url = os.getenv("OPENAI_BASE_URL")
-        if base_url:
-            kwargs["base_url"] = base_url
         # Reasoning-capable models (GPT-5 family, o-series) charge for hidden
         # reasoning tokens. For chat/tool-calling use cases the reasoning phase
         # is wasteful — pick the cheapest/fastest effort per family.

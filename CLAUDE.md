@@ -211,6 +211,9 @@ The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `c
 - Default model: `gpt-4o-mini` (override via `OPENAI_MODEL` or `LOCAL_AGENT_INTENT_LLM_MODEL`)
 - Supports custom `OPENAI_BASE_URL` for OpenAI-compatible APIs
 - Built-in token usage tracking and cost calculation per model
+- **Provider switch (`USE_GPT`)**: `true` (default) → OpenAI; `false` → Qwen via Together AI (`QWEN_MODEL`/`QWEN_BASE_URL`/`QWEN_API_KEY` or `TOGETHER_API_KEY`). The switch covers BOTH the main agent LLM and the language detector (`lang_detect.py`) via the shared `provider_connection()` helper. The detector can use a cheaper model with `QWEN_LANG_DETECTOR_MODEL` (Qwen mode) or `LANG_DETECTOR_MODEL` (GPT mode).
+- **FAQ embeddings always use OpenAI** (`app/utils/embeddings.py` reads `OPENAI_API_KEY`/`OPENAI_BASE_URL` directly, ignoring `USE_GPT`) — semantic FAQ search stays on OpenAI even when chat runs on Qwen. Keep `OPENAI_API_KEY` set, or disable semantic search with `FAQ_EMBEDDING_ENABLED=false`.
+- Cost tracking only knows OpenAI prices (`_MODEL_PRICING`); Qwen turns report `cost=0`.
 
 ### Hybrid Bot/Operator Mode
 

@@ -1418,6 +1418,13 @@ class TestReasoningEffort:
     `reasoning_effort` into ChatOpenAI kwargs.
     """
 
+    @pytest.fixture(autouse=True)
+    def _force_gpt(self, monkeypatch):
+        # These tests assert OpenAI-path behaviour (reasoning_effort, responses
+        # API). Pin the provider so an ambient USE_GPT=false in .env can't route
+        # the factory to Qwen.
+        monkeypatch.setenv("USE_GPT", "true")
+
     def test_reasoning_model_detection(self):
         from app.agent.llm import _is_reasoning_model
         assert _is_reasoning_model("gpt-5") is True
@@ -1653,6 +1660,7 @@ class TestExtractTokenUsage:
     def test_get_chat_openai_respects_REASONING_EFFORT_env(self, monkeypatch):
         from app.agent import llm as _llm
         _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
         monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("REASONING_EFFORT", "medium")
@@ -1666,12 +1674,74 @@ class TestExtractTokenUsage:
         it's an unknown param for that model and would break API calls."""
         from app.agent import llm as _llm
         _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
         monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         obj = _llm._get_chat_openai()
         assert obj is not None
         assert not getattr(obj, "reasoning_effort", None)
         _llm._get_chat_openai.cache_clear()
+
+
+# ---- Qwen / Together AI provider switch ----------------------------------
+
+class TestQwenProvider:
+    """USE_GPT=false routes BOTH the agent LLM and the language detector to
+    Qwen via Together AI, with thinking disabled."""
+
+    @pytest.fixture(autouse=True)
+    def _qwen_env(self, monkeypatch):
+        monkeypatch.setenv("USE_GPT", "false")
+        monkeypatch.setenv("QWEN_MODEL", "Qwen/Qwen3.5-397B-A17B")
+        monkeypatch.setenv("QWEN_BASE_URL", "https://api.together.xyz/v1")
+        monkeypatch.setenv("QWEN_API_KEY", "tgp-test")
+        monkeypatch.delenv("QWEN_ENABLE_THINKING", raising=False)
+        from app.agent import llm as _llm
+        from app.agent import lang_detect as _ld
+        _llm._get_chat_openai.cache_clear()
+        _ld._get_detector_llm.cache_clear()
+        yield
+        _llm._get_chat_openai.cache_clear()
+        _ld._get_detector_llm.cache_clear()
+
+    def test_chat_routes_to_qwen(self):
+        from app.agent import llm as _llm
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert obj.model_name == "Qwen/Qwen3.5-397B-A17B"
+        assert "together.xyz" in str(obj.openai_api_base)
+
+    def test_chat_disables_thinking(self):
+        from app.agent import llm as _llm
+        obj = _llm._get_chat_openai()
+        assert obj.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+    def test_thinking_can_be_reenabled(self, monkeypatch):
+        from app.agent.llm import qwen_extra_body
+        assert qwen_extra_body() == {"chat_template_kwargs": {"enable_thinking": False}}
+        monkeypatch.setenv("QWEN_ENABLE_THINKING", "true")
+        assert qwen_extra_body() == {}
+
+    def test_detector_follows_switch(self):
+        from app.agent import lang_detect as _ld
+        obj = _ld._get_detector_llm()
+        assert obj is not None
+        # Falls back to QWEN_MODEL when QWEN_LANG_DETECTOR_MODEL is unset.
+        assert obj.model_name == "Qwen/Qwen3.5-397B-A17B"
+        assert obj.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+    def test_detector_uses_cheaper_model_when_set(self, monkeypatch):
+        monkeypatch.setenv("QWEN_LANG_DETECTOR_MODEL", "Qwen/Qwen3.5-9B")
+        from app.agent import lang_detect as _ld
+        _ld._get_detector_llm.cache_clear()
+        obj = _ld._get_detector_llm()
+        assert obj.model_name == "Qwen/Qwen3.5-9B"
+
+    def test_provider_connection_uses_together_key(self):
+        from app.agent.llm import provider_connection
+        conn = provider_connection()
+        assert conn["api_key"] == "tgp-test"
+        assert conn["base_url"] == "https://api.together.xyz/v1"
 
 
 # ---- XML state context formatter -----------------------------------------
@@ -1985,6 +2055,12 @@ class TestLangDetectEndToEnd:
 
 
 class TestLangDetectorModel:
+    @pytest.fixture(autouse=True)
+    def _force_gpt(self, monkeypatch):
+        # The detector follows the USE_GPT switch; these tests assert the GPT
+        # model names, so pin the provider against an ambient USE_GPT=false.
+        monkeypatch.setenv("USE_GPT", "true")
+
     def test_default_model_is_gpt4o_mini(self, monkeypatch):
         from app.agent import lang_detect as ld
         ld._get_detector_llm.cache_clear()

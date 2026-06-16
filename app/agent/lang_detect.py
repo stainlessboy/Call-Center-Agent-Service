@@ -27,7 +27,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.agent.constants import VALID_LANGS
-from app.agent.llm import extract_text_content
+from app.agent.llm import extract_text_content, provider_connection, qwen_extra_body, use_gpt
 from app.agent.pii_masker import mask_pii
 
 _logger = logging.getLogger(__name__)
@@ -98,22 +98,37 @@ _DETECTOR_SYSTEM_PROMPT = (
 def _get_detector_llm() -> Optional[ChatOpenAI]:
     """Return a cached ChatOpenAI instance for language detection.
 
-    Uses `LANG_DETECTOR_MODEL` env (default `gpt-4o-mini`) — always cheap,
-    regardless of the main `OPENAI_MODEL`.
+    Follows the same provider switch as the main agent (USE_GPT):
+      * GPT mode  → `LANG_DETECTOR_MODEL` (default `gpt-4o-mini`) — always cheap,
+        regardless of the main `OPENAI_MODEL`.
+      * Qwen mode → `QWEN_LANG_DETECTOR_MODEL` if set, else the main `QWEN_MODEL`.
+        Set QWEN_LANG_DETECTOR_MODEL to a smaller Qwen to avoid running the full
+        agent model for a 1-token classification every turn.
+    Connection (api_key / base_url) comes from `provider_connection()`.
     """
     try:
-        model = os.getenv("LANG_DETECTOR_MODEL") or "gpt-4o-mini"
+        if use_gpt():
+            model = os.getenv("LANG_DETECTOR_MODEL") or "gpt-4o-mini"
+        else:
+            model = (
+                os.getenv("QWEN_LANG_DETECTOR_MODEL")
+                or os.getenv("QWEN_MODEL")
+                or "Qwen/Qwen3.5-9B"
+            )
         kwargs: dict = {
             "model": model,
             "temperature": 0,
             "max_tokens": 5,
             "timeout": float(os.getenv("LANG_DETECTOR_TIMEOUT") or 10.0),
             "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
-            "api_key": os.getenv("OPENAI_API_KEY"),
+            **provider_connection(),
         }
-        base_url = os.getenv("OPENAI_BASE_URL")
-        if base_url:
-            kwargs["base_url"] = base_url
+        if not use_gpt():
+            # Qwen3 must run with thinking off — otherwise the 5-token budget is
+            # consumed by reasoning and the detector returns nothing.
+            extra = qwen_extra_body()
+            if extra:
+                kwargs["extra_body"] = extra
         return ChatOpenAI(**kwargs)
     except Exception as exc:
         _logger.warning("Failed to create language detector LLM: %s", exc)
