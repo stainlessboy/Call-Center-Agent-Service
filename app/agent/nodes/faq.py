@@ -326,18 +326,40 @@ def _looks_like_giving_up(answer: str, lang: str) -> bool:  # noqa: ARG001
     return bool(_GIVING_UP_RE.search(answer))
 
 
+def _is_tool_error(msg) -> bool:
+    """True if a ToolMessage represents a failed tool execution.
+
+    ToolNode(handle_tool_errors=True) returns a ToolMessage with status="error"
+    and an "Error invoking tool ... Please fix ..." body when tool args fail
+    validation (e.g. a weak LLM passing wrong kwargs). Such messages are
+    internal — they must never be surfaced to the user.
+    """
+    if getattr(msg, "status", None) == "error":
+        return True
+    content = str(getattr(msg, "content", "") or "")
+    # Belt-and-suspenders: ToolNode's error templates.
+    return (
+        content.startswith("Error invoking tool")
+        or "Please fix the error and try again." in content
+        or "Please fix your mistakes." in content
+    )
+
+
 def _last_useful_tool_output(loop_msgs: list) -> Optional[str]:
     """Walk loop_msgs backward and return the last ToolMessage content that
-    is non-empty and not a sentinel value, or None if the last tool result
-    was a sentinel (not useful to surface to the user).
+    is non-empty, not a sentinel value, and not a tool error — or None if the
+    last tool result was a sentinel or error (not useful to surface to the user).
     """
     from langchain_core.messages import ToolMessage
     for msg in reversed(loop_msgs):
         if isinstance(msg, ToolMessage):
+            if _is_tool_error(msg):
+                # Tool error messages are internal — keep walking past them.
+                continue
             content = (str(msg.content or "")).strip()
             if content and not is_faq_sentinel(content):
                 return content
-            # The last tool result was a sentinel — nothing useful to recover.
+            # The last non-error tool result was a sentinel — nothing useful.
             return None
     return None
 
@@ -438,9 +460,16 @@ async def node_faq(state: BotState) -> dict:
             # round — "Показал программу" instead of actually showing it. Surface
             # the tool output directly. Exception: faq_lookup sentinels mean the
             # LLM should chain to clarify/request_operator, so keep looping.
+            # Also skip error ToolMessages — they are internal feedback for the
+            # model (handle_tool_errors=True pattern) and must never reach users.
             if new_tool_msgs:
-                last_content = str(getattr(new_tool_msgs[-1], "content", "") or "").strip()
-                if last_content and not is_faq_sentinel(last_content):
+                last_msg = new_tool_msgs[-1]
+                last_content = str(getattr(last_msg, "content", "") or "").strip()
+                if (
+                    last_content
+                    and not is_faq_sentinel(last_content)
+                    and not _is_tool_error(last_msg)
+                ):
                     answer = last_content
                     break
 
@@ -504,13 +533,16 @@ async def node_faq(state: BotState) -> dict:
             is_fallback = False
         elif "faq_lookup" in called_names:
             # Collect all ToolMessage contents for faq_lookup calls.
+            # Exclude error ToolMessages — they are internal model feedback and
+            # must not influence the fallback determination (an error-only turn
+            # must produce is_fallback=True, not flip to is_fallback=False).
             from langchain_core.messages import ToolMessage
             faq_results = {
                 str(msg.content or "").strip()
                 for msg in loop_msgs
-                if isinstance(msg, ToolMessage)
+                if isinstance(msg, ToolMessage) and not _is_tool_error(msg)
             }
-            all_sentinels = all(is_faq_sentinel(r) for r in faq_results)
+            all_sentinels = not faq_results or all(is_faq_sentinel(r) for r in faq_results)
             if not all_sentinels:
                 # At least one faq_lookup returned a real answer.
                 is_fallback = False

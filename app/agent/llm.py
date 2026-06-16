@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -126,7 +127,7 @@ def _get_chat_openai() -> Optional[ChatOpenAI]:
     try:
         common = {
             "temperature": 0.3,
-            "max_tokens": 512,
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS") or 3000),
             "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
             "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
         }
@@ -175,18 +176,64 @@ def get_model_name() -> str:
     return os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL") or "gpt-4o-mini"
 
 
+# Matches any harmony/reasoning control token like <|channel|>, <|message|>,
+# <|end|>, <|start|>assistant, <|return|>, etc.
+_HARMONY_TOKEN_RE = re.compile(r"<\|[^|>]*\|>")
+# Matches the "final" channel marker specifically.
+_FINAL_CHANNEL = "<|channel|>final<|message|>"
+# Matches any <|channel|> prefix (to detect whether a string has channel markers
+# but without a "final" channel).
+_ANY_CHANNEL_RE = re.compile(r"<\|channel\|>")
+
+
+def _strip_reasoning_channels(text: str) -> str:
+    """Remove harmony/reasoning channel markers from Together AI reasoning models.
+
+    Some models (e.g. openai/gpt-oss-20b on Together AI) use a "harmony"
+    response format that leaks channel markers into AIMessage.content:
+
+        <|channel|>analysis<|message|>... reasoning ...<|end|>
+        <|start|>assistant<|channel|>final<|message|>Actual answer<|end|>
+
+    Strategy:
+    - If a ``final`` channel marker is present, keep ONLY text after the last
+      occurrence of ``<|channel|>final<|message|>``.
+    - Strip all remaining ``<|...|>`` control tokens.
+    - If channel markers exist but NO ``final`` channel (answer was cut off,
+      only analysis leaked), return "" so callers treat it as "no answer".
+    - If no harmony markers at all, return the text unchanged.
+    """
+    if not _ANY_CHANNEL_RE.search(text):
+        # Fast path: plain model output, nothing to strip.
+        return text
+
+    if _FINAL_CHANNEL in text:
+        # Keep only the text after the last final-channel marker.
+        text = text.rsplit(_FINAL_CHANNEL, 1)[-1]
+        # Strip any trailing control tokens (e.g. <|end|>).
+        text = _HARMONY_TOKEN_RE.sub("", text)
+        return text.strip()
+
+    # Channel markers present but no "final" channel — answer was cut off.
+    return ""
+
+
 def extract_text_content(ai_msg: Any) -> str:
     """Extract plain text from an AIMessage regardless of API shape.
 
     `/v1/responses` (used for gpt-5.x) returns content as a list of blocks:
         [{"type": "text", "text": "...", ...}, ...]
     while `/v1/chat/completions` returns content as a plain string.
+
+    After assembling the string, harmony/reasoning channel markers leaked by
+    Together AI reasoning models (e.g. openai/gpt-oss-20b) are stripped via
+    ``_strip_reasoning_channels`` so callers never receive raw ``<|...|>`` tokens.
     """
     content = getattr(ai_msg, "content", None)
     if not content:
         return ""
     if isinstance(content, str):
-        return content
+        return _strip_reasoning_channels(content)
     if isinstance(content, list):
         parts: list[str] = []
         for block in content:
@@ -196,8 +243,8 @@ def extract_text_content(ai_msg: Any) -> str:
                     parts.append(str(txt))
             elif isinstance(block, str):
                 parts.append(block)
-        return "".join(parts)
-    return str(content)
+        return _strip_reasoning_channels("".join(parts))
+    return _strip_reasoning_channels(str(content))
 
 
 def extract_token_usage(ai_msg: Any) -> dict:

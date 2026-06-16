@@ -118,14 +118,14 @@ def _get_detector_llm() -> Optional[ChatOpenAI]:
         kwargs: dict = {
             "model": model,
             "temperature": 0,
-            "max_tokens": 5,
+            "max_tokens": int(os.getenv("LANG_DETECTOR_MAX_TOKENS") or 512),
             "timeout": float(os.getenv("LANG_DETECTOR_TIMEOUT") or 10.0),
             "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
             **provider_connection(),
         }
         if not use_gpt():
-            # Qwen3 must run with thinking off — otherwise the 5-token budget is
-            # consumed by reasoning and the detector returns nothing.
+            # Qwen3 must run with thinking off — otherwise the reasoning channel
+            # consumes the entire token budget and the detector returns nothing.
             extra = qwen_extra_body()
             if extra:
                 kwargs["extra_body"] = extra

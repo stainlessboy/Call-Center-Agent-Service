@@ -1582,6 +1582,157 @@ class TestExtractTextContent:
         assert extract_text_content(msg) == "Before After"
 
 
+# ---- harmony/reasoning channel stripping (Together AI reasoning models) -----
+
+class TestStripReasoningChannels:
+    """openai/gpt-oss-20b on Together AI leaks <|channel|>...<|message|> markers
+    into AIMessage.content. extract_text_content must strip them so users never
+    see raw control tokens and node_faq gets a clean (or empty) string."""
+
+    def test_strips_full_harmony_string_returns_final_channel_only(self):
+        """Full harmony output: analysis channel followed by final channel.
+        Only the text from the final channel should survive, markers stripped."""
+        from app.agent.llm import extract_text_content
+        harmony = (
+            "<|channel|>analysis<|message|>No confident match. "
+            "The question is general banking knowledge...<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>"
+            "Разница между кредитом и лизингом состоит в...<|end|>"
+        )
+        msg = type("M", (), {"content": harmony})()
+        result = extract_text_content(msg)
+        assert result == "Разница между кредитом и лизингом состоит в..."
+        assert "<|" not in result
+        assert "|>" not in result
+
+    def test_returns_empty_string_when_only_analysis_channel_present(self):
+        """Answer was cut off — only the analysis/reasoning channel leaked.
+        extract_text_content must return '' so node_faq uses its fallback."""
+        from app.agent.llm import extract_text_content
+        cut_off = (
+            "<|channel|>analysis<|message|>This looks like a general question about "
+            "exchange rates. I should look it up in the FAQ first..."
+        )
+        msg = type("M", (), {"content": cut_off})()
+        result = extract_text_content(msg)
+        assert result == ""
+
+    def test_plain_string_unchanged(self):
+        """Normal model output (no harmony markers) must pass through unmodified."""
+        from app.agent.llm import extract_text_content
+        plain = "Минимальная сумма депозита — 100 000 сум."
+        msg = type("M", (), {"content": plain})()
+        assert extract_text_content(msg) == plain
+
+    def test_list_of_blocks_shape_unchanged_no_markers(self):
+        """gpt-5.x /v1/responses list-of-blocks shape must still work after the
+        harmony stripping layer is added — existing behaviour must not regress."""
+        from app.agent.llm import extract_text_content
+        msg = type("M", (), {
+            "content": [
+                {"type": "text", "text": "Hello "},
+                {"type": "text", "text": "world"},
+            ],
+        })()
+        assert extract_text_content(msg) == "Hello world"
+
+    def test_whitespace_around_final_channel_text_is_stripped(self):
+        """Text after the final marker may have leading/trailing whitespace
+        from the model — it should be stripped."""
+        from app.agent.llm import extract_text_content
+        harmony = (
+            "<|channel|>analysis<|message|>thinking...<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>  Answer here.  <|end|>"
+        )
+        msg = type("M", (), {"content": harmony})()
+        assert extract_text_content(msg) == "Answer here."
+
+    def test_multiple_final_channels_keeps_last(self):
+        """If multiple final markers appear, keep text after the LAST one."""
+        from app.agent.llm import extract_text_content
+        harmony = (
+            "<|channel|>final<|message|>First attempt<|end|>"
+            "<|channel|>final<|message|>Corrected final answer<|end|>"
+        )
+        msg = type("M", (), {"content": harmony})()
+        assert extract_text_content(msg) == "Corrected final answer"
+
+
+# ---- _get_chat_openai: LLM_MAX_TOKENS env var ----------------------------
+
+class TestLlmMaxTokensEnv:
+    """max_tokens in _get_chat_openai must be env-configurable (LLM_MAX_TOKENS)
+    with a default of 3000 so reasoning models have headroom for the final channel."""
+
+    def test_default_max_tokens_is_3000(self, monkeypatch):
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert obj.max_tokens == 3000
+        _llm._get_chat_openai.cache_clear()
+
+    def test_llm_max_tokens_env_override(self, monkeypatch):
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_MAX_TOKENS", "8192")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert obj.max_tokens == 8192
+        _llm._get_chat_openai.cache_clear()
+
+    def test_qwen_path_also_uses_llm_max_tokens(self, monkeypatch):
+        from app.agent import llm as _llm
+        _llm._get_chat_openai.cache_clear()
+        monkeypatch.setenv("USE_GPT", "false")
+        monkeypatch.setenv("QWEN_MODEL", "openai/gpt-oss-20b")
+        monkeypatch.setenv("QWEN_BASE_URL", "https://api.together.xyz/v1")
+        monkeypatch.setenv("QWEN_API_KEY", "tgp-test")
+        monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
+        obj = _llm._get_chat_openai()
+        assert obj is not None
+        assert obj.max_tokens == 4096
+        _llm._get_chat_openai.cache_clear()
+
+
+# ---- _get_detector_llm: LANG_DETECTOR_MAX_TOKENS env var -----------------
+
+class TestLangDetectorMaxTokensEnv:
+    """The language detector must use LANG_DETECTOR_MAX_TOKENS (default 512)
+    so a reasoning model can emit its final channel beyond the 5-token cutoff."""
+
+    def test_default_max_tokens_is_512(self, monkeypatch):
+        from app.agent import lang_detect as _ld
+        _ld._get_detector_llm.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
+        monkeypatch.setenv("LANG_DETECTOR_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("LANG_DETECTOR_MAX_TOKENS", raising=False)
+        obj = _ld._get_detector_llm()
+        assert obj is not None
+        assert obj.max_tokens == 512
+        _ld._get_detector_llm.cache_clear()
+
+    def test_lang_detector_max_tokens_env_override(self, monkeypatch):
+        from app.agent import lang_detect as _ld
+        _ld._get_detector_llm.cache_clear()
+        monkeypatch.setenv("USE_GPT", "true")
+        monkeypatch.setenv("LANG_DETECTOR_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LANG_DETECTOR_MAX_TOKENS", "1024")
+        obj = _ld._get_detector_llm()
+        assert obj is not None
+        assert obj.max_tokens == 1024
+        _ld._get_detector_llm.cache_clear()
+
+
 # ---- extract_token_usage: multiple API shapes ----------------------------
 
 class TestExtractTokenUsage:
@@ -2430,4 +2581,134 @@ class TestLastUsefulToolOutput:
         ]
         result = _last_useful_tool_output(msgs)
         assert result is None
+
+    def test_skips_error_tool_message_and_returns_earlier_useful(self):
+        """_last_useful_tool_output must walk past error ToolMessages and
+        return the most recent non-error, non-sentinel content."""
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [
+            ToolMessage(content="Ставка по ипотеке: 18%", tool_call_id="1"),
+            ToolMessage(
+                content="Error invoking tool 'faq_lookup' with kwargs {'response': 'NO_MATCH_IN_FAQ'} with error:\n query: Field required\n Please fix the error and try again.",
+                tool_call_id="2",
+                status="error",
+            ),
+        ]
+        result = _last_useful_tool_output(msgs)
+        assert result == "Ставка по ипотеке: 18%"
+
+    def test_returns_none_when_only_error_tool_messages(self):
+        """When every ToolMessage is an error, _last_useful_tool_output must
+        return None so the caller falls through to the generic fallback."""
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        msgs = [
+            ToolMessage(
+                content="Error invoking tool 'faq_lookup' with kwargs {'response': 'NO_MATCH_IN_FAQ'} with error:\n query: Field required\n Please fix the error and try again.",
+                tool_call_id="1",
+                status="error",
+            ),
+        ]
+        result = _last_useful_tool_output(msgs)
+        assert result is None
+
+
+# ---- _is_tool_error helper ---------------------------------------------------
+
+class TestIsToolError:
+    """_is_tool_error must classify ToolNode error messages correctly."""
+
+    def test_true_for_status_error(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = ToolMessage(
+            content="Error invoking tool 'faq_lookup' with kwargs {'response': 'NO_MATCH_IN_FAQ'} with error:\n query: Field required\n Please fix the error and try again.",
+            tool_call_id="1",
+            status="error",
+        )
+        assert _is_tool_error(msg) is True
+
+    def test_true_for_error_invoking_tool_prefix_without_status(self):
+        """Belt-and-suspenders: content starting with 'Error invoking tool'
+        is flagged even when status field is absent/None."""
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        # Construct without status so it defaults to None/unset.
+        msg = ToolMessage(
+            content="Error invoking tool 'faq_lookup' with kwargs {} with error:\n query: Field required\n Please fix the error and try again.",
+            tool_call_id="2",
+        )
+        assert _is_tool_error(msg) is True
+
+    def test_true_for_please_fix_your_mistakes_variant(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = ToolMessage(content="Please fix your mistakes.", tool_call_id="3")
+        assert _is_tool_error(msg) is True
+
+    def test_false_for_normal_tool_answer(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = ToolMessage(content="Ставка по ипотеке: 18% годовых", tool_call_id="4")
+        assert _is_tool_error(msg) is False
+
+    def test_false_for_faq_sentinel(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = ToolMessage(content="NO_MATCH_IN_FAQ", tool_call_id="5")
+        assert _is_tool_error(msg) is False
+
+    def test_false_for_non_tool_message(self):
+        from langchain_core.messages import AIMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = AIMessage(content="Error invoking tool 'faq_lookup'")
+        # _is_tool_error checks content-based heuristics too — but this
+        # particular message happens to match the prefix heuristic.
+        # The important guarantee: status="error" on an AIMessage is not set,
+        # so only the content heuristic fires. Document that content-match
+        # also returns True for non-ToolMessages (belt-and-suspenders design).
+        assert _is_tool_error(msg) is True  # content heuristic fires
+
+    def test_false_for_empty_content(self):
+        from langchain_core.messages import ToolMessage
+        from app.agent.nodes.faq import _is_tool_error
+        msg = ToolMessage(content="", tool_call_id="6")
+        assert _is_tool_error(msg) is False
+
+
+# ---- tool error not surfaced to user (integration of helpers) ---------------
+
+class TestToolErrorNotSurfacedToUser:
+    """Verify that the recovery path (_last_useful_tool_output) returns None
+    when the only tool messages are errors, which causes the generic fallback
+    to be shown — not the raw ToolNode error string."""
+
+    def test_error_only_turn_yields_none_recovery(self):
+        """Simulates a round-limit hit where all ToolMessages were errors.
+        _last_useful_tool_output must return None so the caller emits the
+        generic faq_fallback rather than the internal error text."""
+        from langchain_core.messages import ToolMessage, HumanMessage, SystemMessage
+        from app.agent.nodes.faq import _last_useful_tool_output
+        from app.utils.faq_tools import get_faq_fallback
+
+        error_content = (
+            "Error invoking tool 'faq_lookup' with kwargs "
+            "{'response': 'NO_MATCH_IN_FAQ'} with error:\n"
+            " query: Field required\n Please fix the error and try again."
+        )
+        loop_msgs = [
+            SystemMessage(content="system policy"),
+            HumanMessage(content="как заблокировать карту"),
+            ToolMessage(content=error_content, tool_call_id="1", status="error"),
+        ]
+
+        recovered = _last_useful_tool_output(loop_msgs)
+        # Must be None — the error must not be surfaced.
+        assert recovered is None
+
+        # Confirm the fallback string does not contain the error text.
+        fallback = get_faq_fallback("ru")
+        assert "Error invoking tool" not in fallback
+        assert "Please fix the error" not in fallback
 

@@ -214,6 +214,9 @@ The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `c
 - **Provider switch (`USE_GPT`)**: `true` (default) → OpenAI; `false` → Qwen via Together AI (`QWEN_MODEL`/`QWEN_BASE_URL`/`QWEN_API_KEY` or `TOGETHER_API_KEY`). The switch covers BOTH the main agent LLM and the language detector (`lang_detect.py`) via the shared `provider_connection()` helper. The detector can use a cheaper model with `QWEN_LANG_DETECTOR_MODEL` (Qwen mode) or `LANG_DETECTOR_MODEL` (GPT mode).
 - **FAQ embeddings always use OpenAI** (`app/utils/embeddings.py` reads `OPENAI_API_KEY`/`OPENAI_BASE_URL` directly, ignoring `USE_GPT`) — semantic FAQ search stays on OpenAI even when chat runs on Qwen. Keep `OPENAI_API_KEY` set, or disable semantic search with `FAQ_EMBEDDING_ENABLED=false`.
 - Cost tracking only knows OpenAI prices (`_MODEL_PRICING`); Qwen turns report `cost=0`.
+- **`LLM_MAX_TOKENS`** (default `3000`): output token cap for the main agent LLM. For non-reasoning models this is a cap (they stop when done). Reasoning models (e.g. `openai/gpt-oss-20b`) share this budget across analysis + final channels — the old 512 was too small for a final answer to fit.
+- **`LANG_DETECTOR_MAX_TOKENS`** (default `512`): output token cap for the language detector. Same reasoning: 5 tokens was entirely consumed by the analysis channel on reasoning models.
+- **Harmony/reasoning channel stripping**: `extract_text_content()` in `llm.py` automatically strips `<|channel|>...<|message|>` markers leaked by Together AI reasoning models. If a `final` channel is present, only its text is returned; if only an `analysis` channel leaked (answer cut off), `""` is returned so `node_faq` uses its fallback path. Plain model output is returned unchanged. This makes any OpenAI-compatible model work — including reasoning models — though they waste tokens; prefer a non-reasoning instruct model.
 
 ### Hybrid Bot/Operator Mode
 
@@ -261,10 +264,12 @@ LLM:
 - `OPENAI_BASE_URL` — custom OpenAI-compatible API base URL
 - `OPENAI_REQUEST_TIMEOUT` — per-request timeout for the main LLM (seconds, default `15`)
 - `OPENAI_MAX_RETRIES` — retries for all OpenAI calls (default `1`)
+- `LLM_MAX_TOKENS` — output token cap for the main agent LLM (default `3000`); reasoning models need room for analysis + final channels
 - `AGENT_TIMEOUT_SECONDS` — per-turn timeout for agent invocation (seconds, default `25`)
 - `MAX_DIALOG_TOKENS` — approximate token budget for dialog history sent to the LLM (default `3000`)
 - `LANG_DETECTOR_MODEL` — model used by the dedicated language detector (default: `gpt-4o-mini`)
 - `LANG_DETECTOR_TIMEOUT` — per-request timeout for the language detector (seconds, default `10`)
+- `LANG_DETECTOR_MAX_TOKENS` — output token cap for the language detector (default `512`); reasoning models consume the old 5-token budget entirely in the analysis channel
 - `DEFAULT_CUSTOM_LOAN_RATE_PCT` — fallback rate for calculator when product rate is unavailable (default `20.0`)
 
 LangGraph persistence:
