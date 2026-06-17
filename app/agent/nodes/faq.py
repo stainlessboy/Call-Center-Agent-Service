@@ -391,6 +391,25 @@ async def node_faq(state: BotState) -> dict:
         keyboard = [p["name"] for p in products] or None
         return _finalize_turn(state, body, new_dialog, keyboard, is_fallback=False)
 
+    # Deterministic strict FAQ pre-check: skip the LLM entirely when the DB
+    # already has a verified strict-tier answer for this query. This fires
+    # only outside of product/office selection turns (where the user is picking
+    # an item by index/name and the LLM must interpret the context).
+    if (
+        normalized_text
+        and not dialog.get("products")
+        and not dialog.get("offices")
+    ):
+        try:
+            faq_precheck = await _faq_lookup(normalized_text, lang)
+        except Exception:
+            faq_precheck = None
+        if faq_precheck:
+            new_dialog = {**dialog, "last_lang": lang}
+            return _finalize_turn(
+                state, faq_precheck, new_dialog, None, is_fallback=False
+            )
+
     llm = _get_chat_openai()
 
     # Build message list for LLM.
@@ -567,9 +586,6 @@ async def node_faq(state: BotState) -> dict:
         else:
             is_fallback = False
 
-        if is_ai_generated:
-            answer = at("ai_answer_wrapped", lang, body=answer)
-
     except (APIError, json.JSONDecodeError) as exc:
         # APIError covers all openai network/timeout/status errors:
         #   APIConnectionError (incl. APITimeoutError) — transport-level failures
@@ -594,7 +610,11 @@ async def node_faq(state: BotState) -> dict:
     )
     new_dialog["last_lang"] = lang
 
-    result = _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
+    result = _finalize_turn(
+        state, answer, new_dialog, keyboard,
+        is_fallback=is_fallback,
+        wrap_ai_generated=is_ai_generated,
+    )
     if turn_usage:
         result["token_usage"] = turn_usage
     return result

@@ -228,6 +228,18 @@ async def _semantic_lookup(
 # Hybrid lookup — exposed APIs.
 # ---------------------------------------------------------------------------
 
+import re as _re_faq
+
+def _normalize_answer(text: str) -> str:
+    """Minimal normalization for same-row comparison between legs.
+
+    Strips leading/trailing whitespace, casefoldes, and collapses internal
+    whitespace. Used only to decide whether two answer strings point at the
+    same FAQ row — not for display or scoring.
+    """
+    return _re_faq.sub(r"\s+", " ", (text or "").strip().casefold())
+
+
 async def faq_search(query: str, language: str | None = None) -> FaqSearch:
     """Hybrid FAQ search: lexical + semantic legs in parallel, per-leg tiers.
 
@@ -261,6 +273,19 @@ async def faq_search(query: str, language: str | None = None) -> FaqSearch:
         answer, tier, leg = sem_top.answer, sem_tier, "sem"
     else:
         answer, tier, leg = lex_answer, lex_tier, "lex"
+
+    # Cross-leg agreement promotion: if BOTH legs independently agree on the
+    # SAME FAQ entry at tier=low, treat it as strict. Two independent weak
+    # signals pointing at the same row are collectively a strong signal.
+    # Conservative: only promotes low+low agreement, never upgrades "none".
+    if (
+        sem_top is not None
+        and lex_answer is not None
+        and sem_tier == "low"
+        and lex_tier == "low"
+        and _normalize_answer(sem_top.answer) == _normalize_answer(lex_answer)
+    ):
+        tier = "strict"
 
     # Local import: app.agent.tools imports this module, so a module-level
     # import of app.agent would be circular.

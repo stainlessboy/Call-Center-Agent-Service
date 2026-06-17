@@ -23,6 +23,7 @@ def _finalize_turn(
     *,
     is_fallback: bool = False,
     mask_user_text: Optional[str] = None,
+    wrap_ai_generated: bool = False,
 ) -> dict:
     user_text = (state.get("last_user_text") or "").strip()
     # Existing checkpoints from older code may have a SystemMessage at index 0.
@@ -42,6 +43,9 @@ def _finalize_turn(
     else:
         history_text = mask_pii(user_text)
     msgs.append(HumanMessage(content=history_text))
+    # Store the RAW answer in history so subsequent turns never see the
+    # "💡 Ассистент / Yordamchi" wrapper. The wrapper is applied to the
+    # display answer only (returned in the "answer" field below).
     msgs.append(AIMessage(content=answer))
     _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "3000"))
     tail_source = msgs[len(legacy_system_head):]
@@ -72,9 +76,17 @@ def _finalize_turn(
         if _key not in dialog and _key in prior_dialog:
             dialog[_key] = prior_dialog[_key]
 
+    # Apply the "AI assistant" wrapper to the DISPLAY answer only, after
+    # history has been built from the raw answer. This prevents the wrapper
+    # text from appearing in subsequent turns and being mimicked by the model.
+    display_answer = answer
+    if wrap_ai_generated:
+        lang = dialog.get("last_lang") or "ru"
+        display_answer = at("ai_answer_wrapped", lang, body=answer)
+
     return {
         "messages": msgs,
-        "answer": answer,
+        "answer": display_answer,
         "dialog": dialog,
         "keyboard_options": keyboard_options,
         "show_operator_button": show_operator,
