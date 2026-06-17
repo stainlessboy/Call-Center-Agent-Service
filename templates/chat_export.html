@@ -1,0 +1,45 @@
+{% extends "sqladmin/layout.html" %}
+
+{% block content %}
+<div class="container-xl">
+
+  <div class="page-header mb-3">
+    <div class="row align-items-center">
+      <div class="col-auto">
+        <h2 class="page-title">Экспорт чатов</h2>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col-md-8 col-lg-6">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">Выгрузка всех чатов</h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            Экспорт всех сессий и сообщений из базы. Выгружаются только сами
+            сообщения (роль, текст, время) — без токенов, латентности и оценок.
+          </p>
+          <div class="d-flex gap-2">
+            <a href="/admin/export-chats.txt" class="btn btn-outline-success flex-fill">
+              <i class="fa-solid fa-file-lines me-1"></i>
+              Читаемый (TXT)
+            </a>
+            <a href="/admin/export-chats.json" class="btn btn-outline-success flex-fill">
+              <i class="fa-solid fa-file-code me-1"></i>
+              JSON
+            </a>
+          </div>
+          <small class="form-hint d-block mt-3">
+            TXT — переписка в читаемом виде; JSON — сессии с вложенными
+            сообщениями для архива или программной обработки.
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

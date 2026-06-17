@@ -7,7 +7,7 @@ from sqladmin import Admin
 
 from app.admin.auth import AdminAuth
 from app.admin.dashboard_view import DashboardAdmin
-from app.admin.seed_view import FaqExportAdmin, SeedAdmin
+from app.admin.seed_view import ChatExportAdmin, ChatExportDownloadAdmin, FaqExportAdmin, SeedAdmin
 from app.admin.views import (
     CardProductOfferAdmin,
     ChatSessionAdmin,
@@ -44,6 +44,8 @@ def setup_admin(app: FastAPI) -> Admin:
     admin.add_base_view(DashboardAdmin)
     admin.add_base_view(SeedAdmin)
     admin.add_base_view(FaqExportAdmin)
+    admin.add_base_view(ChatExportAdmin)
+    admin.add_base_view(ChatExportDownloadAdmin)
     admin.add_view(UserAdmin)
     admin.add_view(ChatSessionAdmin)
     admin.add_view(MessageAdmin)

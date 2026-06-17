@@ -223,6 +223,117 @@ def _build_faq_csv(rows: list[dict[str, Any]]) -> bytes:
     return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Chat export: all sessions + their messages → readable transcript / JSON
+# ---------------------------------------------------------------------------
+
+# Russian role labels for the readable transcript (mirrors _ROLE_MAP in views.py).
+_CHAT_ROLE_LABELS_RU = {
+    "user": "Пользователь",
+    "assistant": "Ассистент",
+    "operator": "Оператор",
+    "system": "Система",
+}
+
+
+def _fmt_export_dt(dt: Any) -> str:
+    return dt.strftime("%d.%m.%Y %H:%M") if isinstance(dt, datetime) else (str(dt) if dt else "")
+
+
+def _fmt_export_time(dt: Any) -> str:
+    return dt.strftime("%H:%M") if isinstance(dt, datetime) else ""
+
+
+def _iso_or_none(dt: Any) -> str | None:
+    return dt.isoformat() if isinstance(dt, datetime) else None
+
+
+async def _export_chat_rows() -> list[dict[str, Any]]:
+    """Fetch all chat sessions with their messages, ordered, as plain dicts.
+
+    Only the messages themselves (role/text/timestamp) plus minimal session
+    identification (id, user, start time) — no analytics metadata (token usage,
+    latency, feedback, etc.). Loads everything into memory in one pass.
+    """
+    from sqlalchemy import select as sql_select
+    from sqlalchemy.orm import selectinload
+
+    from app.db.models import ChatSession
+    from app.db.session import get_session
+
+    async with get_session() as session:
+        result = await session.execute(
+            sql_select(ChatSession)
+            .options(
+                selectinload(ChatSession.messages),
+                selectinload(ChatSession.user),
+            )
+            .order_by(ChatSession.started_at, ChatSession.id)
+        )
+        sessions = result.scalars().all()
+
+    rows: list[dict[str, Any]] = []
+    for s in sessions:
+        user = s.user
+        user_label = ""
+        if user is not None:
+            user_label = user.username or user.first_name or str(user.telegram_user_id)
+        rows.append(
+            {
+                "id": s.id,
+                "user": user_label,
+                "started_at": s.started_at,
+                "messages": [
+                    {"role": m.role, "text": m.text or "", "created_at": m.created_at}
+                    for m in s.messages
+                ],
+            }
+        )
+    return rows
+
+
+def _build_chats_txt(sessions: list[dict[str, Any]]) -> bytes:
+    """Build a human-readable transcript of all chats (UTF-8 plain text)."""
+    lines: list[str] = []
+    for s in sessions:
+        user = s["user"] or "—"
+        lines.append(f"═══ Сессия {s['id']} — {user} — {_fmt_export_dt(s['started_at'])} ═══")
+        if not s["messages"]:
+            lines.append("(нет сообщений)")
+        for m in s["messages"]:
+            role = _CHAT_ROLE_LABELS_RU.get(m["role"], m["role"] or "?")
+            ts = _fmt_export_time(m["created_at"])
+            prefix = f"[{ts}] " if ts else ""
+            lines.append(f"{prefix}{role}: {m['text']}")
+        lines.append("")  # blank line between sessions
+    return "\n".join(lines).encode("utf-8")
+
+
+def _build_chats_json(sessions: list[dict[str, Any]]) -> bytes:
+    """Build a structured JSON export: sessions with nested messages."""
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(sessions),
+        "sessions": [
+            {
+                "id": s["id"],
+                "user": s["user"],
+                "started_at": _iso_or_none(s["started_at"]),
+                "messages": [
+                    {
+                        "role": m["role"],
+                        "text": m["text"],
+                        "created_at": _iso_or_none(m["created_at"]),
+                    }
+                    for m in s["messages"]
+                ],
+            }
+            for s in sessions
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
 async def _run_seed_branches(
     filials_path: Path,
     offices_path: Path,
@@ -537,6 +648,58 @@ class FaqExportAdmin(BaseView):
         filename = f"faq_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
         return Response(
             content=json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+class ChatExportAdmin(BaseView):
+    """Visible menu entry «Экспорт чатов» — a landing page with download buttons.
+
+    Single @expose on purpose: the actual file downloads live in
+    ChatExportDownloadAdmin (hidden), because multiple @expose-d methods make
+    sqladmin build the menu link from the alphabetically-first route.
+    """
+
+    name = "Экспорт чатов"
+    icon = "fa-solid fa-comments"
+
+    @expose("/export-chats", methods=["GET"])
+    async def export_page(self, request: Request):
+        return await self.templates.TemplateResponse(request, "chat_export.html", context={})
+
+
+class ChatExportDownloadAdmin(BaseView):
+    """Chat export download endpoints, hidden from the admin menu.
+
+    Same reasoning as FaqExportAdmin: the download routes are isolated in their
+    own hidden view so they don't hijack a menu item's link.
+    """
+
+    name = "Chat Export Download"
+    icon = "fa-solid fa-file-export"
+
+    def is_visible(self, request: Request) -> bool:
+        return False
+
+    @expose("/export-chats.txt", methods=["GET"])
+    async def export_chats_txt(self, request: Request):
+        rows = await _export_chat_rows()
+        data = await asyncio.to_thread(_build_chats_txt, rows)
+        filename = f"chats_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt"
+        return Response(
+            content=data,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @expose("/export-chats.json", methods=["GET"])
+    async def export_chats_json(self, request: Request):
+        rows = await _export_chat_rows()
+        data = await asyncio.to_thread(_build_chats_json, rows)
+        filename = f"chats_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+        return Response(
+            content=data,
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
