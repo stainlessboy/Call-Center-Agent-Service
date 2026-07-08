@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import difflib
 import logging
 import os
@@ -240,6 +241,29 @@ def _normalize_answer(text: str) -> str:
     return _re_faq.sub(r"\s+", " ", (text or "").strip().casefold())
 
 
+# Per-turn memoization for faq_search. node_faq's strict pre-check (_faq_lookup)
+# and the faq_lookup tool invoked later in the same turn's ToolNode loop both
+# call faq_search with the same (query, language) pair on non-strict turns —
+# doubling embedding calls + lexical scans for nothing. The contextvar is set
+# fresh once per agent turn (see Agent._ainvoke → reset_faq_turn_cache) and,
+# because it's an asyncio contextvar, is inherited by every coroutine awaited
+# within that same task — including the ToolNode's tool call. Left at its
+# default None (no reset_faq_turn_cache call), faq_search behaves exactly as
+# before: no caching, every call hits the DB/embedding API fresh. This keeps
+# non-agent callers (tests, scripts, other code paths) unaffected.
+_faq_turn_cache: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "_faq_turn_cache", default=None
+)
+
+
+def reset_faq_turn_cache() -> None:
+    """Start a fresh per-turn faq_search memoization scope.
+
+    Call once near the start of each agent turn, before the graph runs.
+    """
+    _faq_turn_cache.set({})
+
+
 async def faq_search(query: str, language: str | None = None) -> FaqSearch:
     """Hybrid FAQ search: lexical + semantic legs in parallel, per-leg tiers.
 
@@ -247,13 +271,31 @@ async def faq_search(query: str, language: str | None = None) -> FaqSearch:
     threshold pair; the leg with the better tier supplies the answer (semantic
     wins ties — embeddings are the more reliable signal). Semantic candidates
     are always attached so callers can surface alternatives on low confidence.
+
+    Memoized within the current agent turn (see _faq_turn_cache) — a second
+    call with the same (normalized query, language) in the same turn returns
+    the cached FaqSearch instead of re-querying.
     """
+    turn_cache = _faq_turn_cache.get()
+    cache_key = None
+    if turn_cache is not None:
+        cache_key = (normalize_text(query), _normalize_language_code(language))
+        cached = turn_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     settings = get_settings()
     if settings.faq_embedding_enabled:
-        lex_task = asyncio.create_task(_lexical_lookup(query, language))
-        sem_task = asyncio.create_task(_semantic_lookup(query, language))
-        lex_answer, lex_score = await lex_task
-        candidates = await sem_task
+        # asyncio.gather (not two sequential `await task`s) so that if this
+        # coroutine itself gets cancelled (e.g. the per-turn
+        # AGENT_TIMEOUT_SECONDS wait_for in chat_service fires while we're
+        # awaiting the lexical leg), the cancellation propagates to BOTH
+        # tasks instead of leaving the semantic-lookup task (embedding call +
+        # Postgres round trip) running as an orphan in the background.
+        (lex_answer, lex_score), candidates = await asyncio.gather(
+            _lexical_lookup(query, language),
+            _semantic_lookup(query, language),
+        )
     else:
         lex_answer, lex_score = await _lexical_lookup(query, language)
         candidates = []
@@ -306,13 +348,16 @@ async def faq_search(query: str, language: str | None = None) -> FaqSearch:
             sem_top.question[:120] if sem_top else None,
         )
 
-    return FaqSearch(
+    result = FaqSearch(
         answer=answer if tier != "none" else None,
         tier=tier,
         lex_score=lex_score,
         sem_score=sem_score,
         candidates=candidates,
     )
+    if turn_cache is not None:
+        turn_cache[cache_key] = result
+    return result
 
 
 async def _faq_lookup(query: str, language: str | None = None) -> Optional[str]:

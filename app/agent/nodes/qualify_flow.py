@@ -5,8 +5,8 @@ import logging as _logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.constants import FLOW_QUALIFY, FLOW_SHOW_PRODUCTS
-from app.agent.i18n import at
-from app.agent.intent import _looks_like_question
+from app.agent.i18n import at, get_main_menu_buttons
+from app.agent.intent import _is_back_trigger, _looks_like_question
 from app.agent.llm import (
     _get_chat_openai,
     accumulate_usage,
@@ -26,7 +26,7 @@ from app.agent.qualify import (
     prefill,
     render_buttons,
 )
-from app.agent.state import BotState, _default_dialog
+from app.agent.state import BotState, _default_dialog, _reset_dialog
 from app.utils.faq_tools import _faq_lookup
 
 _agent_logger = _logging.getLogger(__name__)
@@ -148,6 +148,18 @@ async def node_qualify_flow(state: BotState) -> dict:
     dialog = dict(state.get("dialog") or _default_dialog())
     lang = state.get("lang") or dialog.get("last_lang") or "ru"
 
+    # Escape hatch: "назад"/"отмена"/"cancel" etc. abandon the questionnaire
+    # at any question — there was previously no way out short of finishing
+    # it or explicitly asking for an operator. Unlike calc_flow there is no
+    # product list to return to yet (qualify runs *before* products are
+    # shown), so this always goes back to the main menu.
+    if _is_back_trigger(user_text):
+        new_dialog = _reset_dialog(dialog, last_lang=lang)
+        return _finalize_turn(
+            state, at("qualify_cancelled_to_menu", lang), new_dialog, get_main_menu_buttons(lang),
+            is_fallback=False,
+        )
+
     category = dialog.get("qualify_category")
     node_key = dialog.get("qualify_node")
     answers = dict(dialog.get("qualify_answers") or {})
@@ -183,15 +195,24 @@ async def node_qualify_flow(state: BotState) -> dict:
         "qualify_node": node_key,
         "qualify_answers": answers,
         "last_lang": lang,
+        # Carry the incoming streak forward — _default_dialog() would reset
+        # it to 0 every re-ask, which (combined with is_fallback=True below)
+        # would make fallback_streak stick at 1 forever instead of
+        # accumulating across consecutive unmatched answers.
+        "fallback_streak": dialog.get("fallback_streak", 0),
     }
 
     turn_usage: dict = {}
+    # is_fallback=True in both branches: the user's answer did not match any
+    # option for the current question, so no questionnaire progress was made
+    # this turn — this must count toward fallback_streak so the operator
+    # button eventually surfaces (see helpers._finalize_turn).
     if _looks_like_question(user_text):
         side = await _answer_side_question(user_text, lang, turn_usage)
         prefix = f"{side}\n\n↩️ " if side else "↩️ "
-        result = _finalize_turn(state, prefix + question_text, same_dialog, keyboard)
+        result = _finalize_turn(state, prefix + question_text, same_dialog, keyboard, is_fallback=True)
     else:
-        result = _finalize_turn(state, question_text, same_dialog, keyboard)
+        result = _finalize_turn(state, question_text, same_dialog, keyboard, is_fallback=True)
 
     if turn_usage:
         finalize_usage(turn_usage)

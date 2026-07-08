@@ -202,7 +202,10 @@ class ChatService:
                         human_mode=True,
                     )
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Failed to forward human-mode message to agent interrupt for session=%s",
+                        chat_session.id,
+                    )
             return AgentReply(
                 text=t("sent_to_operator", user.language),
                 pdf_path=None,

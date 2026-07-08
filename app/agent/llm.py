@@ -117,57 +117,78 @@ def _needs_responses_api(model_name: str) -> bool:
 
 
 @lru_cache(maxsize=1)
-def _get_chat_openai() -> Optional[ChatOpenAI]:
-    """Return a LangChain ChatOpenAI instance.
+def _build_chat_openai() -> ChatOpenAI:
+    """Build a LangChain ChatOpenAI instance.
 
     Provider is chosen by the USE_GPT env flag:
       * USE_GPT truthy (default) → OpenAI GPT model
       * USE_GPT falsy           → Qwen model served by Together AI
+
+    Raises on failure — do NOT catch here. lru_cache only memoizes successful
+    returns, never exceptions, so a transient construction failure (bad env,
+    missing key) is retried on the next call instead of being cached as a
+    permanent None (see _get_chat_openai).
+    """
+    common = {
+        "temperature": 0.3,
+        "max_tokens": int(os.getenv("LLM_MAX_TOKENS") or 3000),
+        "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
+        "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
+    }
+
+    # ---- Qwen / Together AI path -------------------------------------
+    if not _use_gpt():
+        qwen_kwargs: dict[str, Any] = {**provider_connection(), **common}
+        extra = qwen_extra_body()
+        if extra:
+            qwen_kwargs["extra_body"] = extra
+        return ChatOpenAI(model=_qwen_model_name(), **qwen_kwargs)
+
+    # ---- OpenAI / GPT path -------------------------------------------
+    model_name = (
+        os.getenv("OPENAI_MODEL")
+        or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL")
+        or "gpt-4o-mini"
+    )
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        **provider_connection(),
+        **common,
+    }
+    # Reasoning-capable models (GPT-5 family, o-series) charge for hidden
+    # reasoning tokens. For chat/tool-calling use cases the reasoning phase
+    # is wasteful — pick the cheapest/fastest effort per family.
+    # Override via REASONING_EFFORT env.
+    if _is_reasoning_model(model_name):
+        kwargs["reasoning_effort"] = (
+            os.getenv("REASONING_EFFORT") or _default_reasoning_effort(model_name)
+        )
+    # gpt-5.x must use /v1/responses endpoint when combining tools with
+    # reasoning_effort. ChatOpenAI with use_responses_api=True handles this.
+    if _needs_responses_api(model_name):
+        kwargs["use_responses_api"] = True
+    return ChatOpenAI(**kwargs)
+
+
+def _get_chat_openai() -> Optional[ChatOpenAI]:
+    """Return a cached ChatOpenAI instance, or None if construction fails.
+
+    Thin wrapper around _build_chat_openai so failures are logged and
+    swallowed here (callers already handle a None LLM) while the lru_cache on
+    the inner function never memoizes the failure.
     """
     try:
-        common = {
-            "temperature": 0.3,
-            "max_tokens": int(os.getenv("LLM_MAX_TOKENS") or 3000),
-            "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
-            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
-        }
-
-        # ---- Qwen / Together AI path -------------------------------------
-        if not _use_gpt():
-            qwen_kwargs: dict[str, Any] = {**provider_connection(), **common}
-            extra = qwen_extra_body()
-            if extra:
-                qwen_kwargs["extra_body"] = extra
-            return ChatOpenAI(model=_qwen_model_name(), **qwen_kwargs)
-
-        # ---- OpenAI / GPT path -------------------------------------------
-        model_name = (
-            os.getenv("OPENAI_MODEL")
-            or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL")
-            or "gpt-4o-mini"
-        )
-        kwargs: dict[str, Any] = {
-            "model": model_name,
-            **provider_connection(),
-            **common,
-        }
-        # Reasoning-capable models (GPT-5 family, o-series) charge for hidden
-        # reasoning tokens. For chat/tool-calling use cases the reasoning phase
-        # is wasteful — pick the cheapest/fastest effort per family.
-        # Override via REASONING_EFFORT env.
-        if _is_reasoning_model(model_name):
-            kwargs["reasoning_effort"] = (
-                os.getenv("REASONING_EFFORT") or _default_reasoning_effort(model_name)
-            )
-        # gpt-5.x must use /v1/responses endpoint when combining tools with
-        # reasoning_effort. ChatOpenAI with use_responses_api=True handles this.
-        if _needs_responses_api(model_name):
-            kwargs["use_responses_api"] = True
-        return ChatOpenAI(**kwargs)
+        return _build_chat_openai()
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Failed to create ChatOpenAI: %s", exc)
         return None
+
+
+# Tests call `_llm._get_chat_openai.cache_clear()` to reset the cached client
+# between cases. The cache now lives on _build_chat_openai, so alias it here
+# to keep that call site working without touching every test.
+_get_chat_openai.cache_clear = _build_chat_openai.cache_clear
 
 
 def get_model_name() -> str:

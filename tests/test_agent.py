@@ -2342,15 +2342,23 @@ class TestNormalizeUserText:
 
 class TestCustomLoanCalculatorNoRate:
     def test_uses_fixed_default_rate(self):
-        """Tool no longer accepts rate_pct — uses DEFAULT_CUSTOM_LOAN_RATE_PCT."""
-        from app.agent.tools import custom_loan_calculator, _DEFAULT_CUSTOM_LOAN_RATE_PCT
-        result = _run(custom_loan_calculator.coroutine(
-            amount=50_000_000,
-            term_months=60,
-            downpayment=0,
-            state={"lang": "ru"},
-        ))
-        assert f"{_DEFAULT_CUSTOM_LOAN_RATE_PCT}" in result
+        """Tool no longer accepts rate_pct — uses Settings.default_custom_loan_rate_pct
+        (DEFAULT_CUSTOM_LOAN_RATE_PCT env var), read live via get_settings()
+        instead of a module-level constant frozen at import time (C-12)."""
+        from app.agent.tools import custom_loan_calculator
+        from app.config import get_settings
+        get_settings.cache_clear()
+        try:
+            default_rate = get_settings().default_custom_loan_rate_pct
+            result = _run(custom_loan_calculator.coroutine(
+                amount=50_000_000,
+                term_months=60,
+                downpayment=0,
+                state={"lang": "ru"},
+            ))
+            assert f"{default_rate}" in result
+        finally:
+            get_settings.cache_clear()
 
     def test_schema_has_no_rate_pct(self):
         from app.agent.tools import custom_loan_calculator
@@ -2378,15 +2386,24 @@ class TestCustomLoanCalculatorNoRate:
                     or "taxminiy" in lowered), f"Missing approximate disclaimer in {lang}"
 
     def test_env_override_rate(self, monkeypatch):
-        """DEFAULT_CUSTOM_LOAN_RATE_PCT env overrides the default."""
+        """DEFAULT_CUSTOM_LOAN_RATE_PCT env overrides the default via
+        get_settings() — no module reload needed since C-12 moved this off
+        a module-level constant read once at import time."""
+        from app.agent.tools import custom_loan_calculator
+        from app.config import get_settings
         monkeypatch.setenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "18.5")
-        # Re-import so the module reads the new env
-        import importlib
-        import app.agent.tools as tools_module
-        importlib.reload(tools_module)
-        assert tools_module._DEFAULT_CUSTOM_LOAN_RATE_PCT == 18.5
-        monkeypatch.delenv("DEFAULT_CUSTOM_LOAN_RATE_PCT")
-        importlib.reload(tools_module)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().default_custom_loan_rate_pct == 18.5
+            result = _run(custom_loan_calculator.coroutine(
+                amount=50_000_000,
+                term_months=60,
+                downpayment=0,
+                state={"lang": "ru"},
+            ))
+            assert "18.5" in result
+        finally:
+            get_settings.cache_clear()
 
 
 # ---- faq_lookup NO_MATCH_IN_FAQ marker -----------------------------------

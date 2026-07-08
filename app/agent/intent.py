@@ -66,6 +66,12 @@ def _is_back_trigger(text: str) -> bool:
         or "все продукт" in lower or "назад" in lower
         or "all products" in lower or "back" in lower
         or "barcha mahsulot" in lower or "orqaga" in lower or "ortga" in lower
+        # "cancel / abandon current flow" phrasings — used to let the user
+        # back out of the calculator / lead-capture / qualify questionnaire
+        # mid-flow (see node_calc_flow / node_qualify_flow).
+        or "отмена" in lower or "отменить" in lower or "отмени" in lower
+        or "cancel" in lower
+        or "bekor" in lower  # bekor qilish / bekor qil / bekor qilamiz, etc.
     )
 
 

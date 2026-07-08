@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging as _logging
-import os as _os
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -12,9 +11,9 @@ from app.agent.calc_extractor import (
     extract_prefill_from_history,
     extract_updated_value,
 )
-from app.agent.constants import FLOW_CALC, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM
-from app.agent.i18n import _localized_name, at, get_calc_questions
-from app.agent.intent import _is_recalculate, _is_yes, _looks_like_question
+from app.agent.constants import FLOW_CALC, FLOW_SHOW_PRODUCTS, STEP_AMOUNT, STEP_DOWNPAYMENT, STEP_TERM
+from app.agent.i18n import _localized_name, at, get_calc_questions, get_main_menu_buttons
+from app.agent.intent import _is_back_trigger, _is_recalculate, _is_yes, _looks_like_question
 from app.agent.llm import (
     _get_chat_openai,
     accumulate_usage,
@@ -24,15 +23,14 @@ from app.agent.llm import (
 )
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.pii_masker import mask_pii
+from app.agent.products import _format_product_list_text
 from app.agent.rate_rules import rate_bounds, select_rate
-from app.agent.state import BotState, _default_dialog
+from app.agent.state import BotState, _default_dialog, _reset_dialog
+from app.config import get_settings
 from app.utils.faq_tools import _faq_lookup
 from app.utils.pdf_generator import generate_amortization_pdf
 
 _agent_logger = _logging.getLogger(__name__)
-
-# Fallback rate when no rule matches and product has no aggregate rate either.
-_DEFAULT_CREDIT_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
 
 # Synthetic step key for the age collection step (credit only, needs_age products).
 STEP_AGE = "age"
@@ -107,7 +105,10 @@ def _lookup_credit_rate(product: dict, calc_slots: dict, dialog: dict) -> float:
     """Find the best matching rate from rate_rules for the user's inputs.
 
     Uses the rate-rule engine (select_rate). Falls back to rate_bounds minimum,
-    then to the product aggregate rate_min_pct, then to _DEFAULT_CREDIT_RATE_PCT.
+    then to the product aggregate rate_min_pct, then to
+    ``Settings.default_custom_loan_rate_pct`` (``DEFAULT_CUSTOM_LOAN_RATE_PCT``
+    env var, read live via ``get_settings()`` rather than cached at import
+    time — see app/config.py).
     """
     rules = product.get("rate_rules") or []
 
@@ -134,7 +135,7 @@ def _lookup_credit_rate(product: dict, calc_slots: dict, dialog: dict) -> float:
     if aggregate is not None:
         return float(aggregate)
 
-    return _DEFAULT_CREDIT_RATE_PCT
+    return get_settings().default_custom_loan_rate_pct
 
 
 def _lookup_deposit_rate(product: dict, calc_slots: dict) -> float:
@@ -172,10 +173,45 @@ def _lookup_deposit_rate(product: dict, calc_slots: dict) -> float:
     return float(product.get("rate_pct") or 15.0)
 
 
+def _handle_calc_cancel(state: BotState, dialog: dict, lang: str) -> dict:
+    """User asked to back out of the calculator / lead-capture mini-flow.
+
+    Mirrors the "◀ Все продукты" shortcut in node_faq: if a product list is
+    still known for this dialog (the user started the calculator from a
+    product card), re-show it (FLOW_SHOW_PRODUCTS) so they land somewhere
+    useful instead of an empty screen. Otherwise (e.g. already past the
+    calculation, `products` no longer carried in `dialog`) there is nothing
+    to go back to — reset to the main menu.
+    """
+    products = list(dialog.get("products") or [])
+    category = dialog.get("category", "")
+    if products:
+        body = _format_product_list_text(products, category, lang)
+        new_dialog = _reset_dialog(
+            dialog, flow=FLOW_SHOW_PRODUCTS, category=category, products=products, last_lang=lang,
+        )
+        keyboard = [p["name"] for p in products] or None
+        text = at("calc_cancelled_to_list", lang) + "\n\n" + body
+        return _finalize_turn(state, text, new_dialog, keyboard, is_fallback=False)
+
+    new_dialog = _reset_dialog(dialog, last_lang=lang)
+    return _finalize_turn(
+        state, at("calc_cancelled_to_menu", lang), new_dialog, get_main_menu_buttons(lang),
+        is_fallback=False,
+    )
+
+
 async def node_calc_flow(state: BotState) -> dict:
     """Handles both calc_step (collecting calculator inputs) and lead_step (name/phone capture)."""
     user_text = (state.get("last_user_text") or "").strip()
     dialog = dict(state.get("dialog") or _default_dialog())
+    lang = state.get("lang") or dialog.get("last_lang") or "ru"
+
+    # Escape hatch: "назад"/"отмена"/"cancel" etc. bail out of the calculator
+    # or the lead-capture mini-flow at any step — there was previously no way
+    # back short of finishing the flow or explicitly asking for an operator.
+    if _is_back_trigger(user_text):
+        return _handle_calc_cancel(state, dialog, lang)
 
     if dialog.get("lead_step"):
         return await _handle_lead_step(state, user_text, dialog)
@@ -365,7 +401,15 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
                 prefix = f"{faq_ans}\n\n↩️ " if faq_ans else "↩️ "
                 if turn_usage:
                     finalize_usage(turn_usage)
-                result = _finalize_turn(state, prefix + current_q, {**dialog, "calc_slots": calc_slots})
+                # is_fallback=True: no progress was made on the current calc
+                # slot this turn — counts toward fallback_streak so the
+                # operator button eventually surfaces if the user keeps
+                # asking unrelated things instead of answering (see
+                # helpers._finalize_turn / FALLBACK_STREAK_THRESHOLD).
+                result = _finalize_turn(
+                    state, prefix + current_q, {**dialog, "calc_slots": calc_slots},
+                    is_fallback=True,
+                )
                 if turn_usage:
                     result["token_usage"] = turn_usage
                 return result
@@ -378,10 +422,13 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             }
             if turn_usage:
                 finalize_usage(turn_usage)
+            # is_fallback=True: the user's input for this step could not be
+            # parsed at all — a clear fallback turn for streak purposes.
             result = _finalize_turn(
                 state,
                 _hints.get(calc_step, at("hint_generic", lang)),
                 {**dialog, "calc_slots": calc_slots},
+                is_fallback=True,
             )
             if turn_usage:
                 result["token_usage"] = turn_usage

@@ -95,8 +95,8 @@ _DETECTOR_SYSTEM_PROMPT = (
 
 
 @lru_cache(maxsize=1)
-def _get_detector_llm() -> Optional[ChatOpenAI]:
-    """Return a cached ChatOpenAI instance for language detection.
+def _build_detector_llm() -> ChatOpenAI:
+    """Build a ChatOpenAI instance for language detection.
 
     Follows the same provider switch as the main agent (USE_GPT):
       * GPT mode  → `LANG_DETECTOR_MODEL` (default `gpt-4o-mini`) — always cheap,
@@ -105,34 +105,58 @@ def _get_detector_llm() -> Optional[ChatOpenAI]:
         Set QWEN_LANG_DETECTOR_MODEL to a smaller Qwen to avoid running the full
         agent model for a 1-token classification every turn.
     Connection (api_key / base_url) comes from `provider_connection()`.
+
+    Raises on failure — do NOT catch here. `lru_cache` only memoizes
+    successful returns, never exceptions, so a transient construction
+    failure (bad env, provider outage) is retried on the next call instead
+    of being cached as a permanent `None` (see `_get_detector_llm`). This
+    mirrors the same split applied to `app.agent.llm._build_chat_openai` /
+    `_get_chat_openai`.
+    """
+    if use_gpt():
+        model = os.getenv("LANG_DETECTOR_MODEL") or "gpt-4o-mini"
+    else:
+        model = (
+            os.getenv("QWEN_LANG_DETECTOR_MODEL")
+            or os.getenv("QWEN_MODEL")
+            or "Qwen/Qwen3.5-9B"
+        )
+    kwargs: dict = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": int(os.getenv("LANG_DETECTOR_MAX_TOKENS") or 512),
+        "timeout": float(os.getenv("LANG_DETECTOR_TIMEOUT") or 10.0),
+        "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
+        **provider_connection(),
+    }
+    if not use_gpt():
+        # Qwen3 must run with thinking off — otherwise the reasoning channel
+        # consumes the entire token budget and the detector returns nothing.
+        extra = qwen_extra_body()
+        if extra:
+            kwargs["extra_body"] = extra
+    return ChatOpenAI(**kwargs)
+
+
+def _get_detector_llm() -> Optional[ChatOpenAI]:
+    """Return a cached ChatOpenAI instance for language detection, or None.
+
+    Thin wrapper around `_build_detector_llm` so failures are logged and
+    swallowed here (callers already handle a None detector by falling back
+    to the caller-supplied language) while the `lru_cache` on the inner
+    function never memoizes the failure.
     """
     try:
-        if use_gpt():
-            model = os.getenv("LANG_DETECTOR_MODEL") or "gpt-4o-mini"
-        else:
-            model = (
-                os.getenv("QWEN_LANG_DETECTOR_MODEL")
-                or os.getenv("QWEN_MODEL")
-                or "Qwen/Qwen3.5-9B"
-            )
-        kwargs: dict = {
-            "model": model,
-            "temperature": 0,
-            "max_tokens": int(os.getenv("LANG_DETECTOR_MAX_TOKENS") or 512),
-            "timeout": float(os.getenv("LANG_DETECTOR_TIMEOUT") or 10.0),
-            "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
-            **provider_connection(),
-        }
-        if not use_gpt():
-            # Qwen3 must run with thinking off — otherwise the reasoning channel
-            # consumes the entire token budget and the detector returns nothing.
-            extra = qwen_extra_body()
-            if extra:
-                kwargs["extra_body"] = extra
-        return ChatOpenAI(**kwargs)
+        return _build_detector_llm()
     except Exception as exc:
         _logger.warning("Failed to create language detector LLM: %s", exc)
         return None
+
+
+# Tests call `ld._get_detector_llm.cache_clear()` to reset the cached client
+# between cases. The cache now lives on _build_detector_llm, so alias it here
+# to keep those call sites working without touching every test.
+_get_detector_llm.cache_clear = _build_detector_llm.cache_clear
 
 
 def _should_skip_detection(text: str) -> bool:

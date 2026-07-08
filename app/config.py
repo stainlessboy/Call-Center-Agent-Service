@@ -52,6 +52,7 @@ class Settings:
     faq_sem_low_threshold: float
     faq_lex_strict_threshold: float
     faq_lex_low_threshold: float
+    default_custom_loan_rate_pct: float
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -138,4 +139,5 @@ def get_settings() -> Settings:
         faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.45),
         faq_lex_strict_threshold=_parse_float(os.getenv("FAQ_LEX_STRICT_THRESHOLD"), default=0.75),
         faq_lex_low_threshold=_parse_float(os.getenv("FAQ_LEX_LOW_THRESHOLD"), default=0.55),
+        default_custom_loan_rate_pct=_parse_float(os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT"), default=20.0),
     )

@@ -629,6 +629,23 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "uz": "Yordam kerak bo'lsa — yozing.",
     },
 
+    # ── Cancel / back-out (calc_flow, qualify_flow) ───────────────────────
+    "calc_cancelled_to_list": {
+        "ru": "Хорошо, отменил расчёт. Вот список продуктов:",
+        "en": "Alright, the calculation is cancelled. Here's the product list:",
+        "uz": "Xo'p, hisob-kitob bekor qilindi. Mahsulotlar ro'yxati:",
+    },
+    "calc_cancelled_to_menu": {
+        "ru": "Хорошо, отменил. Чем ещё могу помочь?",
+        "en": "Alright, cancelled. How else can I help you?",
+        "uz": "Xo'p, bekor qilindi. Yana qanday yordam bera olaman?",
+    },
+    "qualify_cancelled_to_menu": {
+        "ru": "Хорошо, прервал опрос. Чем могу помочь?",
+        "en": "Alright, stopped the questionnaire. How can I help you?",
+        "uz": "Xo'p, so'rovnomani to'xtatdim. Sizga qanday yordam bera olaman?",
+    },
+
     # ── Calc side-question prompt ─────────────────────────────────────────
     "calc_side_system": {
         "ru": "Ты консультант банка. Отвечай кратко.",
@@ -841,6 +858,18 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
     "cmp_cashback": {"ru": "кэшбэк", "en": "cashback", "uz": "keshbek"},
     "cmp_annual_fee": {"ru": "обслуживание", "en": "annual fee", "uz": "yillik xizmat"},
     "cmp_downpayment": {"ru": "взнос", "en": "down payment", "uz": "boshlang'ich to'lov"},
+
+    # ── Custom loan calculator — input range validation ───────────────────
+    "custom_calc_amount_too_large": {
+        "ru": "Сумма слишком велика для этого калькулятора. Укажите сумму до {max_amount} сум.",
+        "en": "The amount is too large for this calculator. Please enter an amount up to {max_amount} UZS.",
+        "uz": "Summa ushbu kalkulyator uchun juda katta. {max_amount} so'mgacha summa kiriting.",
+    },
+    "custom_calc_term_too_large": {
+        "ru": "Срок слишком большой для этого калькулятора. Укажите срок до {max_term} мес.",
+        "en": "The term is too long for this calculator. Please enter a term up to {max_term} months.",
+        "uz": "Muddat ushbu kalkulyator uchun juda uzun. {max_term} oygacha muddat kiriting.",
+    },
 
     # ── Custom loan calculator result ─────────────────────────────────────
     "custom_calc_result": {

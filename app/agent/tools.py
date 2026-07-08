@@ -16,6 +16,7 @@ from app.agent.products import (
     _format_product_list_text,
     _get_products_by_category,
 )
+from app.config import get_settings
 from app.utils.faq_tools import faq_search
 
 # All supported product categories, ordered from most common to least.
@@ -30,11 +31,19 @@ _ALL_CATEGORIES = [
     "fx_card",
 ]
 
-# Fixed conservative default rate (in %) used by custom_loan_calculator when
-# the user did NOT explicitly state one. Making it visible (and configurable
-# via env) keeps the LLM from hallucinating a specific rate like "12%".
-import os as _os
-_DEFAULT_CUSTOM_LOAN_RATE_PCT: float = float(_os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT", "20.0"))
+# custom_loan_calculator's default rate now lives on Settings
+# (`default_custom_loan_rate_pct`, `DEFAULT_CUSTOM_LOAN_RATE_PCT` env var) —
+# read live via get_settings() at call time instead of once at import time,
+# so a changed env value takes effect without a process restart in any
+# context that already calls `get_settings.cache_clear()` (e.g. tests).
+
+# Sanity caps for custom_loan_calculator's free-form inputs — the LLM/user
+# can supply arbitrary numbers, and the annuity formula's `(1 + r) ** term`
+# term can raise OverflowError for pathological terms. No natural per-product
+# bound applies here (this calculator isn't tied to a specific product), so
+# these are conservative fixed ceilings.
+_MAX_CUSTOM_LOAN_TERM_MONTHS: int = 600  # 50 years
+_MAX_CUSTOM_LOAN_AMOUNT: float = 10_000_000_000.0  # 10 billion UZS
 
 # Sentinels returned by faq_lookup — explicit strings so the LLM can detect
 # and handle each case without hallucinating an answer. Thresholds and tier
@@ -356,13 +365,20 @@ async def custom_loan_calculator(
 
     DO NOT call when the user wants a specific bank product — use get_products + start_calculator instead.
 
+    Sanity limits: amount up to 10 billion UZS, term_months up to 600 (50
+    years) — the tool returns a message with the allowed range instead of
+    computing when either is exceeded.
+
     Parameters:
         amount: Total loan amount in UZS BEFORE deducting downpayment (e.g. 50_000_000).
         term_months: Integer number of months (e.g. 36 for 3 years).
         downpayment: Absolute downpayment in UZS (0.0 if none).
     """
     lang = _lang_from_state(state)
-    rate_pct = _DEFAULT_CUSTOM_LOAN_RATE_PCT
+    rate_pct = get_settings().default_custom_loan_rate_pct
+
+    def fmt(v: float) -> str:
+        return f"{v:,.0f}".replace(",", " ")
 
     principal = amount - downpayment
     if principal <= 0:
@@ -372,6 +388,8 @@ async def custom_loan_calculator(
             "uz": "Iltimos, to'g'ri summalarni kiriting: kredit summasi boshlang'ich to'lovdan katta bo'lishi kerak.",
         }
         return _err.get(lang) or _err["ru"]
+    if amount > _MAX_CUSTOM_LOAN_AMOUNT:
+        return at("custom_calc_amount_too_large", lang, max_amount=fmt(_MAX_CUSTOM_LOAN_AMOUNT))
     if term_months <= 0:
         _err = {
             "ru": "Укажите корректный срок (в месяцах, больше нуля).",
@@ -379,14 +397,13 @@ async def custom_loan_calculator(
             "uz": "Iltimos, to'g'ri muddatni kiriting (oyda, noldan katta).",
         }
         return _err.get(lang) or _err["ru"]
+    if term_months > _MAX_CUSTOM_LOAN_TERM_MONTHS:
+        return at("custom_calc_term_too_large", lang, max_term=_MAX_CUSTOM_LOAN_TERM_MONTHS)
 
     r = rate_pct / 100 / 12
     monthly = principal * r * (1 + r) ** term_months / ((1 + r) ** term_months - 1)
     total = monthly * term_months
     overpayment = total - principal
-
-    def fmt(v: float) -> str:
-        return f"{v:,.0f}".replace(",", " ")
 
     return at(
         "custom_calc_result",

@@ -450,7 +450,32 @@ async def node_faq(state: BotState) -> dict:
     tool_calls_made: list[dict] = []
     turn_usage: dict = {}
 
-    llm_with_tools = llm.bind_tools(_FAQ_TOOLS)
+    if llm is None:
+        # _get_chat_openai() failed to construct a client (bad env, transient
+        # provider outage). Mirror the APIError fallback below instead of
+        # crashing on llm.bind_tools(None): try the strict FAQ lookup, else
+        # surface the generic fallback reply.
+        _agent_logger.warning(
+            "node_faq: no LLM available, session=%s", state.get("session_id"),
+        )
+        faq_ans = await _faq_lookup(user_text, lang)
+        if faq_ans:
+            answer = faq_ans
+            is_fallback = False
+        new_dialog, keyboard = await _update_dialog_from_tools(dialog, [], user_text, lang)
+        new_dialog["last_lang"] = lang
+        return _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
+
+    # parallel_tool_calls=False keeps the per-round contract simple: the loop
+    # below inspects a single tool call per round (_update_dialog_from_tools
+    # only looks at tool_calls[-1], and the display-tool short-circuit assumes
+    # one tool result). Some OpenAI-compatible backends (e.g. Gemma via vLLM)
+    # emit multiple parallel tool calls even when the LLM object doesn't
+    # advertise the kwarg — degrade gracefully in that case.
+    try:
+        llm_with_tools = llm.bind_tools(_FAQ_TOOLS, parallel_tool_calls=False)
+    except TypeError:
+        llm_with_tools = llm.bind_tools(_FAQ_TOOLS)
     max_rounds = 3
     try:
         loop_msgs = list(chat_msgs)
