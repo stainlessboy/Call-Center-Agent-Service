@@ -32,21 +32,30 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "▶ Checking for stale pinned docker network..."
-            # 172.28.0.0/16 was pinned once, clashed with the host network and
-            # broke container DNS. `up` alone won't recreate the network after
-            # the pin was removed from compose — force it with `down` once.
-            SUBNET=$(docker network inspect call-center-agent-service_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
-            if [ "$SUBNET" = "172.28.0.0/16" ]; then
-              echo "▶ Removing stale 172.28.0.0/16 network (broken DNS)..."
-              docker compose -f docker-compose.prod.yml down
-            fi
+            echo "▶ DIAG: docker network state before restart..."
+            docker network ls || true
+            docker network inspect call-center-agent-service_default --format 'subnet={{range .IPAM.Config}}{{.Subnet}}{{end}} attached={{range $id, $c := .Containers}}{{$c.Name}}={{$c.IPv4Address}} {{end}}' || true
 
-            echo "▶ Building and restarting containers..."
+            # Full down+up: container DNS broke after in-place network
+            # recreation (stale endpoints); plain `up` does not reattach
+            # running containers, so recreate everything atomically.
+            echo "▶ Building and restarting containers (full recreate)..."
+            docker compose -f docker-compose.prod.yml down --remove-orphans
             docker compose -f docker-compose.prod.yml up -d --build
 
             echo "▶ Waiting for API to be ready..."
             sleep 5
+
+            echo "▶ DIAG: DNS check inside api container..."
+            docker compose -f docker-compose.prod.yml exec -T api cat /etc/resolv.conf || true
+            if ! docker compose -f docker-compose.prod.yml exec -T api getent hosts db; then
+              echo "⚠️ Container DNS still broken — restarting docker daemon..."
+              sudo -n systemctl restart docker || systemctl restart docker || service docker restart || true
+              sleep 15
+              docker compose -f docker-compose.prod.yml up -d
+              sleep 5
+              docker compose -f docker-compose.prod.yml exec -T api getent hosts db || echo "❌ DNS still broken after daemon restart"
+            fi
 
             echo "▶ Running migrations..."
             docker compose -f docker-compose.prod.yml exec -T api alembic upgrade head
