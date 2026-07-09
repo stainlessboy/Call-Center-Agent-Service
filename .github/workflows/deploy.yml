@@ -32,6 +32,16 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
+            echo "▶ Checking for stale pinned docker network..."
+            # 172.28.0.0/16 was pinned once, clashed with the host network and
+            # broke container DNS. `up` alone won't recreate the network after
+            # the pin was removed from compose — force it with `down` once.
+            SUBNET=$(docker network inspect call-center-agent-service_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
+            if [ "$SUBNET" = "172.28.0.0/16" ]; then
+              echo "▶ Removing stale 172.28.0.0/16 network (broken DNS)..."
+              docker compose -f docker-compose.prod.yml down
+            fi
+
             echo "▶ Building and restarting containers..."
             docker compose -f docker-compose.prod.yml up -d --build
 
@@ -46,6 +56,7 @@ jobs:
 
             echo "▶ Checking health..."
             sleep 3
-            curl -sf http://localhost:8001/health || echo "⚠️ Health check failed, check logs"
+            # api is not published on the host — check from inside the container
+            docker compose -f docker-compose.prod.yml exec -T api curl -sf http://localhost:8001/health || echo "⚠️ Health check failed, check logs"
 
             echo "✅ Deploy complete!"
