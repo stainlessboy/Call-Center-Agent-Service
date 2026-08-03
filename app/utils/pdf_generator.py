@@ -5,6 +5,8 @@ import tempfile
 import uuid
 from typing import Optional
 
+from app.utils.amortization import annuity_payment, build_schedule
+
 # fpdf2 must be installed: pip install fpdf2
 try:
     from fpdf import FPDF, FPDFException
@@ -56,10 +58,8 @@ def _t(key: str, lang: str, **kwargs: str) -> str:
 
 
 def _annuity_payment(principal: float, monthly_rate: float, n: int) -> float:
-    """Compute monthly annuity payment."""
-    if monthly_rate == 0:
-        return principal / n
-    return principal * monthly_rate * (1 + monthly_rate) ** n / ((1 + monthly_rate) ** n - 1)
+    """Compute monthly annuity payment (thin alias over app.utils.amortization)."""
+    return annuity_payment(principal, monthly_rate, n)
 
 
 def generate_amortization_pdf(
@@ -84,16 +84,11 @@ def generate_amortization_pdf(
     monthly_rate = annual_rate_pct / 100 / 12
     payment = _annuity_payment(float(principal), monthly_rate, term_months)
 
-    # Build amortization table
-    rows = []
-    balance = float(principal)
-    for month in range(1, term_months + 1):
-        interest = balance * monthly_rate
-        principal_part = payment - interest
-        balance -= principal_part
-        if balance < 0:
-            balance = 0.0
-        rows.append((month, payment, principal_part, interest, max(balance, 0.0)))
+    # Build amortization table (shared math — see app/utils/amortization.py)
+    rows = [
+        (r.month, r.payment, r.principal_part, r.interest_part, r.balance)
+        for r in build_schedule(float(principal), annual_rate_pct, term_months)
+    ]
 
     # Build PDF
     pdf = FPDF()

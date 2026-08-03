@@ -195,6 +195,101 @@ class TestHybridLookup:
         get_settings.cache_clear()
 
 
+# ── faq_precheck_answer: node_faq's pre-LLM shortcut (stricter than tier) ──
+
+class TestFaqPrecheckAnswer:
+    """Regression coverage for the mortgage→microloan hijack (commit after
+    6b62221): faq_search's combined tier is the BEST of the two legs, so a
+    single mediocre leg was enough to bypass the LLM (and every product
+    tool) and return a wrong FAQ answer verbatim. faq_precheck_answer fixes
+    this by requiring BOTH legs to independently clear their own strict
+    threshold. Numbers below are the measured production scores from the
+    bug report."""
+
+    def test_both_legs_strict_returns_answer(self, monkeypatch):
+        """Genuine FAQ hit: 'Как заблокировать карту?' — lex=1.000, sem=1.000."""
+        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+        from app.utils.faq_tools import FaqCandidate, faq_precheck_answer
+        with patch(
+            "app.utils.faq_tools._lexical_lookup",
+            new=AsyncMock(return_value=("Зайдите в приложение", 1.000)),
+        ), patch(
+            "app.utils.faq_tools._semantic_lookup",
+            new=AsyncMock(return_value=[
+                FaqCandidate("Как заблокировать карту?", "Зайдите в приложение", 1.000)
+            ]),
+        ):
+            result = _run(faq_precheck_answer("Как заблокировать карту?", "ru"))
+
+        assert result == "Зайдите в приложение"
+        get_settings.cache_clear()
+
+    def test_one_leg_strict_returns_none(self, monkeypatch):
+        """Measured hijack: 'Хочу оформить ипотеку' — lex=0.727, sem=0.667.
+
+        Both below their own strict thresholds (lex 0.75, sem 0.60) even
+        though faq_search's combined (max-of-legs) tier would call this
+        "strict". Must NOT return an answer — this is exactly the mortgage→
+        микрозайм hijack from production.
+        """
+        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+        from app.utils.faq_tools import FaqCandidate, faq_precheck_answer
+        with patch(
+            "app.utils.faq_tools._lexical_lookup",
+            new=AsyncMock(return_value=("FAQ про микрозайм", 0.727)),
+        ), patch(
+            "app.utils.faq_tools._semantic_lookup",
+            new=AsyncMock(return_value=[
+                FaqCandidate("q", "FAQ про микрозайм", 0.667)
+            ]),
+        ):
+            result = _run(faq_precheck_answer("Хочу оформить ипотеку", "ru"))
+
+        assert result is None
+        get_settings.cache_clear()
+
+    def test_embeddings_disabled_falls_back_to_lexical_only(self, monkeypatch):
+        """With semantic search off, the semantic leg can never score — only
+        the lexical leg is required, otherwise the pre-check could never
+        fire in that configuration."""
+        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "false")
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+        from app.utils.faq_tools import faq_precheck_answer
+        with patch(
+            "app.utils.faq_tools._lexical_lookup",
+            new=AsyncMock(return_value=("Зайдите в приложение", 1.000)),
+        ):
+            result = _run(faq_precheck_answer("Как заблокировать карту?", "ru"))
+
+        assert result == "Зайдите в приложение"
+        get_settings.cache_clear()
+
+    def test_embeddings_disabled_and_lex_not_strict_returns_none(self, monkeypatch):
+        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "false")
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+        from app.utils.faq_tools import faq_precheck_answer
+        with patch(
+            "app.utils.faq_tools._lexical_lookup",
+            new=AsyncMock(return_value=("FAQ про микрозайм", 0.727)),
+        ):
+            result = _run(faq_precheck_answer("Хочу оформить ипотеку", "ru"))
+
+        assert result is None
+        get_settings.cache_clear()
+
+
 # ── _semantic_lookup short-circuits ───────────────────────────────────────
 
 class TestSemanticLookupGuards:

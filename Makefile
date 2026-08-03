@@ -2,7 +2,8 @@ COMPOSE_PROD := docker compose -f docker-compose.prod.yml
 COMPOSE_DEV  := docker compose
 
 .PHONY: help dev dev-down prod-deploy prod-update prod-logs prod-down prod-restart \
-        prod-status prod-migrate prod-seed prod-shell prod-renew-ssl test
+        prod-status prod-migrate prod-seed prod-shell prod-renew-ssl test \
+        miniapp-install miniapp-dev miniapp-build
 
 help:
 	@echo ""
@@ -14,6 +15,11 @@ help:
 	@echo "    make dev-down      Stop local PostgreSQL"
 	@echo "    make test          Run pytest"
 	@echo "    make migrate       Run alembic upgrade head (local)"
+	@echo ""
+	@echo "  Telegram Mini App:"
+	@echo "    make miniapp-install  npm install in frontend/"
+	@echo "    make miniapp-dev      Vite dev server on :5173 (proxies /api)"
+	@echo "    make miniapp-build    Build the SPA into frontend/dist"
 	@echo ""
 	@echo "  Production:"
 	@echo "    make prod-deploy   First-time deploy (SSL + build + migrate)"
@@ -38,6 +44,18 @@ dev-down:
 
 test:
 	python3 -m pytest tests/ -v
+
+# ── Telegram Mini App ────────────────────────────────────────────────────────
+
+miniapp-install:
+	cd frontend && npm install
+
+# VITE_API_TARGET overrides the backend the dev server proxies to.
+miniapp-dev:
+	cd frontend && npm run dev
+
+miniapp-build:
+	cd frontend && npm run build
 
 migrate:
 	alembic upgrade head

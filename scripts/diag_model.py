@@ -60,6 +60,16 @@ PRESETS = {
         "model": "cyankiwi/gemma-4-31B-it-AWQ-4bit",
         "url": "http://154.42.3.11:29510/v1",
     },
+    # ── Внутренний on-prem эндпоинт AsakaBank (NVIDIA B200), FP8, контекст 32k ──
+    # ⚠️ Тестовый режим: реальные персональные/банковские данные слать НЕЛЬЗЯ.
+    "asaka26b": {
+        "model": "gemma-4-26b",  # RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic (MoE, 4B активных)
+        "url": "https://runai.gpu.uz/asaka-b200-test-23-07-2026-56/gemma-serve/v1",
+    },
+    "asaka31b": {
+        "model": "gemma-4-31b",  # RedHatAI/gemma-4-31B-it-FP8-dynamic (dense)
+        "url": "https://runai.gpu.uz/asaka-b200-test-23-07-2026-56/gemma-serve/url-1/v1",
+    },
 }
 
 # ── Вопросы: (текст, ожидание) ───────────────────────────────────────────────

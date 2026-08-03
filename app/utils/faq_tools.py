@@ -370,3 +370,47 @@ async def _faq_lookup(query: str, language: str | None = None) -> Optional[str]:
     if result.tier == "strict":
         return result.answer
     return None
+
+
+async def faq_precheck_answer(query: str, language: str | None = None) -> Optional[str]:
+    """Deterministic pre-check for node_faq's pre-LLM shortcut — deliberately
+    stricter than `_faq_lookup`/`faq_search`'s own tier.
+
+    `faq_search`'s combined tier is the BEST of the two legs (see the module
+    docstring): a single leg clearing its strict threshold is enough, even if
+    the other leg barely registered the query as related. That is fine for
+    the `faq_lookup` tool, where the LLM stays in the loop and can recover
+    from a bad match. It is NOT fine here: this function feeds node_faq's
+    pre-LLM shortcut, which returns the answer verbatim and skips the LLM (and
+    therefore every product/office tool) entirely for the turn — there is no
+    model left to notice a wrong match. This was tightened after a measured
+    production hijack: "Хочу оформить ипотеку" (mortgage intent) scored
+    lex=0.727/sem=0.667 — both individually below their strict thresholds
+    (lex 0.75, sem 0.60) — yet the combined tier was "strict" because it takes
+    the max of the two legs, and the answer returned was a FAQ entry about
+    микрозайм, a different product entirely, silently swallowing what should
+    have been a product-catalog request.
+
+    Requires BOTH legs to independently clear their own strict threshold.
+    Measured lexical scores cleanly separate the two groups at the existing
+    FAQ_LEX_STRICT_THRESHOLD (0.75): genuine FAQ hits score 0.80-1.00 lexical,
+    measured hijacks score 0.45-0.73 lexical — semantic alone cannot separate
+    them (the ranges overlap), which is why both legs are checked here.
+
+    Because this checks raw per-leg scores rather than `faq_search`'s combined
+    tier, the tier's low+low cross-leg promotion has no effect on this
+    function — that promotion only ever produces tier="strict" out of two
+    "low" (sub-strict) legs, which this function's own bar rejects anyway.
+
+    When semantic search is disabled (`settings.faq_embedding_enabled` is
+    False) the semantic leg can never contribute a score, so requiring it to
+    also clear its threshold would mean this pre-check could never fire in
+    that configuration — fall back to lexical-only in that case.
+    """
+    result = await faq_search(query, language)
+    settings = get_settings()
+    lex_ok = result.lex_score >= settings.faq_lex_strict_threshold
+    if not settings.faq_embedding_enabled:
+        return result.answer if lex_ok else None
+    sem_ok = result.sem_score >= settings.faq_sem_strict_threshold
+    return result.answer if (lex_ok and sem_ok) else None

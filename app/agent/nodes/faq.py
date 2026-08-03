@@ -41,7 +41,7 @@ from app.agent.products import (
 )
 from app.agent.state import BotState, _default_dialog, _reset_dialog
 from app.agent.tools import _FAQ_TOOLS, is_faq_sentinel
-from app.utils.faq_tools import _faq_lookup, get_faq_fallback
+from app.utils.faq_tools import _faq_lookup, faq_precheck_answer, get_faq_fallback
 
 _agent_logger = _logging.getLogger(__name__)
 
@@ -401,7 +401,7 @@ async def node_faq(state: BotState) -> dict:
         and not dialog.get("offices")
     ):
         try:
-            faq_precheck = await _faq_lookup(normalized_text, lang)
+            faq_precheck = await faq_precheck_answer(normalized_text, lang)
         except Exception:
             faq_precheck = None
         if faq_precheck:
