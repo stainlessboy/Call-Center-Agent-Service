@@ -17,6 +17,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
 
 from app.bot.i18n import menu_action_from_text, menu_label, normalize_lang, t
@@ -69,6 +70,7 @@ from app.bot.links import (
 from app.config import get_settings
 from app.services.chat_service import ChatService
 from app.services.middleware_registry import get_middleware_client
+from app.utils.working_hours import is_within_working_hours
 
 router = Router()
 TELEGRAM_SAFE_CHUNK = 3800
@@ -76,12 +78,7 @@ TELEGRAM_SAFE_CHUNK = 3800
 
 def _is_within_working_hours() -> bool:
     """Окно работы операторов middleware (по дефолту 8:00–23:00 Asia/Tashkent)."""
-    settings = get_settings()
-    if not settings.middleware_working_hours_enabled:
-        return True
-    tz = timezone(timedelta(hours=settings.middleware_working_hours_tz_offset))
-    now = datetime.now(tz)
-    return settings.middleware_working_hours_start <= now.hour < settings.middleware_working_hours_end
+    return is_within_working_hours()
 
 
 def _unsafecb(text: str) -> str:
@@ -430,6 +427,53 @@ async def cmd_start(message: Message, chat_service: ChatService) -> None:
         return
 
     await message.answer(texts["start"], reply_markup=main_menu_keyboard(user.language))
+
+
+MINIAPP_LABELS: dict[str, str] = {
+    "ru": "🚀 Открыть приложение",
+    "en": "🚀 Open the app",
+    "uz": "🚀 Ilovani ochish",
+}
+
+MINIAPP_PROMPTS: dict[str, str] = {
+    "ru": "Все продукты, калькулятор и отделения — в приложении:",
+    "en": "All products, the calculator and branches live in the app:",
+    "uz": "Barcha mahsulotlar, kalkulyator va filiallar — ilovada:",
+}
+
+
+@router.message(Command("app"))
+async def cmd_app(message: Message, chat_service: ChatService) -> None:
+    """Open the Telegram Mini App. No-op when MINIAPP_URL is not configured."""
+    tg_user = message.from_user
+    if tg_user is None:
+        return
+
+    user = await chat_service.get_or_create_user(
+        telegram_user_id=tg_user.id,
+        username=tg_user.username,
+        first_name=tg_user.first_name,
+        last_name=tg_user.last_name,
+    )
+    lang = normalize_lang(user.language)
+    url = get_settings().miniapp_url
+    if not url:
+        await message.answer(t("feature_coming_soon", lang))
+        return
+
+    await message.answer(
+        MINIAPP_PROMPTS.get(lang, MINIAPP_PROMPTS["ru"]),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=MINIAPP_LABELS.get(lang, MINIAPP_LABELS["ru"]),
+                        web_app=WebAppInfo(url=url),
+                    )
+                ]
+            ]
+        ),
+    )
 
 
 @router.message(Command("end"))

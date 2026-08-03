@@ -87,6 +87,10 @@ async def _get_products_by_category(category: str) -> list[dict]:
                 "rate_max_pct": g_max,
                 "term": term_text,
                 "amount": product.get("amount_text") or "",
+                # Raw bounds (Mini App calculator needs numbers, the bot renders
+                # the pre-formatted `amount` string above).
+                "amount_min": product.get("amount_min"),
+                "amount_max": product.get("amount_max"),
                 "downpayment": downpayment_text,
                 "collateral": product.get("collateral_text") or "",
                 "purpose": product.get("purpose_text") or "",

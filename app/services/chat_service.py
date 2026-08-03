@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.i18n import normalize_lang, t
@@ -280,7 +280,6 @@ class ChatService:
         # call site (the gate skips entirely when the active session is in
         # human_mode), so messages sent to an operator still count toward the
         # daily quota — acceptable trade-off for query simplicity.
-        from sqlalchemy import func
         today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         async with self.session_factory() as session:
             result = await session.execute(
@@ -389,6 +388,46 @@ class ChatService:
                     .values(last_activity_at=datetime.now(timezone.utc))
                 )
 
+    async def set_user_theme(self, telegram_user_id: int, theme: str) -> None:
+        """Mini App appearance preference ('auto' | 'light' | 'dark')."""
+        async with self.session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(User)
+                    .where(User.telegram_user_id == telegram_user_id)
+                    .values(theme=theme)
+                )
+
+    async def list_sessions_with_counts(
+        self, user_id: int, limit: int = 20
+    ) -> list[tuple[ChatSession, int]]:
+        """Recent sessions plus their message counts, newest first.
+
+        One query instead of touching ``ChatSession.message_count`` per row,
+        which would lazy-load every message of every session.
+        """
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ChatSession, func.count(Message.id))
+                .outerjoin(Message, Message.session_id == ChatSession.id)
+                .where(ChatSession.user_id == user_id)
+                .group_by(ChatSession.id)
+                .order_by(ChatSession.started_at.desc())
+                .limit(limit)
+            )
+            return [(row[0], int(row[1] or 0)) for row in result.all()]
+
+    async def get_user_session(self, user_id: int, session_id: str) -> Optional[ChatSession]:
+        """A session by id, but only if it belongs to *user_id*."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ChatSession).where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+            )
+            return result.scalar_one_or_none()
+
     async def list_recent_sessions(self, user_id: int, limit: int = 5) -> list[ChatSession]:
         async with self.session_factory() as session:
             result = await session.execute(
@@ -478,15 +517,19 @@ class ChatService:
         return len(events)
 
     async def get_recent_messages(
-        self, session_id: str, limit: int = 10
+        self, session_id: str, limit: int = 10, roles: tuple[str, ...] = ("user", "agent")
     ) -> list[Message]:
-        """Return the last `limit` user/agent messages from a session, oldest first."""
+        """Return the last `limit` messages from a session, oldest first.
+
+        Defaults to the bot's user/agent view; the Mini App also asks for
+        ``operator`` so a reloaded chat keeps the handoff replies.
+        """
         async with self.session_factory() as session:
             result = await session.execute(
                 select(Message)
                 .where(
                     Message.session_id == session_id,
-                    Message.role.in_(("user", "agent")),
+                    Message.role.in_(roles),
                 )
                 .order_by(Message.created_at.desc(), Message.id.desc())
                 .limit(limit)

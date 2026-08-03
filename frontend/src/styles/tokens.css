@@ -1,0 +1,105 @@
+/* Design tokens — values taken verbatim from the design handoff
+   (design_handoff_asaka_miniapp/README.md § Design Tokens).
+
+   The `--tg-*` group holds Telegram theme colors: the values below are the
+   defaults, overwritten at runtime from `themeParams` (see src/telegram.ts).
+   The brand group is Asakabank's and never varies with the user's theme. */
+
+:root {
+  color-scheme: light;
+
+  --tg-bg: #ffffff;
+  --tg-secondary-bg: #f2f3f3;
+  --tg-section-bg: #ffffff;
+  --tg-text: #221f20;
+  --tg-hint: #82868a;
+  --tg-sub: #63676b;
+  --tg-link: #be0c17;
+  --tg-sep: #e4e6e7;
+  --tg-header: #ffffff;
+  --tg-header-text: #221f20;
+
+  --brand: #d70c17;
+  --brand-soft: #fdecec;
+  --on-brand: #ffffff;
+  --ok: #1a7f4b;
+  --ok-soft: #e7f3ec;
+  --warn: #9a6408;
+  --warn-soft: #f8efe0;
+  --danger: #be0c17;
+  --danger-soft: #fdecec;
+  --info: #454142;
+  --info-soft: #eef0f1;
+  --bubble-in: #f2f3f3;
+  --bubble-out: #d70c17;
+  --bubble-out-text: #ffffff;
+  --skel: #e9eaeb;
+
+  /* Spacing / radii / shadows */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* Iteration 2 rounded everything up: fields 10, buttons 14–16,
+     cards 20–22, the hero 24. */
+  --r-field: 10px;
+  --r-badge: 12px;
+  --r-btn: 14px;
+  --r-card: 20px;
+  --r-card-lg: 24px;
+  --r-pill: 999px;
+
+  /* Tight display type: the bigger the size, the more negative the tracking. */
+  --track-hero: -0.035em;
+  --track-h2: -0.025em;
+  --track-title: -0.015em;
+  --track-caps: 0.1em;
+
+  --shadow-1: 0 6px 18px rgba(16, 26, 44, 0.14);
+  --shadow-knob: 0 2px 6px rgba(16, 26, 44, 0.3);
+  --shadow-segment: 0 1px 3px rgba(16, 26, 44, 0.16);
+
+  --h-main-btn: 50px;
+  --h-row: 56px;
+  --h-chip: 36px;
+  --h-segment: 34px;
+
+  /* `--tg-inset-*` is set from the Telegram SDK (see applyInsets in
+     telegram.ts); env() is the floor for browsers and older clients. */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--tg-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-inset-bottom, 0px));
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --tg-bg: #232122;
+  --tg-secondary-bg: #1a1819;
+  --tg-section-bg: #232122;
+  --tg-text: #ffffff;
+  --tg-hint: #9a9698;
+  --tg-sub: #b8b4b6;
+  --tg-link: #ff6b70;
+  --tg-sep: #373435;
+  --tg-header: #232122;
+  --tg-header-text: #ffffff;
+
+  --brand: #f2323d;
+  --brand-soft: #3a1a1c;
+  --on-brand: #ffffff;
+  --ok: #4cc98a;
+  --ok-soft: #14301f;
+  --warn: #e3a13f;
+  --warn-soft: #33280f;
+  --danger: #ff6b70;
+  --danger-soft: #3a1a1c;
+  --info: #c1c6c8;
+  --info-soft: #2e2b2c;
+  --bubble-in: #2e2b2c;
+  --bubble-out: #8e1218;
+  --bubble-out-text: #ffffff;
+  --skel: #2e2b2c;
+}

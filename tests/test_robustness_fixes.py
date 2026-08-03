@@ -55,6 +55,10 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.state import _default_dialog
 
         monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
+        # The deterministic pre-check now goes through faq_precheck_answer
+        # (stricter: both legs must be strict) — stub it to miss so the guard
+        # path (_faq_lookup) below is what's actually under test.
+        monkeypatch.setattr(faq_module, "faq_precheck_answer", AsyncMock(return_value=None))
         monkeypatch.setattr(faq_module, "_faq_lookup", AsyncMock(return_value=None))
 
         state = {
@@ -81,11 +85,12 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.state import _default_dialog
 
         monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
-        # First call is node_faq's deterministic strict pre-check (before the
-        # LLM is even fetched) — return None there so we actually reach the
-        # None-LLM guard; the guard's own _faq_lookup call then returns the
-        # answer.
-        faq_lookup_mock = AsyncMock(side_effect=[None, "Зайдите в приложение"])
+        # node_faq's deterministic pre-check now goes through the stricter
+        # faq_precheck_answer (both legs must be strict) — stub it to miss so
+        # we actually reach the None-LLM guard, whose own (single-leg)
+        # _faq_lookup call then returns the answer.
+        monkeypatch.setattr(faq_module, "faq_precheck_answer", AsyncMock(return_value=None))
+        faq_lookup_mock = AsyncMock(return_value="Зайдите в приложение")
         monkeypatch.setattr(faq_module, "_faq_lookup", faq_lookup_mock)
 
         state = {
@@ -100,7 +105,7 @@ class TestNodeFaqNoneLLMGuard:
         result = await faq_module.node_faq(state)
 
         assert result["answer"] == "Зайдите в приложение"
-        assert faq_lookup_mock.await_count == 2
+        assert faq_lookup_mock.await_count == 1
 
 
 # ---------------------------------------------------------------------------

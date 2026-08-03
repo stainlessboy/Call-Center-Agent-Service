@@ -1,0 +1,16 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+*.so
+*.dylib
+*.pyd
+node_modules/
+.pytest_cache/
+*.xlsx
+*.pdf
+
+# secrets — do not index
+.env
+.env.*
+!.env.example

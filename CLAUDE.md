@@ -32,7 +32,14 @@ python3 -m pytest tests/ -v
 curl http://127.0.0.1:8001/health
 ```
 
-The only HTTP endpoints are `GET /health` and `POST /telegram/webhook` (plus the SQLAdmin panel at `/admin`). There is no `/operator/send` REST API — operator handoff goes through the Asaka chat-middleware (see Hybrid Bot/Operator Mode below).
+HTTP endpoints: `GET /health`, `POST /telegram/webhook`, the SQLAdmin panel at `/admin`, and the Telegram Mini App (`/api/miniapp/*` + the SPA at `/app` — see [docs/MINIAPP.md](docs/MINIAPP.md)). There is no `/operator/send` REST API — operator handoff goes through the Asaka chat-middleware (see Hybrid Bot/Operator Mode below).
+
+```bash
+# Telegram Mini App (frontend/)
+make miniapp-install   # npm install
+make miniapp-dev       # Vite dev server on :5173, proxies /api to :8001
+make miniapp-build     # build into frontend/dist, served by FastAPI at /app
+```
 
 ## Architecture
 
@@ -102,11 +109,20 @@ app/
 │   ├── middleware_registry.py # Process-wide handle to ChatMiddlewareClient (set in lifespan)
 │   ├── middleware_files.py   # MinIO upload + download/forward operator media to Telegram
 │   └── telegram_sender.py    # Telegram message sending utility
+├── miniapp/                  # Telegram Mini App backend (see docs/MINIAPP.md)
+│   ├── auth.py               # initData HMAC verification + FastAPI dependency
+│   ├── deps.py               # ChatService / DB-user dependencies
+│   ├── serializers.py        # Domain dicts → JSON (product ids, bounds, offices)
+│   ├── hub.py                # session_id → WebSockets fan-out for operator events
+│   ├── static.py             # Serves frontend/dist at /app with SPA fallback
+│   └── routes/               # bootstrap, catalog, calc, leads, branches, misc, chat
 ├── utils/
 │   ├── data_loaders.py       # Async DB loaders for products and FAQ
 │   ├── faq_tools.py          # Hybrid FAQ search: lexical + pgvector semantic (tri-tier)
+│   ├── amortization.py       # Annuity math shared by PDF, bot calculator, Mini App
 │   ├── pdf_generator.py      # PDF amortization schedule generator
 │   ├── text_utils.py         # Shared text normalization / stemming
+│   ├── working_hours.py      # Operator working-hours window (bot + Mini App)
 │   └── cbu_rates.py          # CBU exchange rates fetcher
 ├── db/
 │   ├── models.py             # SQLAlchemy ORM models
@@ -115,12 +131,23 @@ app/
 │   └── alembic/              # Alembic migrations
 └── config.py                 # Dataclass settings with @lru_cache get_settings()
 
+frontend/                      # Telegram Mini App SPA (React + TS + Vite + zustand)
+design_handoff_asaka_miniapp/  # Design reference for the Mini App (HTML prototype)
 chat-middleware-mock/          # Mock middleware for testing
 scripts/                       # Dev tools (chat_cli.py — local agent REPL)
 tests/                         # pytest tests
 templates/                     # Jinja2 templates (dashboard, sqladmin)
 nginx/                         # Nginx config for production
 ```
+
+### Telegram Mini App (`app/miniapp/` + `frontend/`)
+
+The Mini App is a **presentation layer only**: every route calls the same functions
+the LangGraph nodes call (products, qualification trees, rate rules, amortization,
+office search, CBU rates, `ChatService`). Never duplicate a business rule there —
+if a Mini App screen needs data the bot computes inline, extract the pure function
+and call it from both. Full contract, endpoint list and known gaps:
+[docs/MINIAPP.md](docs/MINIAPP.md).
 
 ### LangGraph Agent (`app/agent/`)
 
@@ -289,6 +316,16 @@ FAQ search:
 - `FAQ_SEM_STRICT_THRESHOLD` / `FAQ_SEM_LOW_THRESHOLD` — semantic (embedding cosine) FAQ tiers (defaults `0.60` / `0.45`)
 - `FAQ_LEX_STRICT_THRESHOLD` / `FAQ_LEX_LOW_THRESHOLD` — lexical FAQ tiers (defaults `0.75` / `0.55`); legacy `FAQ_STRICT_THRESHOLD`/`FAQ_LOW_CONFIDENCE_THRESHOLD` are ignored
 - `FAQ_SEM_TOP_K` — semantic candidates surfaced to the LLM on low confidence (default `3`)
+
+Telegram Mini App:
+- `MINIAPP_ENABLED` (default `true`) — mounts `/api/miniapp` and serves the SPA at `/app`
+- `MINIAPP_URL` — public **https** URL of the Mini App; sets the bot menu button and powers `/app`
+- `MINIAPP_DEV_MODE` (default `false`) — accepts unsigned `initData` as `MINIAPP_DEV_USER_ID` and enables localhost CORS. Browser-testing only; it disables authentication entirely
+- `MINIAPP_DEV_USER_ID` (default `111111111`)
+- `MINIAPP_INIT_DATA_TTL_SECONDS` (default `86400`) — max age of a signed launch payload
+- `MINIAPP_DIST_DIR` — override the built SPA directory (default `frontend/dist`)
+
+`SESSION_INACTIVITY_TIMEOUT_MINUTES` doubles as the Mini App session TTL: the watcher closes a stale session with `closed_reason="timeout"`, which the history screen renders as an expired (read-only) conversation.
 
 ## Webhook vs Polling
 

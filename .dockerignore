@@ -26,3 +26,9 @@ README.md
 CLAUDE.md
 tests/
 .claude/
+
+# Local frontend artifacts: the SPA is rebuilt from source in the node stage,
+# so shipping 69 MB of node_modules into the build context only slows it down.
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo

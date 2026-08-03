@@ -10,9 +10,9 @@ from typing import Optional
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import Update
+from aiogram.types import MenuButtonWebApp, Update, WebAppInfo
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import text
 
 from app.bot.i18n import normalize_lang, t
@@ -24,6 +24,9 @@ from app.config import get_settings
 from app.db.events import register_faq_embedding_events
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
+from app.miniapp.hub import hub as miniapp_hub
+from app.miniapp.routes import router as miniapp_router
+from app.miniapp.static import mount_miniapp_static
 from app.services.agent_client import AgentClient
 from app.services.chat_service import ChatService
 from app.services.chat_middleware_client import ChatMiddlewareClient
@@ -104,6 +107,9 @@ async def lifespan(app: FastAPI):
                 chat_id=user.telegram_user_id,
                 text=t("operator_connected", lang),
             )
+            await miniapp_hub.publish(
+                session_id, "operator_joined", operator_name=agent_name or "", mode="operator"
+            )
 
         async def _on_agent_message(session_id: str, text: str):
             data = await chat_service.get_session_with_user(session_id)
@@ -114,6 +120,7 @@ async def lifespan(app: FastAPI):
                 return
             await chat_service._save_message(session_id, role="operator", text=text)
             await bot.send_message(chat_id=user.telegram_user_id, text=text)
+            await miniapp_hub.publish(session_id, "operator_message", text=text)
             try:
                 await agent_client.resume_human_mode(session_id, text)
             except Exception:
@@ -126,6 +133,7 @@ async def lifespan(app: FastAPI):
             _, user = data
             await chat_service._save_message(session_id, role="operator", text=f"[file] {file_url}")
             await download_and_send_to_user(bot, user.telegram_user_id, file_url)
+            await miniapp_hub.publish(session_id, "operator_file", url=file_url)
 
         async def _on_chat_ended(session_id: str, reason: str):
             data = await chat_service.get_session_with_user(session_id)
@@ -140,6 +148,9 @@ async def lifespan(app: FastAPI):
                     text=t("operator_chat_ended_rate", lang),
                     reply_markup=feedback_keyboard(session_id),
                 )
+                await miniapp_hub.publish(
+                    session_id, "operator_left", ask_rating=True, mode="bot"
+                )
                 return
             await chat_service.set_human_mode(session_id, False)
             if reason == "chat_finished_error":
@@ -149,6 +160,9 @@ async def lifespan(app: FastAPI):
             else:
                 msg = t("chat_ended", lang)
             await bot.send_message(chat_id=user.telegram_user_id, text=msg)
+            await miniapp_hub.publish(
+                session_id, "chat_ended", reason=reason, message=msg, mode="bot"
+            )
 
         async def _on_error(session_id: str, error_code: str):
             data = await chat_service.get_session_with_user(session_id)
@@ -166,6 +180,9 @@ async def lifespan(app: FastAPI):
             else:
                 msg = t("all_operators_busy", lang)
             await bot.send_message(chat_id=user.telegram_user_id, text=msg)
+            await miniapp_hub.publish(
+                session_id, "operator_error", code=error_code, message=msg, mode="bot"
+            )
 
         async def _on_inactivity_warning(session_id: str):
             data = await chat_service.get_session_with_user(session_id)
@@ -176,6 +193,9 @@ async def lifespan(app: FastAPI):
             await bot.send_message(
                 chat_id=user.telegram_user_id,
                 text=t("chat_inactivity_warning", lang),
+            )
+            await miniapp_hub.publish(
+                session_id, "inactivity_warning", message=t("chat_inactivity_warning", lang)
             )
 
         middleware_client = ChatMiddlewareClient(
@@ -210,6 +230,20 @@ async def lifespan(app: FastAPI):
             human_mode_timeout_minutes=int(settings.human_mode_operator_timeout_minutes),
         )
     )
+
+    # Telegram menu button → Mini App. Telegram only accepts https URLs, so a
+    # localhost dev server is reached through the browser instead.
+    if settings.miniapp_enabled and settings.miniapp_url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="Asakabank",
+                    web_app=WebAppInfo(url=settings.miniapp_url),
+                )
+            )
+            logger.info("Mini App menu button set: %s", settings.miniapp_url)
+        except Exception as exc:
+            logger.warning("Failed to set Mini App menu button: %s", exc)
 
     if settings.webhook_base_url:
         webhook_url = settings.webhook_base_url.rstrip("/") + settings.webhook_path
@@ -246,6 +280,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Finance Bot API", lifespan=lifespan)
 setup_admin(app)
 WEBHOOK_PATH = get_settings().webhook_path
+
+if get_settings().miniapp_enabled:
+    app.include_router(miniapp_router)
+    if get_settings().miniapp_dev_mode:
+        # The Vite dev server runs on another origin, so browser testing needs
+        # CORS. Never on in production — dev mode already bypasses initData.
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.warning("MINIAPP_DEV_MODE is on — Mini App API accepts unsigned requests")
 
 
 @app.get("/health")
@@ -312,3 +362,15 @@ async def telegram_webhook(
     return {"ok": True}
 
 
+
+
+# Mounted last so the SPA fallback never shadows an API route.
+if get_settings().miniapp_enabled:
+
+    @app.get("/", include_in_schema=False)
+    async def root_to_miniapp() -> RedirectResponse:
+        """Telegram clients cache the menu-button URL, so a stale link can point
+        at the bare domain. Send it to the app instead of a 404."""
+        return RedirectResponse(url="/app/")
+
+    mount_miniapp_static(app)

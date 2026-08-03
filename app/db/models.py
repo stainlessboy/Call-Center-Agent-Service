@@ -42,6 +42,9 @@ class User(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(32))
     language: Mapped[Optional[str]] = mapped_column(String(8))
+    # Mini App appearance: 'auto' follows the Telegram client's themeParams,
+    # 'light'/'dark' pin it. Irrelevant to the bot, which has no theme of its own.
+    theme: Mapped[Optional[str]] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
 
@@ -365,6 +368,10 @@ class Lead(Base):
     contact_name: Mapped[Optional[str]] = mapped_column(String(255))
     contact_phone: Mapped[Optional[str]] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), server_default="new", default="new")
+    # Client-generated idempotency key (Mini App). A retried submit after a
+    # flaky network must not create a second lead.
+    client_request_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)
+    source: Mapped[str] = mapped_column(String(16), server_default="bot", default="bot")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

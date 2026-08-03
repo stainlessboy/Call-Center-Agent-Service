@@ -32,29 +32,29 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "▶ DIAG: docker network state before restart..."
-            docker network ls || true
-            docker network inspect call-center-agent-service_default --format 'subnet={{range .IPAM.Config}}{{.Subnet}}{{end}} attached={{range $id, $c := .Containers}}{{$c.Name}}={{$c.IPv4Address}} {{end}}' || true
-
-            # Full down+up: container DNS broke after in-place network
-            # recreation (stale endpoints); plain `up` does not reattach
-            # running containers, so recreate everything atomically.
-            echo "▶ Building and restarting containers (full recreate)..."
-            docker compose -f docker-compose.prod.yml down --remove-orphans
+            echo "▶ Building and restarting containers..."
             docker compose -f docker-compose.prod.yml up -d --build
 
             echo "▶ Waiting for API to be ready..."
             sleep 5
 
-            echo "▶ DIAG: DNS check inside api container..."
-            docker compose -f docker-compose.prod.yml exec -T api cat /etc/resolv.conf || true
+            # Self-heal: in-place network changes once left stale endpoints
+            # (api could not resolve db). Escalate only when DNS is broken:
+            # full recreate first, docker daemon restart as a last resort.
+            echo "▶ Checking container DNS..."
             if ! docker compose -f docker-compose.prod.yml exec -T api getent hosts db; then
-              echo "⚠️ Container DNS still broken — restarting docker daemon..."
-              sudo -n systemctl restart docker || systemctl restart docker || service docker restart || true
-              sleep 15
+              echo "⚠️ Container DNS broken — full recreate of containers and network..."
+              docker compose -f docker-compose.prod.yml down --remove-orphans
               docker compose -f docker-compose.prod.yml up -d
               sleep 5
-              docker compose -f docker-compose.prod.yml exec -T api getent hosts db || echo "❌ DNS still broken after daemon restart"
+              if ! docker compose -f docker-compose.prod.yml exec -T api getent hosts db; then
+                echo "⚠️ Still broken — restarting docker daemon..."
+                sudo -n systemctl restart docker || systemctl restart docker || service docker restart || true
+                sleep 15
+                docker compose -f docker-compose.prod.yml up -d
+                sleep 5
+                docker compose -f docker-compose.prod.yml exec -T api getent hosts db || echo "❌ DNS still broken after daemon restart"
+              fi
             fi
 
             echo "▶ Running migrations..."

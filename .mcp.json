@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "type": "stdio",
+      "command": "/Users/user/.local/bin/codebase-memory-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
