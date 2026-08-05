@@ -40,3 +40,63 @@ class TestProductConditionKind:
             "downpayment_min_pct",
             "downpayment_max_pct",
         }
+
+
+class TestParseRuleRows:
+    """The inline tariff editor shows only the four business criteria. Columns it
+    no longer renders must keep their stored value instead of being nulled."""
+
+    @staticmethod
+    def _view():
+        from app.admin.views import CreditProductOfferAdmin
+
+        # ModelView.__init__ needs an app context; only pure parsing is exercised.
+        return CreditProductOfferAdmin.__new__(CreditProductOfferAdmin)
+
+    @staticmethod
+    def _form(**overrides):
+        form = {
+            "rule-0-id": "7",
+            "rule-0-delete": "",
+            "rule-0-is_active": "on",
+            "rule-0-term_min_months": "12",
+            "rule-0-term_max_months": "24",
+            "rule-0-downpayment_min_pct": "30",
+            "rule-0-downpayment_max_pct": "",
+            "rule-0-income_type": "payroll",
+            "rule-0-rate_min_pct": "22.5",
+            "rule-0-age_min": "",
+            "rule-0-age_max": "",
+            "rule-0-amount_min": "",
+            "rule-0-amount_max": "",
+        }
+        form.update(overrides)
+        return form
+
+    def test_fields_absent_from_the_form_are_not_in_the_row(self):
+        row = self._view()._parse_rule_rows(self._form())[0]
+        for dropped in ("currency_code", "priority", "condition_text", "rate_max_pct"):
+            assert dropped not in row, f"{dropped} would overwrite the stored value"
+
+    def test_submitted_fields_are_parsed(self):
+        row = self._view()._parse_rule_rows(self._form())[0]
+        assert row["term_min_months"] == 12
+        assert row["term_max_months"] == 24
+        assert row["downpayment_min_pct"] == 30.0
+        # Rendered but left blank → an explicit "unconstrained".
+        assert row["downpayment_max_pct"] is None
+        assert row["income_type"] == "payroll"
+        assert row["rate_min_pct"] == 22.5
+
+    def test_unchecked_is_active_reads_as_false(self):
+        form = self._form()
+        del form["rule-0-is_active"]
+        assert self._view()._parse_rule_rows(form)[0]["is_active"] is False
+
+    def test_still_editable_via_the_standalone_view(self):
+        """A form that does submit the dropped columns still updates them."""
+        row = self._view()._parse_rule_rows(
+            self._form(**{"rule-0-priority": "5", "rule-0-currency_code": "USD"})
+        )[0]
+        assert row["priority"] == 5
+        assert row["currency_code"] == "USD"

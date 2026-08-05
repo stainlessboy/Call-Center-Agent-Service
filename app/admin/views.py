@@ -782,18 +782,26 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         for i in sorted(indices):
             def g(name):
                 return form.get(f"rule-{i}-{name}")
+            # Only fields the template actually rendered are collected, so a
+            # column dropped from the editor keeps whatever is already in the DB
+            # instead of being silently nulled on the next save. ``is_active`` is
+            # the exception: an unchecked checkbox submits nothing, so absence
+            # must be read as False rather than "not edited".
             row = {
                 "_id": self._to_int(g("id")),
                 "_delete": (g("delete") in ("on", "true", "1", "y")),
                 "is_active": (g("is_active") in ("on", "true", "1", "y")),
             }
             for f in self._RULE_INT_FIELDS:
-                row[f] = self._to_int(g(f))
+                if f"rule-{i}-{f}" in form:
+                    row[f] = self._to_int(g(f))
             for f in self._RULE_FLOAT_FIELDS:
-                row[f] = self._to_float(g(f))
+                if f"rule-{i}-{f}" in form:
+                    row[f] = self._to_float(g(f))
             for f in self._RULE_STR_FIELDS:
-                v = g(f)
-                row[f] = v.strip() if isinstance(v, str) and v.strip() else None
+                if f"rule-{i}-{f}" in form:
+                    v = g(f)
+                    row[f] = v.strip() if isinstance(v, str) and v.strip() else None
             rows.append(row)
         return rows
 
@@ -830,13 +838,15 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
                     if rid and rid in existing:
                         await session.delete(existing[rid])
                     continue
-                # default rate_max to rate_min when omitted
+                # The editor shows a single "Ставка" field, so the upper bound
+                # follows the lower one unless it was edited explicitly.
                 if row.get("rate_min_pct") is not None and row.get("rate_max_pct") is None:
                     row["rate_max_pct"] = row["rate_min_pct"]
                 if rid and rid in existing:
                     r = existing[rid]
                     for f in managed:
-                        setattr(r, f, row.get(f))
+                        if f in row:
+                            setattr(r, f, row[f])
                 else:
                     # new row — only persist if it carries a rate
                     if row.get("rate_min_pct") is None:

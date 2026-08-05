@@ -4,7 +4,13 @@
 
    Every condition is editable on every row: one tariff may depend on term and
    downpayment at the same time. Age and amount are almost never used, so they
-   sit behind a toggle — collapsed unless the row already carries a value. #}
+   sit behind a toggle — collapsed unless the row already carries a value.
+
+   Currency, priority, condition text and the upper rate bound are deliberately
+   absent: they are not part of the four business criteria and only added noise.
+   They still exist on the model and stay editable in the standalone "Тарифы
+   (ставки)" view — _parse_rule_rows only reads fields the form submitted, so a
+   value set there is not wiped when this editor saves. #}
 
 {% macro rule_row(idx, r) %}
 {% set has_extra = r and (r.age_min is not none or r.age_max is not none or r.amount_min is not none or r.amount_max is not none) %}
@@ -52,37 +58,11 @@
           <option value="no_official" {{ 'selected' if it == 'no_official' }}>Самозанятый</option>
         </select>
       </div>
-      {# --- currency (overlay filter) --- #}
       <div class="col-md-3 mb-2">
-        <label class="form-label">Валюта</label>
-        {% set cc = (r.currency_code if r else '') or '' %}
-        <select name="rule-{{ idx }}-currency_code" class="form-select rule-input">
-          <option value="" {{ 'selected' if cc == '' }}>— любая —</option>
-          <option value="UZS" {{ 'selected' if cc == 'UZS' }}>UZS</option>
-          <option value="USD" {{ 'selected' if cc == 'USD' }}>USD</option>
-          <option value="EUR" {{ 'selected' if cc == 'EUR' }}>EUR</option>
-        </select>
-      </div>
-      <div class="col-md-2 mb-2">
-        <label class="form-label">Ставка мин. %</label>
+        <label class="form-label">Ставка, %</label>
         <input type="number" step="0.1" name="rule-{{ idx }}-rate_min_pct" class="form-control" value="{{ r.rate_min_pct if r and r.rate_min_pct is not none else '' }}">
       </div>
-      <div class="col-md-2 mb-2">
-        <label class="form-label">Ставка макс. %</label>
-        <input type="number" step="0.1" name="rule-{{ idx }}-rate_max_pct" class="form-control" value="{{ r.rate_max_pct if r and r.rate_max_pct is not none else '' }}">
-      </div>
-    </div>
-
-    <div class="row">
-      <div class="col-md-7 mb-2">
-        <label class="form-label">Условие ставки (текст)</label>
-        <input type="text" name="rule-{{ idx }}-condition_text" class="form-control" value="{{ r.condition_text if r and r.condition_text else '' }}">
-      </div>
-      <div class="col-md-2 mb-2">
-        <label class="form-label">Приоритет</label>
-        <input type="number" step="1" name="rule-{{ idx }}-priority" class="form-control rule-input" value="{{ r.priority if r and r.priority is not none else 0 }}">
-      </div>
-      <div class="col-md-2 mb-2">
+      <div class="col-md-3 mb-2">
         <label class="form-label">Активен</label><br>
         <input type="checkbox" name="rule-{{ idx }}-is_active" value="on" class="rule-input" {{ 'checked' if (r.is_active if r else True) }}>
       </div>
@@ -121,7 +101,7 @@
     Один тариф — одна комбинация условий и ставка по ней. Заполняйте только те условия,
     от которых ставка действительно зависит; пустое поле = условие не проверяется.
     Условия можно комбинировать: например, срок 12–24 мес. и взнос от 30% в одном тарифе.
-    Тариф действует только при заполненной ставке; продукт без действующего тарифа не показывается клиентам.
+    Продукт без хотя бы одного тарифа со ставкой не показывается клиентам.
   </p>
   <div id="rate-rules-container">
     {% if obj is defined and obj is not none and obj._editor_rules is defined %}
@@ -141,9 +121,10 @@
 (function () {
   // Two tariffs conflict when a single set of client inputs matches both: same
   // income type and currency (an empty value means "any", so it overlaps
-  // everything), and intersecting term / downpayment ranges. Equal priority is
-  // part of the test — a different priority resolves the tie deterministically,
-  // so that pair is intentional rather than a mistake.
+  // everything), and intersecting term / downpayment ranges. Priority is read
+  // when present — a different priority resolves the tie deterministically, so
+  // that pair is intentional. This editor does not expose it, but the rows keep
+  // whatever the standalone tariff view set.
 
   function fieldValue(row, name) {
     var el = row.querySelector('[name$="-' + name + '"]');
@@ -222,7 +203,7 @@
       var w = live[i].querySelector(".rule-warning");
       if (w) {
         w.textContent = "⚠ Пересекается с тарифом №" + other.join(", №")
-          + ". При совпадении будет выбрана меньшая ставка — задайте разный приоритет или сузьте диапазоны.";
+          + ": один и тот же клиент попадает в оба, и будет выбрана меньшая ставка. Сузьте диапазоны.";
       }
     });
   }
