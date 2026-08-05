@@ -14,7 +14,7 @@ require the caller to supply ``age`` (see ``needs_age``).
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 # (min_key, max_key, input_key) for the numeric range axes a rule may constrain.
 _RANGE_AXES = (
@@ -60,6 +60,19 @@ def needs_age(rules: Optional[list[dict[str, Any]]]) -> bool:
     )
 
 
+def needs_downpayment(rules: Optional[list[dict[str, Any]]]) -> bool:
+    """True if any rule's rate depends on the down payment share.
+
+    Such a rule can only ever match when the caller supplies
+    ``downpayment_pct``, so the calculator must ask for it even in categories
+    that do not collect a down payment by default.
+    """
+    return any(
+        r.get("downpayment_min_pct") is not None or r.get("downpayment_max_pct") is not None
+        for r in (rules or [])
+    )
+
+
 def rate_bounds(
     rules: Optional[list[dict[str, Any]]],
 ) -> tuple[Optional[float], Optional[float]]:
@@ -93,7 +106,13 @@ def _match_specificity(rule: dict[str, Any], inputs: dict[str, Any]) -> Optional
         want = rule.get(rule_k)
         if want is None:
             continue
-        if inputs.get(in_k) != want:
+        got = inputs.get(in_k)
+        # A questionnaire branch may leave several candidates open (e.g. "salary"
+        # before the bank of the card is known) — any of them matching is enough.
+        if isinstance(got, (list, tuple, set, frozenset)):
+            if want not in got:
+                return None
+        elif got != want:
             return None
         specificity += 1
     return specificity
@@ -106,13 +125,16 @@ def select_rate(
     amount: Optional[float] = None,
     term_months: Optional[int] = None,
     downpayment_pct: Optional[float] = None,
-    income_type: Optional[str] = None,
+    income_type: Optional[str | Sequence[str]] = None,
     currency_code: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Pick the best matching rule for the given inputs.
 
     Ranking: highest ``priority`` → most specific (most constrained axes
     matched) → lowest rate. Returns the rule dict, or None if nothing matches.
+
+    ``income_type`` accepts either one value or a collection of candidates; a
+    rule matches when its own value is among them.
     """
     inputs = {
         "age": age,

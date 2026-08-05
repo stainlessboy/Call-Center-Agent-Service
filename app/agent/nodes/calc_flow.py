@@ -63,6 +63,28 @@ def _get_product_downpayment_range(product: dict) -> tuple[float | None, float |
     return d_min, d_max
 
 
+def _effective_calc_questions(
+    category: str, product: dict, lang: str
+) -> list[tuple[str, str]]:
+    """Calculator steps for this product: the category baseline, plus a down
+    payment step when the product's tariffs depend on one.
+
+    A rule constrained by ``downpayment_*`` can never match unless the user is
+    asked for it, so a микрозайм whose rate varies by down payment would
+    otherwise silently fall back to the lowest rate. Steps are only ever added —
+    a down payment can still be entered voluntarily in the categories that
+    already collect it, since it also reduces the principal.
+    """
+    steps = get_calc_questions(category, lang)
+    if category == "deposit":
+        return steps
+    if product.get("needs_downpayment") and not any(
+        key == STEP_DOWNPAYMENT for key, _ in steps
+    ):
+        steps.append((STEP_DOWNPAYMENT, at("calc_downpayment", lang)))
+    return steps
+
+
 def _clamp_term(term_months: int, product: dict, category: str) -> tuple[int, bool]:
     """Clamp term to product constraints. Returns (clamped_value, was_adjusted)."""
     t_min, t_max = _get_product_term_range(product, category)
@@ -92,13 +114,20 @@ def _clamp_downpayment(dp: float, product: dict) -> tuple[float, bool]:
     return dp, False
 
 
-def _income_type_from_dialog(dialog: dict) -> str | None:
-    """Return an unambiguous income_type string from qualify answers, or None."""
+def _income_type_from_dialog(dialog: dict) -> str | list[str] | None:
+    """Income types the questionnaire established, for rate matching.
+
+    A single answer is returned as a plain string; a branch that left several
+    candidates open returns them all — ``select_rate`` matches a rule whose
+    income type is among them, instead of ignoring the axis entirely.
+    """
     qualify_answers = (dialog or {}).get("qualify_answers") or {}
     income_types = qualify_answers.get("income_types") or []
+    if not income_types:
+        return None
     if len(income_types) == 1:
         return income_types[0]
-    return None
+    return list(income_types)
 
 
 def _lookup_credit_rate(product: dict, calc_slots: dict, dialog: dict) -> float:
@@ -228,7 +257,7 @@ async def _handle_lead_step(state: BotState, user_text: str, dialog: dict) -> di
 
     if lead_step == "offer":
         if _is_recalculate(user_text):
-            calc_qs = get_calc_questions(category, lang)
+            calc_qs = _effective_calc_questions(category, selected_product, lang)
             if calc_qs:
                 first_step, first_q = calc_qs[0]
                 new_dialog = {**dialog, "lead_step": None, "calc_step": first_step, "calc_slots": {}}
@@ -289,7 +318,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     parsed_value = False
     adjustment_note = ""
     is_question = False
-    calc_qs = get_calc_questions(category, lang)
+    calc_qs = _effective_calc_questions(category, selected_product, lang)
     turn_usage: dict = {}
 
     # --- Improvement 2: Pre-fill slots from conversation history on first entry ---

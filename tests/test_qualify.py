@@ -145,6 +145,24 @@ class TestNodeQualifyFlow:
         result = _run(node_qualify_flow(state))
         assert result["answer"] == at("qualify_consider_others", "ru")
 
+    def test_mortgage_salary_asks_which_bank(self):
+        """Mortgage rates differ by card issuer, so the branch must not stop at
+        an ambiguous [payroll, official]."""
+        state = _qstate("Да", "mortgage", "salary")
+        result = _run(node_qualify_flow(state))
+        assert result["answer"] == at("q_salary_card", "ru")
+        assert result["dialog"]["qualify_node"] == "salary_card"
+        assert "income_types" not in result["dialog"]["qualify_answers"]
+
+    def test_mortgage_salary_card_yields_single_income_type(self):
+        asaka = _run(node_qualify_flow(_qstate("Асакабанк", "mortgage", "salary_card")))
+        assert asaka["dialog"]["qualify_answers"]["income_types"] == ["payroll"]
+        assert asaka["dialog"]["qualify_node"] == "market"
+
+        other = _run(node_qualify_flow(_qstate("Другого банка", "mortgage", "salary_card")))
+        assert other["dialog"]["qualify_answers"]["income_types"] == ["official"]
+        assert other["dialog"]["qualify_node"] == "market"
+
     def test_deposit_eur_note_appended(self):
         state = _qstate("Евро", "deposit", "currency", {"deposit_goal": "topup"})
         with patch(

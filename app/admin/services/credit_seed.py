@@ -423,9 +423,12 @@ _PRODUCT_STATIC_KEYS = (
     "source_path",
 )
 
-# Single condition axis per credit section for Excel-seeded products. income_type
-# stays on each rule as an overlay filter regardless. 'flat' = one rate, no axis
-# (e.g. Автокредит, where rates differ only by income type).
+# Fallback condition axis per section, used only for products the admin has not
+# configured yet: a product's own ``rate_condition_kind`` always wins (see
+# ``_product_condition_kind``). These defaults describe how the *current* Excel
+# text parses per section, not what the rate actually depends on — products
+# whose rate varies on a different axis are expected to carry their own kind.
+# income_type stays on each rule as an overlay filter regardless.
 _SECTION_CONDITION_KIND: Dict[str, str] = {
     "Микрозайм": "term",
     "Ипотека": "downpayment",
@@ -437,8 +440,30 @@ _KIND_AXIS_COLS: Dict[str, Tuple[str, ...]] = {
     "age": ("age_min", "age_max"),
     "amount": ("amount_min", "amount_max"),
     "downpayment": ("downpayment_min_pct", "downpayment_max_pct"),
+    # Composite: a rate that depends on term *and* downpayment at once.
+    "term_downpayment": (
+        "term_min_months", "term_max_months",
+        "downpayment_min_pct", "downpayment_max_pct",
+    ),
 }
-_ALL_AXIS_COLS: Tuple[str, ...] = tuple(c for cols in _KIND_AXIS_COLS.values() for c in cols)
+_ALL_AXIS_COLS: Tuple[str, ...] = tuple(
+    dict.fromkeys(c for cols in _KIND_AXIS_COLS.values() for c in cols)
+)
+
+
+def _product_condition_kind(
+    product: Optional[CreditProductOffer], section_name: str
+) -> str:
+    """The axis whose Excel-parsed bounds are kept for this product.
+
+    An existing product's own ``rate_condition_kind`` wins so a manual choice in
+    SQLAdmin survives re-seeding; only a product that has none falls back to the
+    section default.
+    """
+    own = (getattr(product, "rate_condition_kind", None) or "").strip()
+    if own:
+        return own
+    return _SECTION_CONDITION_KIND.get(section_name, "flat")
 
 
 def _group_by_product(
@@ -472,8 +497,6 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
 
         for (section_name, service_name), recs in grouped.items():
             first = recs[0]
-            kind = _SECTION_CONDITION_KIND.get(section_name, "flat")
-            keep_cols = set(_KIND_AXIS_COLS.get(kind, ()))
             product = (
                 await session.execute(
                     select(CreditProductOffer).where(
@@ -482,6 +505,8 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
                     )
                 )
             ).scalar_one_or_none()
+            kind = _product_condition_kind(product, section_name)
+            keep_cols = set(_KIND_AXIS_COLS.get(kind, ()))
 
             if product is None:
                 product = CreditProductOffer(
@@ -497,7 +522,9 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
                 # Refresh static fields from Excel; leave qualify tags untouched.
                 for k in _PRODUCT_STATIC_KEYS:
                     setattr(product, k, first.get(k))
-                product.rate_condition_kind = kind
+                # Never overwrite an axis chosen in SQLAdmin — only fill a blank.
+                if not (product.rate_condition_kind or "").strip():
+                    product.rate_condition_kind = kind
                 if not replace:
                     # In replace mode seed rules were already cleared globally.
                     await session.execute(

@@ -2,6 +2,7 @@
 from app.agent.rate_rules import (
     has_usable_rate,
     needs_age,
+    needs_downpayment,
     rate_bounds,
     select_rate,
     select_rate_value,
@@ -26,6 +27,12 @@ class TestHelpers:
         assert needs_age([_rule(age_max=65, rate_min_pct=19.0)]) is True
         assert needs_age([_rule(rate_min_pct=19.0)]) is False
         assert needs_age(None) is False
+
+    def test_needs_downpayment(self):
+        assert needs_downpayment([_rule(downpayment_min_pct=15.0, rate_min_pct=19.0)]) is True
+        assert needs_downpayment([_rule(downpayment_max_pct=50.0, rate_min_pct=19.0)]) is True
+        assert needs_downpayment([_rule(term_min_months=12, rate_min_pct=19.0)]) is False
+        assert needs_downpayment(None) is False
 
     def test_rate_bounds(self):
         rules = [
@@ -98,3 +105,57 @@ class TestSelectRate:
         ]
         assert select_rate_value(rules, currency_code="USD") == 8.0
         assert select_rate_value(rules, currency_code="UZS") == 24.0
+
+    def test_income_type_accepts_candidate_list(self):
+        """A questionnaire branch may leave several income types open."""
+        rules = [
+            _rule(rate_min_pct=22.0, income_type="payroll"),
+            _rule(rate_min_pct=26.0, income_type="no_official"),
+        ]
+        # Either candidate may match; the lower rate wins the tie.
+        assert select_rate_value(rules, income_type=["payroll", "official"]) == 22.0
+        assert select_rate_value(rules, income_type=["no_official"]) == 26.0
+        # A list that matches nothing leaves the product without a rule.
+        assert select_rate(rules, income_type=["official"]) is None
+
+    def test_rule_constrained_on_term_and_downpayment(self):
+        """Автокредит 2.6 — the rate depends on term *and* down payment at once."""
+        rules = [
+            _rule(
+                rate_min_pct=24.0,
+                term_min_months=12, term_max_months=24,
+                downpayment_min_pct=15, downpayment_max_pct=29,
+            ),
+            _rule(
+                rate_min_pct=22.0,
+                term_min_months=12, term_max_months=24,
+                downpayment_min_pct=30, downpayment_max_pct=100,
+            ),
+            _rule(
+                rate_min_pct=26.0,
+                term_min_months=25, term_max_months=36,
+                downpayment_min_pct=15, downpayment_max_pct=29,
+            ),
+        ]
+        assert select_rate_value(rules, term_months=18, downpayment_pct=20) == 24.0
+        assert select_rate_value(rules, term_months=18, downpayment_pct=40) == 22.0
+        assert select_rate_value(rules, term_months=30, downpayment_pct=20) == 26.0
+        # Both axes are constrained, so both inputs are required.
+        assert select_rate(rules, term_months=18) is None
+        assert select_rate(rules, downpayment_pct=20) is None
+        # Outside every tier → no rule.
+        assert select_rate(rules, term_months=48, downpayment_pct=20) is None
+
+    def test_two_axis_rule_beats_single_axis_rule(self):
+        rules = [
+            _rule(rate_min_pct=20.0, term_min_months=12, term_max_months=36),
+            _rule(
+                rate_min_pct=25.0,
+                term_min_months=12, term_max_months=36,
+                downpayment_min_pct=30, downpayment_max_pct=100,
+            ),
+        ]
+        # Specificity 2 wins over specificity 1 even with the higher rate.
+        assert select_rate_value(rules, term_months=24, downpayment_pct=50) == 25.0
+        # Without a down payment only the single-axis rule can match.
+        assert select_rate_value(rules, term_months=24) == 20.0

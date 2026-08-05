@@ -108,9 +108,23 @@ _TREES: dict[str, dict[str, Any]] = {
                 "q": "q_salary_mortgage",
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("официальн", "rasmiy"),
-                     "set": {"income_types": ["payroll", "official"]}, "goto": "market"},
+                     "goto": "salary_card"},
                     {"label": "btn_q_no", "match": _NO_TOKENS + ("без официальн", "неофициальн", "rasmiy emas"),
                      "goto": "self_employed"},
+                ],
+            },
+            # Whose card the salary lands on is a rate condition, not just a
+            # filter: mortgage tariffs differ for payroll vs other-bank clients.
+            # Without this question income_types stays ambiguous and select_rate
+            # cannot match an income-typed tariff at all.
+            "salary_card": {
+                "type": NODE_QUESTION,
+                "q": "q_salary_card",
+                "options": [
+                    {"label": "btn_asaka", "match": ("асака", "asaka", "ваш банк", "вашего банка"),
+                     "set": {"income_types": ["payroll"]}, "goto": "market"},
+                    {"label": "btn_other_bank", "match": ("друг", "boshqa", "other", "иного банка"),
+                     "set": {"income_types": ["official"]}, "goto": "market"},
                 ],
             },
             "self_employed": {

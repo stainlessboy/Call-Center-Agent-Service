@@ -11,7 +11,12 @@ from app.agent.i18n import (
     category_label,
     income_type_label,
 )
-from app.agent.rate_rules import has_usable_rate, needs_age, rate_bounds
+from app.agent.rate_rules import (
+    has_usable_rate,
+    needs_age,
+    needs_downpayment,
+    rate_bounds,
+)
 from app.utils.data_loaders import (
     _fmt_pct_range,
     _fmt_term_months_range,
@@ -97,7 +102,10 @@ async def _get_products_by_category(category: str) -> list[dict]:
                 "rate_matrix": rate_matrix,
                 "rate_rules": rules,
                 "rate_condition_kind": product.get("rate_condition_kind"),
-                "needs_age": product.get("rate_condition_kind") == "age" or needs_age(rules),
+                # Driven by the rules themselves, not by rate_condition_kind —
+                # that field is only a label for the admin list.
+                "needs_age": needs_age(rules),
+                "needs_downpayment": needs_downpayment(rules),
             })
         return result
 
