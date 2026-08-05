@@ -619,22 +619,18 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
         ("Образовательный", "Образовательный"),
     ]
 
-    # The single condition axis the product's tariffs vary by. Drives which bound
-    # fields show in the inline tariff editor (JS in _credit_rules_inline.html).
+    # The product's headline condition — shown in the list column so tariffs are
+    # recognisable at a glance. It is a label only: a tariff may constrain any
+    # combination of axes (a rate can depend on term *and* downpayment at once),
+    # and nothing here restricts which bounds may be filled in.
     _CONDITION_KIND_CHOICES = [
         ("flat", "Без условия (одна ставка)"),
         ("term", "Срок"),
+        ("downpayment", "Первоначальный взнос"),
+        ("term_downpayment", "Срок и первоначальный взнос"),
         ("age", "Возраст"),
         ("amount", "Сумма"),
-        ("downpayment", "Первоначальный взнос"),
     ]
-    # axis key -> rule bound fields it controls
-    _AXIS_FIELDS = {
-        "term": ("term_min_months", "term_max_months"),
-        "age": ("age_min", "age_max"),
-        "amount": ("amount_min", "amount_max"),
-        "downpayment": ("downpayment_min_pct", "downpayment_max_pct"),
-    }
 
     # Qualification-flow tags. Rendered as 3-state selects (— / Да / Нет) and
     # shown/hidden by section via templates/sqladmin/_credit_tags_script.html.
@@ -713,7 +709,10 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
             "Тип условия (тариф)",
             choices=self._CONDITION_KIND_CHOICES,
             default="flat",
-            description="От чего зависит ставка. Определяет, какие поля видны в тарифах ниже.",
+            description=(
+                "Основное условие продукта — подпись для списка. "
+                "Заполнять в тарифах можно любые условия независимо от выбора здесь."
+            ),
         )
         for col, label in self._TAG_FIELDS.items():
             setattr(
@@ -768,8 +767,8 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
                         .order_by(CreditRateRule.priority.desc(), CreditRateRule.id)
                     )
                 ).scalars().all()
-            # The shown axis is the product's rate_condition_kind (read by the
-            # template's JS); rule rows just expose every bound field.
+            # Rule rows expose every bound field; the template decides which are
+            # prominent and which sit behind the "rare conditions" toggle.
             obj._editor_rules = rules
         return obj
 
@@ -810,14 +809,10 @@ class CreditProductOfferAdmin(ModelView, model=CreditProductOffer):
             "downpayment_min_pct", "downpayment_max_pct",
             "rate_min_pct", "rate_max_pct", "priority", "is_active",
         )
-        # Enforce the product's single condition axis: NULL out every bound that
-        # is not on the chosen axis (currency_code/income_type stay as overlays).
-        kind = (form.get("rate_condition_kind") or "").strip()
-        keep = set(self._AXIS_FIELDS.get(kind, ()))
-        off_axis = {c for cols in self._AXIS_FIELDS.values() for c in cols} - keep
-        for row in rows:
-            for c in off_axis:
-                row[c] = None
+        # Every bound is stored as entered: a tariff may constrain several axes at
+        # once (e.g. Автокредит 2.6 — rate depends on term *and* downpayment), and
+        # ``rate_condition_kind`` is only a label. ``select_rate`` matches each
+        # constrained axis independently, so unfilled bounds stay unconstrained.
         async with self.session_maker() as session:
             existing = {
                 r.id: r

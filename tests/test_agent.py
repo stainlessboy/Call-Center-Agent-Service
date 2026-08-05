@@ -2729,3 +2729,58 @@ class TestToolErrorNotSurfacedToUser:
         assert "Error invoking tool" not in fallback
         assert "Please fix the error" not in fallback
 
+
+
+# ---- calculator steps driven by the product's tariffs ----------------------
+
+class TestEffectiveCalcQuestions:
+    """The down payment step is added for products whose rate depends on one,
+    even in categories that do not collect a down payment by default."""
+
+    def test_microloan_without_downpayment_rules_keeps_baseline(self):
+        from app.agent.nodes.calc_flow import _effective_calc_questions
+
+        steps = _effective_calc_questions("microloan", {}, "ru")
+        assert [key for key, _ in steps] == ["amount", "term"]
+
+    def test_microloan_with_downpayment_rules_gains_the_step(self):
+        from app.agent.nodes.calc_flow import _effective_calc_questions
+
+        product = {"needs_downpayment": True}
+        steps = _effective_calc_questions("microloan", product, "ru")
+        assert [key for key, _ in steps] == ["amount", "term", "downpayment"]
+        assert steps[-1][1] == at("calc_downpayment", "ru")
+
+    def test_no_duplicate_when_category_already_asks(self):
+        from app.agent.nodes.calc_flow import _effective_calc_questions
+
+        product = {"needs_downpayment": True}
+        steps = _effective_calc_questions("mortgage", product, "ru")
+        assert [key for key, _ in steps].count("downpayment") == 1
+
+    def test_deposit_never_gains_a_downpayment_step(self):
+        from app.agent.nodes.calc_flow import _effective_calc_questions
+
+        steps = _effective_calc_questions("deposit", {"needs_downpayment": True}, "ru")
+        assert [key for key, _ in steps] == ["amount", "term"]
+
+
+class TestIncomeTypeFromDialog:
+    def test_single_answer_returns_plain_string(self):
+        from app.agent.nodes.calc_flow import _income_type_from_dialog
+
+        dialog = {"qualify_answers": {"income_types": ["payroll"]}}
+        assert _income_type_from_dialog(dialog) == "payroll"
+
+    def test_several_candidates_are_all_returned(self):
+        """Previously returned None, which made income-typed tariffs unmatchable."""
+        from app.agent.nodes.calc_flow import _income_type_from_dialog
+
+        dialog = {"qualify_answers": {"income_types": ["payroll", "official"]}}
+        assert _income_type_from_dialog(dialog) == ["payroll", "official"]
+
+    def test_no_answers_returns_none(self):
+        from app.agent.nodes.calc_flow import _income_type_from_dialog
+
+        assert _income_type_from_dialog({}) is None
+        assert _income_type_from_dialog({"qualify_answers": {"income_types": []}}) is None

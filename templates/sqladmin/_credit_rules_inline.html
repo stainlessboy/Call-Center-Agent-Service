@@ -2,11 +2,12 @@
    Inputs are named rule-{i}-{field}; they are parsed from the raw request form
    by CreditProductOfferAdmin._sync_rules_from_request (not WTForms fields).
 
-   Which axis fields are visible is driven by the product-level select
-   `rate_condition_kind` (one axis per product). Currency and income type are
-   always shown as overlay filters. #}
+   Every condition is editable on every row: one tariff may depend on term and
+   downpayment at the same time. Age and amount are almost never used, so they
+   sit behind a toggle — collapsed unless the row already carries a value. #}
 
 {% macro rule_row(idx, r) %}
+{% set has_extra = r and (r.age_min is not none or r.age_max is not none or r.amount_min is not none or r.amount_max is not none) %}
 <div class="card rule-row" data-row="{{ idx }}" style="margin-bottom:12px;border:1px solid #dde;">
   <div class="card-body" style="padding:12px;">
     <input type="hidden" name="rule-{{ idx }}-id" value="{{ r.id if r else '' }}">
@@ -14,7 +15,7 @@
 
     <div class="row" style="align-items:flex-end;">
       <div class="col-md-9 mb-2">
-        <span class="text-muted rule-axis-hint" style="font-size:0.85rem;"></span>
+        <span class="rule-warning" style="font-size:0.85rem;color:#b45309;"></span>
       </div>
       <div class="col-md-3 mb-2" style="text-align:right;">
         <button type="button" class="btn btn-outline-danger btn-sm rule-remove">Удалить тариф</button>
@@ -23,66 +24,45 @@
 
     <div class="row">
       {# --- term --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="term">
+      <div class="col-md-3 mb-2">
         <label class="form-label">Срок от (мес.)</label>
-        <input type="number" step="1" name="rule-{{ idx }}-term_min_months" class="form-control" value="{{ r.term_min_months if r and r.term_min_months is not none else '' }}">
+        <input type="number" step="1" name="rule-{{ idx }}-term_min_months" class="form-control rule-input" value="{{ r.term_min_months if r and r.term_min_months is not none else '' }}">
       </div>
-      <div class="col-md-3 mb-2 rule-field" data-axis="term">
+      <div class="col-md-3 mb-2">
         <label class="form-label">Срок до (мес.)</label>
-        <input type="number" step="1" name="rule-{{ idx }}-term_max_months" class="form-control" value="{{ r.term_max_months if r and r.term_max_months is not none else '' }}">
-      </div>
-      {# --- age --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="age">
-        <label class="form-label">Возраст от</label>
-        <input type="number" step="1" name="rule-{{ idx }}-age_min" class="form-control" value="{{ r.age_min if r and r.age_min is not none else '' }}">
-      </div>
-      <div class="col-md-3 mb-2 rule-field" data-axis="age">
-        <label class="form-label">Возраст до</label>
-        <input type="number" step="1" name="rule-{{ idx }}-age_max" class="form-control" value="{{ r.age_max if r and r.age_max is not none else '' }}">
-      </div>
-      {# --- amount --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="amount">
-        <label class="form-label">Сумма от</label>
-        <input type="number" step="1" name="rule-{{ idx }}-amount_min" class="form-control" value="{{ r.amount_min if r and r.amount_min is not none else '' }}">
-      </div>
-      <div class="col-md-3 mb-2 rule-field" data-axis="amount">
-        <label class="form-label">Сумма до</label>
-        <input type="number" step="1" name="rule-{{ idx }}-amount_max" class="form-control" value="{{ r.amount_max if r and r.amount_max is not none else '' }}">
+        <input type="number" step="1" name="rule-{{ idx }}-term_max_months" class="form-control rule-input" value="{{ r.term_max_months if r and r.term_max_months is not none else '' }}">
       </div>
       {# --- downpayment --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="downpayment">
+      <div class="col-md-3 mb-2">
         <label class="form-label">Взнос от %</label>
-        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_min_pct" class="form-control" value="{{ r.downpayment_min_pct if r and r.downpayment_min_pct is not none else '' }}">
+        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_min_pct" class="form-control rule-input" value="{{ r.downpayment_min_pct if r and r.downpayment_min_pct is not none else '' }}">
       </div>
-      <div class="col-md-3 mb-2 rule-field" data-axis="downpayment">
+      <div class="col-md-3 mb-2">
         <label class="form-label">Взнос до %</label>
-        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_max_pct" class="form-control" value="{{ r.downpayment_max_pct if r and r.downpayment_max_pct is not none else '' }}">
+        <input type="number" step="0.1" name="rule-{{ idx }}-downpayment_max_pct" class="form-control rule-input" value="{{ r.downpayment_max_pct if r and r.downpayment_max_pct is not none else '' }}">
       </div>
-      {# --- income (overlay filter, always shown) --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="income">
+      {# --- income (overlay filter) --- #}
+      <div class="col-md-3 mb-2">
         <label class="form-label">Тип дохода</label>
         {% set it = (r.income_type if r else '') or '' %}
-        <select name="rule-{{ idx }}-income_type" class="form-select">
+        <select name="rule-{{ idx }}-income_type" class="form-select rule-input">
           <option value="" {{ 'selected' if it == '' }}>— для всех —</option>
-          <option value="payroll" {{ 'selected' if it == 'payroll' }}>Зарплатный проект</option>
-          <option value="official" {{ 'selected' if it == 'official' }}>Официальный доход</option>
-          <option value="no_official" {{ 'selected' if it == 'no_official' }}>Без офиц. дохода</option>
+          <option value="payroll" {{ 'selected' if it == 'payroll' }}>Зарплата на карту Асакабанка</option>
+          <option value="official" {{ 'selected' if it == 'official' }}>Зарплата на карту другого банка</option>
+          <option value="no_official" {{ 'selected' if it == 'no_official' }}>Самозанятый</option>
         </select>
       </div>
-      {# --- currency (overlay filter, always shown) --- #}
-      <div class="col-md-3 mb-2 rule-field" data-axis="currency">
+      {# --- currency (overlay filter) --- #}
+      <div class="col-md-3 mb-2">
         <label class="form-label">Валюта</label>
         {% set cc = (r.currency_code if r else '') or '' %}
-        <select name="rule-{{ idx }}-currency_code" class="form-select">
+        <select name="rule-{{ idx }}-currency_code" class="form-select rule-input">
           <option value="" {{ 'selected' if cc == '' }}>— любая —</option>
           <option value="UZS" {{ 'selected' if cc == 'UZS' }}>UZS</option>
           <option value="USD" {{ 'selected' if cc == 'USD' }}>USD</option>
           <option value="EUR" {{ 'selected' if cc == 'EUR' }}>EUR</option>
         </select>
       </div>
-    </div>
-
-    <div class="row">
       <div class="col-md-2 mb-2">
         <label class="form-label">Ставка мин. %</label>
         <input type="number" step="0.1" name="rule-{{ idx }}-rate_min_pct" class="form-control" value="{{ r.rate_min_pct if r and r.rate_min_pct is not none else '' }}">
@@ -91,19 +71,46 @@
         <label class="form-label">Ставка макс. %</label>
         <input type="number" step="0.1" name="rule-{{ idx }}-rate_max_pct" class="form-control" value="{{ r.rate_max_pct if r and r.rate_max_pct is not none else '' }}">
       </div>
-      <div class="col-md-5 mb-2">
+    </div>
+
+    <div class="row">
+      <div class="col-md-7 mb-2">
         <label class="form-label">Условие ставки (текст)</label>
         <input type="text" name="rule-{{ idx }}-condition_text" class="form-control" value="{{ r.condition_text if r and r.condition_text else '' }}">
       </div>
       <div class="col-md-2 mb-2">
         <label class="form-label">Приоритет</label>
-        <input type="number" step="1" name="rule-{{ idx }}-priority" class="form-control" value="{{ r.priority if r and r.priority is not none else 0 }}">
+        <input type="number" step="1" name="rule-{{ idx }}-priority" class="form-control rule-input" value="{{ r.priority if r and r.priority is not none else 0 }}">
       </div>
-      <div class="col-md-1 mb-2">
+      <div class="col-md-2 mb-2">
         <label class="form-label">Активен</label><br>
-        <input type="checkbox" name="rule-{{ idx }}-is_active" value="on" {{ 'checked' if (r.is_active if r else True) }}>
+        <input type="checkbox" name="rule-{{ idx }}-is_active" value="on" class="rule-input" {{ 'checked' if (r.is_active if r else True) }}>
       </div>
     </div>
+
+    <details class="rule-extra" {{ 'open' if has_extra }}>
+      <summary class="text-muted" style="cursor:pointer;font-size:0.85rem;">
+        Редкие условия: возраст и сумма
+      </summary>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-md-3 mb-2">
+          <label class="form-label">Возраст от</label>
+          <input type="number" step="1" name="rule-{{ idx }}-age_min" class="form-control" value="{{ r.age_min if r and r.age_min is not none else '' }}">
+        </div>
+        <div class="col-md-3 mb-2">
+          <label class="form-label">Возраст до</label>
+          <input type="number" step="1" name="rule-{{ idx }}-age_max" class="form-control" value="{{ r.age_max if r and r.age_max is not none else '' }}">
+        </div>
+        <div class="col-md-3 mb-2">
+          <label class="form-label">Сумма от</label>
+          <input type="number" step="1" name="rule-{{ idx }}-amount_min" class="form-control" value="{{ r.amount_min if r and r.amount_min is not none else '' }}">
+        </div>
+        <div class="col-md-3 mb-2">
+          <label class="form-label">Сумма до</label>
+          <input type="number" step="1" name="rule-{{ idx }}-amount_max" class="form-control" value="{{ r.amount_max if r and r.amount_max is not none else '' }}">
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 {% endmacro %}
@@ -111,8 +118,9 @@
 <div id="rate-rules-block" style="margin-top:18px;">
   <h3 class="card-title" style="margin-bottom:8px;">Тарифы (ставки)</h3>
   <p class="text-muted" style="margin-bottom:10px;">
-    Поля условия зависят от «Тип условия (тариф)» вверху формы — показывается только выбранная ось.
-    «Тип дохода» и «Валюта» — дополнительные фильтры, доступны всегда.
+    Один тариф — одна комбинация условий и ставка по ней. Заполняйте только те условия,
+    от которых ставка действительно зависит; пустое поле = условие не проверяется.
+    Условия можно комбинировать: например, срок 12–24 мес. и взнос от 30% в одном тарифе.
     Тариф действует только при заполненной ставке; продукт без действующего тарифа не показывается клиентам.
   </p>
   <div id="rate-rules-container">
@@ -131,41 +139,91 @@
 
 <script>
 (function () {
-  // Bound fields shown per product axis. Currency + income are overlay filters
-  // shown for every axis (including "flat").
-  var KIND_AXES = {
-    term: ["term"], age: ["age"], amount: ["amount"],
-    downpayment: ["downpayment"], flat: [], "": []
-  };
-  var ALWAYS = ["income", "currency"];
+  // Two tariffs conflict when a single set of client inputs matches both: same
+  // income type and currency (an empty value means "any", so it overlaps
+  // everything), and intersecting term / downpayment ranges. Equal priority is
+  // part of the test — a different priority resolves the tie deterministically,
+  // so that pair is intentional rather than a mistake.
 
-  var AXIS_LABELS = {
-    term: "Условие: срок кредита", age: "Условие: возраст заёмщика",
-    amount: "Условие: сумма кредита", downpayment: "Условие: первоначальный взнос",
-    flat: "Без условия — одна ставка", "": "Без условия — одна ставка"
-  };
-
-  function kindSelect() {
-    return document.querySelector('[name="rate_condition_kind"]');
-  }
-  function currentKind() {
-    var s = kindSelect();
-    return s ? s.value : "";
+  function fieldValue(row, name) {
+    var el = row.querySelector('[name$="-' + name + '"]');
+    if (!el) return null;
+    var raw = String(el.value).trim().replace(",", ".");
+    if (raw === "") return null;
+    var num = parseFloat(raw);
+    return isNaN(num) ? null : num;
   }
 
-  function applyRow(row, kind) {
-    var show = (KIND_AXES[kind] || []).concat(ALWAYS);
-    row.querySelectorAll(".rule-field").forEach(function (f) {
-      f.style.display = (show.indexOf(f.getAttribute("data-axis")) >= 0) ? "" : "none";
+  function selectValue(row, name) {
+    var el = row.querySelector('[name$="-' + name + '"]');
+    return el ? String(el.value).trim() : "";
+  }
+
+  function isLive(row) {
+    var del = row.querySelector('input[name$="-delete"]');
+    if (del && del.value === "on") return false;
+    var active = row.querySelector('input[name$="-is_active"]');
+    if (active && !active.checked) return false;
+    return row.style.display !== "none";
+  }
+
+  function readRow(row) {
+    return {
+      el: row,
+      income: selectValue(row, "income_type"),
+      currency: selectValue(row, "currency_code"),
+      priority: fieldValue(row, "priority") || 0,
+      termLo: fieldValue(row, "term_min_months"),
+      termHi: fieldValue(row, "term_max_months"),
+      dpLo: fieldValue(row, "downpayment_min_pct"),
+      dpHi: fieldValue(row, "downpayment_max_pct")
+    };
+  }
+
+  function rangesOverlap(aLo, aHi, bLo, bHi) {
+    var lo1 = aLo === null ? -Infinity : aLo, hi1 = aHi === null ? Infinity : aHi;
+    var lo2 = bLo === null ? -Infinity : bLo, hi2 = bHi === null ? Infinity : bHi;
+    return lo1 <= hi2 && lo2 <= hi1;
+  }
+
+  function overlayMatches(a, b) {
+    return (a === "" || b === "" || a === b);
+  }
+
+  function conflict(a, b) {
+    if (a.priority !== b.priority) return false;
+    if (!overlayMatches(a.income, b.income)) return false;
+    if (!overlayMatches(a.currency, b.currency)) return false;
+    return rangesOverlap(a.termLo, a.termHi, b.termLo, b.termHi)
+        && rangesOverlap(a.dpLo, a.dpHi, b.dpLo, b.dpHi);
+  }
+
+  function checkOverlaps() {
+    var container = document.getElementById("rate-rules-container");
+    if (!container) return;
+    var all = Array.prototype.slice.call(container.querySelectorAll(".rule-row"));
+    all.forEach(function (r) {
+      var w = r.querySelector(".rule-warning");
+      if (w) w.textContent = "";
     });
-    var hint = row.querySelector(".rule-axis-hint");
-    if (hint) hint.textContent = AXIS_LABELS[kind] || "";
-  }
-
-  function applyAll() {
-    var kind = currentKind();
-    document.querySelectorAll("#rate-rules-container .rule-row").forEach(function (r) {
-      applyRow(r, kind);
+    var live = all.filter(isLive);
+    var rows = live.map(readRow);
+    var hits = live.map(function () { return []; });
+    for (var i = 0; i < rows.length; i++) {
+      for (var j = i + 1; j < rows.length; j++) {
+        if (conflict(rows[i], rows[j])) {
+          hits[i].push(j + 1);
+          hits[j].push(i + 1);
+        }
+      }
+    }
+    hits.forEach(function (other, i) {
+      if (!other.length) return;
+      var w = live[i].querySelector(".rule-warning");
+      if (w) {
+        w.textContent = "⚠ Пересекается с тарифом №" + other.join(", №")
+          + ". При совпадении будет выбрана меньшая ставка — задайте разный приоритет или сузьте диапазоны.";
+      }
     });
   }
 
@@ -183,19 +241,18 @@
     }
 
     var counter = container.querySelectorAll(".rule-row").length;
-    applyAll();
-
-    var sel = kindSelect();
-    if (sel) sel.addEventListener("change", applyAll);
+    checkOverlaps();
 
     document.getElementById("rule-add-btn").addEventListener("click", function () {
       var tpl = document.getElementById("rule-row-template").innerHTML.replace(/__IDX__/g, counter++);
       var wrap = document.createElement("div");
       wrap.innerHTML = tpl.trim();
-      var row = wrap.firstElementChild;
-      container.appendChild(row);
-      applyRow(row, currentKind());
+      container.appendChild(wrap.firstElementChild);
+      checkOverlaps();
     });
+
+    container.addEventListener("input", checkOverlaps);
+    container.addEventListener("change", checkOverlaps);
 
     container.addEventListener("click", function (e) {
       if (!e.target.classList.contains("rule-remove")) return;
@@ -209,6 +266,7 @@
       } else {
         row.remove();
       }
+      checkOverlaps();
     });
   }
 
