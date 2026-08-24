@@ -108,6 +108,13 @@ class Message(Base):
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
     llm_usage: Mapped[Optional[dict]] = mapped_column(JSONB)  # {model, prompt_tokens, completion_tokens, total_tokens, cost}
+    # Mini App structured blocks for this turn (Phase 3 — see BotState.ui_blocks
+    # and docs/MINIAPP.md "UI blocks"): [{"type": ..., "data": {...}}, ...] or
+    # NULL. Persisted so the Mini App history screen (/api/miniapp/chat/history)
+    # can re-render product cards / tables on reload instead of only the text —
+    # only ever set on role="agent" messages (the LLM/deterministic-node reply);
+    # user/system/operator rows never carry one.
+    ui_blocks: Mapped[Optional[list]] = mapped_column(JSONB)
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
@@ -415,3 +422,40 @@ class CardProductOffer(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class UserProfile(Base):
+    """"Personal consultant" memory: durable facts about a client learned
+    across turns/sessions, plus a free-text relationship recap.
+
+    Populated by the background memory-extractor (app/agent/memory_extract.py)
+    after each agent turn, and read once per turn by Agent._ainvoke_locked
+    (app/agent/agent.py) to give node_faq client context. One row per user.
+
+    `facts` schema is intentionally loose (JSONB, no fixed columns) — the
+    extractor LLM decides what's worth remembering. Expected-but-not-enforced
+    keys: income_monthly, age, employment_type, family_status,
+    goals (list), preferences (list). Updates MERGE into existing facts
+    (only the keys present in a given extraction are overwritten — see
+    app/agent/profile.py::upsert_user_profile); `notes` is replaced wholesale
+    each time (it's a standing 2-4 sentence summary, not an accumulating log).
+    """
+
+    __tablename__ = "user_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    facts: Mapped[dict] = mapped_column(JSONB, server_default="{}", default=dict)
+    notes: Mapped[str] = mapped_column(Text, server_default="", default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped["User"] = relationship()
+
+    def __str__(self) -> str:
+        return f"profile#{self.user_id}"

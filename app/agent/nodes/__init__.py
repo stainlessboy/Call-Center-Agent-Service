@@ -3,6 +3,7 @@ from app.agent.nodes.faq import node_faq
 from app.agent.nodes.calc_flow import node_calc_flow
 from app.agent.nodes.qualify_flow import node_qualify_flow
 from app.agent.nodes.human_mode import node_human_mode_turn
+from app.agent.nodes.recap import node_recap
 
 __all__ = [
     "node_router",
@@ -10,4 +11,5 @@ __all__ = [
     "node_calc_flow",
     "node_qualify_flow",
     "node_human_mode_turn",
+    "node_recap",
 ]

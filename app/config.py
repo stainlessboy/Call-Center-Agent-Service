@@ -52,12 +52,15 @@ class Settings:
     faq_sem_low_threshold: float
     faq_lex_strict_threshold: float
     faq_lex_low_threshold: float
+    faq_rephrase_enabled: bool
     default_custom_loan_rate_pct: float
+    dti_warn_ratio: float
     miniapp_enabled: bool
     miniapp_url: str | None
     miniapp_dev_mode: bool
     miniapp_dev_user_id: int
     miniapp_init_data_ttl_seconds: int
+    miniapp_streaming_enabled: bool
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -144,7 +147,17 @@ def get_settings() -> Settings:
         faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.45),
         faq_lex_strict_threshold=_parse_float(os.getenv("FAQ_LEX_STRICT_THRESHOLD"), default=0.75),
         faq_lex_low_threshold=_parse_float(os.getenv("FAQ_LEX_LOW_THRESHOLD"), default=0.55),
+        # node_faq's deterministic strict-tier FAQ pre-check (app/agent/faq_rephrase.py)
+        # rewords the verbatim DB answer via one extra LLM call before it ships —
+        # switchable so it can be turned off in prod without a deploy if it
+        # ever misbehaves (falls back to the raw DB text, not a broken turn).
+        faq_rephrase_enabled=_parse_bool(os.getenv("FAQ_REPHRASE_ENABLED"), default=True),
         default_custom_loan_rate_pct=_parse_float(os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT"), default=20.0),
+        # Debt-to-income warning threshold (Phase 4 "Экспертиза"): a monthly
+        # payment above this share of the client's known income triggers a
+        # soft warning — both the deterministic calc_flow finalization and
+        # the affordability_check tool read this live via get_settings().
+        dti_warn_ratio=_parse_float(os.getenv("DTI_WARN_RATIO"), default=0.45),
         miniapp_enabled=_parse_bool(os.getenv("MINIAPP_ENABLED"), default=True),
         miniapp_url=(os.getenv("MINIAPP_URL") or "").strip() or None,
         # Local browser testing without Telegram: accepts requests with no
@@ -155,4 +168,9 @@ def get_settings() -> Settings:
         miniapp_init_data_ttl_seconds=_parse_positive_int(
             os.getenv("MINIAPP_INIT_DATA_TTL_SECONDS"), default=86400
         ),
+        # Live token streaming to the Mini App chat screen over the existing
+        # /api/miniapp/ws socket (node_faq only — see app/agent/streaming.py).
+        # Telegram never reads this flag; disabling it just makes node_faq
+        # take its plain .ainvoke() path for Mini App turns too.
+        miniapp_streaming_enabled=_parse_bool(os.getenv("MINIAPP_STREAMING_ENABLED"), default=True),
     )

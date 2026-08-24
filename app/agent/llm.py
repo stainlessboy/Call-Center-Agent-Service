@@ -116,18 +116,68 @@ def _needs_responses_api(model_name: str) -> bool:
     return model_name.startswith("gpt-5.")
 
 
-@lru_cache(maxsize=1)
-def _build_chat_openai() -> ChatOpenAI:
-    """Build a LangChain ChatOpenAI instance.
+# ---------------------------------------------------------------------------
+# Role-oriented model factory
+#
+# Two roles share the OpenAI/Qwen connection plumbing above but may run
+# different models:
+#   * "consultant" — the customer-facing chat LLM (node_faq, and side-question
+#     replies in calc_flow/qualify_flow — those answer the customer directly,
+#     so they are consultant turns too).
+#   * "extractor"  — structured-extraction calls (calc_extractor.py) that
+#     parse a slot value / question / prefill out of user text. Cheaper model
+#     is fine; correctness needs JSON-following, not warmth.
+#
+# Each role has its own env var (CONSULTANT_LLM_MODEL / EXTRACTOR_LLM_MODEL)
+# that takes TOP priority so existing deployments can pin per-role models.
+# Below that, the legacy OPENAI_MODEL / LOCAL_AGENT_INTENT_LLM_MODEL vars are
+# honoured unchanged (this is what makes the change backward compatible: a
+# deployment that only ever set OPENAI_MODEL keeps using exactly that model
+# for both roles, it does NOT silently move to the new gpt-4o default). Only
+# when NONE of those are set do we fall back to the role's own default.
+# ---------------------------------------------------------------------------
+_ROLE_ENV_VARS: dict[str, str] = {
+    "consultant": "CONSULTANT_LLM_MODEL",
+    "extractor": "EXTRACTOR_LLM_MODEL",
+}
+_ROLE_DEFAULT_MODELS: dict[str, str] = {
+    "consultant": "gpt-4o",
+    "extractor": "gpt-4o-mini",
+}
+
+
+def _resolve_gpt_model_name(role: str = "consultant") -> str:
+    """Resolve the OpenAI model name for *role* (GPT/OpenAI path only).
+
+    Priority: <ROLE>_LLM_MODEL > OPENAI_MODEL > LOCAL_AGENT_INTENT_LLM_MODEL >
+    role default ("gpt-4o" for consultant, "gpt-4o-mini" for extractor).
+    """
+    role_env = _ROLE_ENV_VARS.get(role)
+    role_value = os.getenv(role_env) if role_env else None
+    if role_value:
+        return role_value
+    legacy = os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL")
+    if legacy:
+        return legacy
+    return _ROLE_DEFAULT_MODELS.get(role, "gpt-4o-mini")
+
+
+@lru_cache(maxsize=4)
+def _build_chat_openai(role: str = "consultant") -> ChatOpenAI:
+    """Build a LangChain ChatOpenAI instance for *role* ("consultant" | "extractor").
 
     Provider is chosen by the USE_GPT env flag:
-      * USE_GPT truthy (default) → OpenAI GPT model
-      * USE_GPT falsy           → Qwen model served by Together AI
+      * USE_GPT truthy (default) → OpenAI GPT model (role resolves via
+        _resolve_gpt_model_name)
+      * USE_GPT falsy           → Qwen model served by Together AI — role is
+        NOT split for Qwen yet (no per-role Qwen env vars exist), every role
+        gets the same _qwen_model_name(); this preserves current behavior.
 
     Raises on failure — do NOT catch here. lru_cache only memoizes successful
     returns, never exceptions, so a transient construction failure (bad env,
     missing key) is retried on the next call instead of being cached as a
-    permanent None (see _get_chat_openai).
+    permanent None (see _get_chat_openai). Cached per-role (maxsize=4 covers
+    both current roles with headroom).
     """
     common = {
         "temperature": 0.3,
@@ -142,14 +192,14 @@ def _build_chat_openai() -> ChatOpenAI:
         extra = qwen_extra_body()
         if extra:
             qwen_kwargs["extra_body"] = extra
+        # OpenAI-compatible providers (Together etc.) only speak
+        # /v1/chat/completions — never let the 1.x default pick /v1/responses.
+        qwen_kwargs["use_responses_api"] = False
+        qwen_kwargs["stream_usage"] = True
         return ChatOpenAI(model=_qwen_model_name(), **qwen_kwargs)
 
     # ---- OpenAI / GPT path -------------------------------------------
-    model_name = (
-        os.getenv("OPENAI_MODEL")
-        or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL")
-        or "gpt-4o-mini"
-    )
+    model_name = _resolve_gpt_model_name(role)
     kwargs: dict[str, Any] = {
         "model": model_name,
         **provider_connection(),
@@ -167,34 +217,44 @@ def _build_chat_openai() -> ChatOpenAI:
     # reasoning_effort. ChatOpenAI with use_responses_api=True handles this.
     if _needs_responses_api(model_name):
         kwargs["use_responses_api"] = True
+    else:
+        # langchain-openai >= 1.0 routes even plain chat models through the
+        # Responses API by default. Pin Chat Completions: the rest of the
+        # code (usage extraction, harmony stripping, streaming) expects
+        # completions-shaped messages, and stream_usage is only honored here.
+        kwargs["use_responses_api"] = False
+        kwargs["stream_usage"] = True
     return ChatOpenAI(**kwargs)
 
 
-def _get_chat_openai() -> Optional[ChatOpenAI]:
-    """Return a cached ChatOpenAI instance, or None if construction fails.
+def _get_chat_openai(role: str = "consultant") -> Optional[ChatOpenAI]:
+    """Return a cached ChatOpenAI instance for *role*, or None if construction fails.
 
     Thin wrapper around _build_chat_openai so failures are logged and
     swallowed here (callers already handle a None LLM) while the lru_cache on
     the inner function never memoizes the failure.
     """
     try:
-        return _build_chat_openai()
+        return _build_chat_openai(role)
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).warning("Failed to create ChatOpenAI: %s", exc)
+        logging.getLogger(__name__).warning(
+            "Failed to create ChatOpenAI (role=%s): %s", role, exc,
+        )
         return None
 
 
 # Tests call `_llm._get_chat_openai.cache_clear()` to reset the cached client
-# between cases. The cache now lives on _build_chat_openai, so alias it here
-# to keep that call site working without touching every test.
+# between cases. The cache now lives on _build_chat_openai (keyed per role),
+# so alias it here to keep that call site working without touching every
+# test — clearing it drops the cached client for ALL roles at once.
 _get_chat_openai.cache_clear = _build_chat_openai.cache_clear
 
 
-def get_model_name() -> str:
+def get_model_name(role: str = "consultant") -> str:
     if not _use_gpt():
         return _qwen_model_name()
-    return os.getenv("OPENAI_MODEL") or os.getenv("LOCAL_AGENT_INTENT_LLM_MODEL") or "gpt-4o-mini"
+    return _resolve_gpt_model_name(role)
 
 
 # Matches any harmony/reasoning control token like <|channel|>, <|message|>,

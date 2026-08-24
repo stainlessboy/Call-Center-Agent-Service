@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 
 import { api, ApiError, type SessionDetail, type SessionState, type SessionSummary } from '../api'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
+import { UiBlocksView } from '../components/UiBlocks'
 import { Notice, Segments, Skeleton } from '../components/ui'
 import { formatDay, formatTime } from '../format'
 import { useApp, useChat, useNav, useT, type ScreenEntry } from '../store'
 import { haptic } from '../telegram'
+import { sanitizeUiBlocks } from '../uiBlocks'
 
 type Filter = 'all' | 'active' | 'expired'
 
@@ -262,25 +264,34 @@ export function ArchiveScreen({ entry }: { entry: ScreenEntry }) {
       </div>
 
       <div className="stack stack--tight archive-feed">
-        {session.messages.map((message) => (
-          <div
-            key={message.id}
-            className={
-              message.role === 'user'
-                ? 'bubble bubble--out'
-                : message.role === 'operator'
-                  ? 'bubble bubble--operator'
-                  : 'bubble bubble--in'
-            }
-            style={
-              message.role === 'user'
-                ? { alignSelf: 'flex-end', background: 'var(--tg-secondary-bg)', color: 'var(--tg-text)' }
-                : undefined
-            }
-          >
-            {message.text}
-          </div>
-        ))}
+        {session.messages.map((message) => {
+          // Archive is read-only: no `onSend` → product cards render as plain
+          // rows, only external actions (map / phone) stay tappable.
+          const blocks = message.role === 'agent' ? sanitizeUiBlocks(message.ui_blocks) : []
+          return (
+            <Fragment key={message.id}>
+              {message.text ? (
+                <div
+                  className={
+                    message.role === 'user'
+                      ? 'bubble bubble--out'
+                      : message.role === 'operator'
+                        ? 'bubble bubble--operator'
+                        : 'bubble bubble--in'
+                  }
+                  style={
+                    message.role === 'user'
+                      ? { alignSelf: 'flex-end', background: 'var(--tg-secondary-bg)', color: 'var(--tg-text)' }
+                      : undefined
+                  }
+                >
+                  {message.text}
+                </div>
+              ) : null}
+              {blocks.length ? <UiBlocksView blocks={blocks} /> : null}
+            </Fragment>
+          )
+        })}
         <div className="t-cap t-center" style={{ padding: '8px 0' }}>
           {t('sessions.endOfChat')}
         </div>

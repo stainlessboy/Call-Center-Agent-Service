@@ -309,12 +309,14 @@ class TestFmtRate:
 class TestFindOfficeTool:
     def test_none_found(self):
         with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
-            result = _run(find_office.coroutine(office_type="filial", query="Мухосранск"))
+            result, artifact = _run(find_office.coroutine(office_type="filial", query="Мухосранск"))
         assert "не нашёл" in result.lower() or "Мухосранск" in result
+        assert artifact is None
 
     def test_formats_filial_hit(self):
         class FakeFilial:
             OFFICE_TYPE_CODE = "filial"
+            id = 1
             name_ru = "ЦБУ \"Тест\""
             name_uz = None
             address_ru = "ул. Тестовая 1"
@@ -322,6 +324,8 @@ class TestFindOfficeTool:
             landmark_ru = None
             landmark_uz = None
             location_url = None
+            latitude = None
+            longitude = None
             phone = None
             hours = None
 
@@ -329,10 +333,12 @@ class TestFindOfficeTool:
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[FakeFilial()]),
         ) as mock_search:
-            result = _run(find_office.coroutine(office_type="filial", query="Ташкент"))
+            result, artifact = _run(find_office.coroutine(office_type="filial", query="Ташкент"))
         assert mock_search.call_args.kwargs["office_types"] == ["filial"]
         assert "ЦБУ" in result
         assert "Тестовая" in result
+        assert artifact["type"] == "office_list"
+        assert artifact["data"]["offices"][0]["name_ru"] == 'ЦБУ "Тест"'
 
     def test_sales_office_passes_correct_type(self):
         with patch(
@@ -355,8 +361,9 @@ class TestFindOfficeTool:
             "app.agent.branches.search_offices",
             new=AsyncMock(return_value=[]),
         ):
-            result = _run(find_office.coroutine(office_type="sales_point", query="XYZ", state={"lang": "en"}))
+            result, artifact = _run(find_office.coroutine(office_type="sales_point", query="XYZ", state={"lang": "en"}))
         assert "no offices" in result.lower() or "not found" in result.lower() or "XYZ" in result
+        assert artifact is None
 
 
 class TestFaqToolsRegistered:
@@ -374,14 +381,16 @@ class TestFaqToolsRegistered:
     def test_redundant_tools_removed(self):
         from app.agent.tools import _FAQ_TOOLS
         names = {getattr(t, "name", None) for t in _FAQ_TOOLS}
-        assert "compare_products" not in names
         assert "back_to_product_list" not in names
 
     def test_tool_count_trimmed(self):
-        """Tool set should be 11 tools (greeting/thanks removed 2026-05;
-        clarify temporarily disabled 2026-06)."""
+        """Tool set should be 16 tools (greeting/thanks removed 2026-05;
+        recommend_product added in the "personal consultant" memory redesign,
+        Phase 2, 2026-08; clarify re-enabled + compare_products/
+        what_if_scenario/affordability_check added in the "Экспертиза"
+        redesign, Phase 4, 2026-08)."""
         from app.agent.tools import _FAQ_TOOLS
-        assert len(_FAQ_TOOLS) == 11
+        assert len(_FAQ_TOOLS) == 16
 
 
 class TestToolGetOfficeTypesInfo:
@@ -400,8 +409,14 @@ class TestToolGetOfficeTypesInfo:
 
 class TestToolGetCurrencyInfo:
     def test_returns_currency_text(self):
-        result = _run(get_currency_info.coroutine())
+        result, artifact = _run(get_currency_info.coroutine())
         assert "курс" in result.lower() or "USD" in result or "AsakaBank" in result
+        # artifact is None only if fetch_cbu_rates() returned nothing (network
+        # dependent in this test — no mocking here); when present it must be
+        # a well-formed rate_table.
+        if artifact is not None:
+            assert artifact["type"] == "rate_table"
+            assert artifact["data"]["rates"]
 
 
 class TestToolShowCreditMenu:
@@ -430,12 +445,16 @@ class TestToolSelectProduct:
             "category": "mortgage",
             "products": [{"name": "Ипотека Стандарт", "rate": "14%", "amount": "500 млн"}],
         }
-        result = _run(select_product.coroutine("Ипотека Стандарт", state={"dialog": dialog}))
+        result, artifact = _run(select_product.coroutine("Ипотека Стандарт", state={"dialog": dialog}))
         assert "Ипотека Стандарт" in result
+        assert artifact["type"] == "product_card"
+        assert artifact["data"]["product"]["name"] == "Ипотека Стандарт"
+        assert artifact["data"]["category"] == "mortgage"
 
     def test_not_found(self):
-        result = _run(select_product.coroutine("Несуществующий", state={"dialog": _default_dialog()}))
+        result, artifact = _run(select_product.coroutine("Несуществующий", state={"dialog": _default_dialog()}))
         assert "не найден" in result.lower()
+        assert artifact is None
 
 
 # ---- _update_dialog_from_tools --------------------------------------------
@@ -590,12 +609,14 @@ class TestGraphStructure:
         from app.agent import build_graph
         g = build_graph()
         nodes = set(g.get_graph().nodes) - {"__start__", "__end__"}
-        assert len(nodes) == 5  # router + faq + calc_flow + qualify_flow + human_mode
+        # router + faq + calc_flow + qualify_flow + human_mode + recap
+        assert len(nodes) == 6
         assert "router" in nodes
         assert "faq" in nodes
         assert "calc_flow" in nodes
         assert "qualify_flow" in nodes
         assert "human_mode" in nodes
+        assert "recap" in nodes
 
 
 # ---- Rate lookup helpers ---------------------------------------------------
@@ -873,7 +894,7 @@ class TestLocalizedName:
 class TestToolsI18n:
     def test_branch_info_en(self):
         with patch("app.agent.branches.search_offices", new=AsyncMock(return_value=[])):
-            result = _run(find_office.coroutine(office_type="filial", query="NotFound", state={"lang": "en"}))
+            result, _artifact = _run(find_office.coroutine(office_type="filial", query="NotFound", state={"lang": "en"}))
         assert "no offices" in result.lower() or "not found" in result.lower() or "NotFound" in result
 
     def test_credit_menu_en(self):
@@ -963,7 +984,7 @@ class TestInjectedStateTools:
             "category": "mortgage",
             "products": [{"name": "Ипотека Стандарт", "rate": "14%", "amount": "500 млн"}],
         }
-        result = _run(select_product.coroutine("Ипотека Стандарт", state={"dialog": dialog}))
+        result, _artifact = _run(select_product.coroutine("Ипотека Стандарт", state={"dialog": dialog}))
         assert "Ипотека Стандарт" in result
 
     def test_start_calculator_uses_injected_dialog(self):
@@ -2350,13 +2371,15 @@ class TestCustomLoanCalculatorNoRate:
         get_settings.cache_clear()
         try:
             default_rate = get_settings().default_custom_loan_rate_pct
-            result = _run(custom_loan_calculator.coroutine(
+            result, artifact = _run(custom_loan_calculator.coroutine(
                 amount=50_000_000,
                 term_months=60,
                 downpayment=0,
                 state={"lang": "ru"},
             ))
             assert f"{default_rate}" in result
+            assert artifact["type"] == "calc_result"
+            assert artifact["data"]["rate_pct"] == default_rate
         finally:
             get_settings.cache_clear()
 
@@ -2374,7 +2397,7 @@ class TestCustomLoanCalculatorNoRate:
         """Output must flag the rate as assumed/approximate — not real."""
         from app.agent.tools import custom_loan_calculator
         for lang in ("ru", "en", "uz"):
-            result = _run(custom_loan_calculator.coroutine(
+            result, _artifact = _run(custom_loan_calculator.coroutine(
                 amount=50_000_000,
                 term_months=60,
                 downpayment=0,
@@ -2395,13 +2418,14 @@ class TestCustomLoanCalculatorNoRate:
         get_settings.cache_clear()
         try:
             assert get_settings().default_custom_loan_rate_pct == 18.5
-            result = _run(custom_loan_calculator.coroutine(
+            result, artifact = _run(custom_loan_calculator.coroutine(
                 amount=50_000_000,
                 term_months=60,
                 downpayment=0,
                 state={"lang": "ru"},
             ))
             assert "18.5" in result
+            assert artifact["data"]["rate_pct"] == 18.5
         finally:
             get_settings.cache_clear()
 
@@ -2492,6 +2516,33 @@ class TestFaqLookupTriTier:
         assert "Как заблокировать карту?" in result
         assert "Как разблокировать карту?" in result
         assert is_faq_sentinel(result)
+
+    def test_low_tier_candidates_carry_answer_text(self):
+        """Task B fix: the LLM previously got a bare question list and had to
+        call faq_lookup AGAIN to fetch the answer — it often skipped that
+        second call and fell back to general knowledge instead of the DB
+        (the escrow incident). Candidates must now ship their answer text
+        inline so the model can answer within the same round."""
+        from app.agent.tools import faq_lookup, FAQ_LOW_CONFIDENCE
+        from app.utils.faq_tools import FaqCandidate
+        candidates = [
+            FaqCandidate("Как заблокировать карту?", "Через приложение", 0.50),
+            FaqCandidate("Как разблокировать карту?", "В офисе банка", 0.48),
+        ]
+        with patch(
+            "app.agent.tools.faq_search",
+            new=AsyncMock(return_value=_faq_result("Через приложение", "low", candidates)),
+        ):
+            result = _run(faq_lookup.coroutine(query="карта", state={"lang": "ru"}))
+        assert result.startswith(FAQ_LOW_CONFIDENCE)
+        assert "Как заблокировать карту?" in result
+        assert "Через приложение" in result
+        assert "Как разблокировать карту?" in result
+        assert "В офисе банка" in result
+        # No longer instructs the model to make a SECOND faq_lookup call to
+        # fetch the answer (the old "call faq_lookup again with that exact
+        # question text" instruction) — the answer is already inline above.
+        assert "with that exact question text" not in result.lower()
 
     def test_low_tier_without_candidates_returns_bare_sentinel(self):
         from app.agent.tools import faq_lookup, FAQ_LOW_CONFIDENCE

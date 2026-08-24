@@ -94,6 +94,114 @@ class TestPrefill:
         assert ans == {}
 
 
+# ---- prefill_from_profile (Phase 2: "personal consultant" memory) ---------
+
+class TestPrefillFromProfile:
+    def test_income_type_payroll_skips_to_auto_brand(self):
+        node_key, answers, applied = q.prefill_from_profile(
+            "autoloan", {"income_type": "payroll"}, "ru"
+        )
+        assert node_key == "auto_brand"
+        assert answers["income_types"] == ["payroll"]
+        assert applied == ["income_type", "income_type"]
+
+    def test_income_type_official_skips_via_salary_card(self):
+        node_key, answers, applied = q.prefill_from_profile(
+            "mortgage", {"income_type": "official"}, "ru"
+        )
+        assert node_key == "market"
+        assert answers["income_types"] == ["official"]
+
+    def test_income_type_no_official_routes_through_self_employed(self):
+        node_key, answers, applied = q.prefill_from_profile(
+            "autoloan", {"income_type": "no_official"}, "ru"
+        )
+        assert node_key == "auto_brand"
+        assert answers["income_types"] == ["no_official"]
+
+    def test_microloan_no_official_fully_resolves_to_terminal(self):
+        # microloan's self_employed=yes branch goes straight to "result",
+        # skipping the channel question entirely — same as a real user typing
+        # the equivalent answers would.
+        node_key, answers, applied = q.prefill_from_profile(
+            "microloan", {"income_type": "no_official"}, "ru"
+        )
+        assert node_key == "result"
+        assert answers["income_types"] == ["no_official"]
+
+    def test_empty_facts_stops_at_entry(self):
+        node_key, answers, applied = q.prefill_from_profile("autoloan", {}, "ru")
+        assert node_key == "salary"
+        assert answers == {}
+        assert applied == []
+
+    def test_unknown_income_type_value_stops_at_entry(self):
+        node_key, answers, applied = q.prefill_from_profile(
+            "autoloan", {"income_type": "something_else"}, "ru"
+        )
+        assert node_key == "salary"
+        assert applied == []
+
+    def test_unmarked_entry_node_blocks_deeper_currency_match(self):
+        """deposit's entry ("goal") has no profile_key — a currency fact alone
+        cannot skip anything because the walk never gets past goal, even
+        though the "currency" node itself is marked (see qualify.py's
+        comment on that node)."""
+        node_key, answers, applied = q.prefill_from_profile(
+            "deposit", {"currency": "USD"}, "ru"
+        )
+        assert node_key == "goal"
+        assert applied == []
+
+    def test_no_tree_for_category_returns_none(self):
+        node_key, answers, applied = q.prefill_from_profile("nonexistent", {"income_type": "payroll"}, "ru")
+        assert node_key is None
+        assert answers == {}
+        assert applied == []
+
+
+# ---- start_qualify: profile prefill composed with text prefill ------------
+
+class TestStartQualifyWithProfile:
+    def test_profile_prefill_skips_questions_and_acknowledges(self):
+        profile = {"facts": {"income_type": "payroll"}, "notes": ""}
+        answer, dialog, keyboard, ui_blocks = _run(
+            start_qualify("autoloan", "", "ru", profile)
+        )
+        assert at("q_auto_brand", "ru") in answer
+        assert at("qualify_prefill_income_payroll", "ru") in answer
+        assert dialog["qualify_node"] == "auto_brand"
+        assert dialog["qualify_answers"]["income_types"] == ["payroll"]
+
+    def test_profile_and_text_prefill_compose(self):
+        """Profile answers the salary questions, the user's own opening
+        message answers the brand question that's left — full prefill to a
+        terminal, from two different sources in the same call."""
+        profile = {"facts": {"income_type": "payroll"}, "notes": ""}
+        with patch(
+            "app.agent.nodes.qualify_flow.filter_qualified_products",
+            new=AsyncMock(return_value=[{"name": "Авто GM"}]),
+        ):
+            answer, dialog, keyboard, ui_blocks = _run(
+                start_qualify("autoloan", "хочу chevrolet", "ru", profile)
+            )
+        assert at("qualify_results_header", "ru") in answer
+        assert at("qualify_prefill_income_payroll", "ru") in answer
+        assert dialog["flow"] == FLOW_SHOW_PRODUCTS
+
+    def test_no_profile_behaves_like_before(self):
+        answer, dialog, keyboard, ui_blocks = _run(start_qualify("mortgage", "ипотека", "ru", None))
+        assert answer == at("q_salary_mortgage", "ru")
+        assert dialog["qualify_node"] == "salary"
+
+    def test_empty_profile_facts_behaves_like_before(self):
+        answer, dialog, keyboard, ui_blocks = _run(
+            start_qualify("mortgage", "ипотека", "ru", {"facts": {}, "notes": ""})
+        )
+        assert answer == at("q_salary_mortgage", "ru")
+        assert dialog["qualify_node"] == "salary"
+
+
 # ---- node_qualify_flow: navigation ----------------------------------------
 
 class TestNodeQualifyFlow:
@@ -135,8 +243,12 @@ class TestNodeQualifyFlow:
         assert result["dialog"]["flow"] is None
 
     def test_dead_end_no_offers(self):
+        """autoloan's dead end has a rescue category (microloan, Phase 4) —
+        mock it to empty so this stays a deterministic "no rescue available"
+        test; see tests/test_phase4_tools.py for the rescue-fires case."""
         state = _qstate("Нет", "autoloan", "self_employed")
-        result = _run(node_qualify_flow(state))
+        with patch("app.agent.products._get_products_by_category", new=AsyncMock(return_value=[])):
+            result = _run(node_qualify_flow(state))
         assert result["answer"] == at("qualify_no_offers", "ru")
         assert result["dialog"]["flow"] is None
 
@@ -194,7 +306,7 @@ class TestNodeQualifyFlow:
 
 class TestStartQualify:
     def test_bare_request_asks_first(self):
-        answer, dialog, keyboard = _run(start_qualify("mortgage", "ипотека", "ru"))
+        answer, dialog, keyboard, ui_blocks = _run(start_qualify("mortgage", "ипотека", "ru"))
         assert answer == at("q_salary_mortgage", "ru")
         assert dialog["flow"] == FLOW_QUALIFY
         assert dialog["qualify_node"] == "salary"
@@ -205,7 +317,7 @@ class TestStartQualify:
             "app.agent.nodes.qualify_flow.filter_qualified_products",
             new=AsyncMock(return_value=[{"name": "Авто X"}]),
         ):
-            answer, dialog, keyboard = _run(
+            answer, dialog, keyboard, ui_blocks = _run(
                 start_qualify("autoloan", "автокредит GM официальная зарплата Асака", "ru")
             )
         assert at("qualify_results_header", "ru") in answer

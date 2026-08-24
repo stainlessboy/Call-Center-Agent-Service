@@ -121,6 +121,10 @@ async def session_detail(
             "role": m.role,
             "text": m.text,
             "created_at": _as_utc(m.created_at).isoformat() if m.created_at else None,
+            # Structured cards for this turn, or [] — see docs/MINIAPP.md
+            # "UI blocks". Only ever populated on role="agent" rows. Matches
+            # /chat/history's shape (Phase 4 fix — this endpoint was missing it).
+            "ui_blocks": m.ui_blocks or [],
         }
         for m in messages
     ]

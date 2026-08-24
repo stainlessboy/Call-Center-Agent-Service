@@ -6,6 +6,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from app.agent.handoff import send_operator_handoff_summary
+from app.agent.streaming import reset_on_token_callback, set_on_token_callback
 from app.bot.i18n import t
 from app.config import get_settings
 from app.db.models import User
@@ -18,6 +20,23 @@ from app.utils.working_hours import is_within_working_hours
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _make_on_token(session_id: str):
+    """Build an `on_token` callback (see app/agent/streaming.py) that
+    publishes each chunk to the Mini App WS hub as `{"event":
+    "assistant_token", "text": ...}`. A publish failure (no listener, dead
+    socket) must never fail the turn — `hub.publish` already swallows
+    per-socket errors, so this only guards against something unexpected in
+    the publish call itself.
+    """
+    async def _on_token(text: str) -> None:
+        try:
+            await hub.publish(session_id, "assistant_token", text=text)
+        except Exception:
+            logger.debug("assistant_token publish failed for session=%s", session_id, exc_info=True)
+
+    return _on_token
 
 
 class MessagePayload(BaseModel):
@@ -49,6 +68,9 @@ async def history(
                 "role": m.role,
                 "text": m.text,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
+                # Structured cards for this turn, or [] — see docs/MINIAPP.md
+                # "UI blocks". Only ever populated on role="agent" rows.
+                "ui_blocks": m.ui_blocks or [],
             }
             for m in messages
         ],
@@ -92,7 +114,26 @@ async def send_message(
                 "human_mode": in_human_mode,
             }
 
-    reply = await chat_service.handle_user_message(user=user, text=text)
+    # Live token streaming (Phase 3, node_faq only — see app/agent/streaming.py):
+    # armed only for a genuine bot turn on an already-known session — human_mode
+    # turns never call the LLM, and a brand-new session's id isn't known until
+    # `handle_user_message` creates it below, so there is nothing to publish to
+    # yet (the POST response still carries the full text + ui_blocks either
+    # way; only the live token trickle is skipped for that one first message).
+    stream_session_id = session.id if (session and not in_human_mode and settings.miniapp_streaming_enabled) else None
+    stream_token = None
+    if stream_session_id:
+        stream_token = set_on_token_callback(_make_on_token(stream_session_id))
+    try:
+        reply = await chat_service.handle_user_message(user=user, text=text)
+    finally:
+        if stream_token is not None:
+            reset_on_token_callback(stream_token)
+            try:
+                await hub.publish(stream_session_id, "assistant_done")
+            except Exception:
+                logger.debug("assistant_done publish failed for session=%s", stream_session_id, exc_info=True)
+
     return {
         "blocked": None,
         "text": reply.text,
@@ -101,6 +142,7 @@ async def send_message(
         "human_mode": bool(reply.human_mode),
         "session_id": reply.session_id,
         "has_pdf": bool(reply.pdf_path),
+        "ui_blocks": reply.ui_blocks or [],
         "suggested_language": reply.suggested_language,
     }
 
@@ -163,6 +205,11 @@ async def toggle_operator(
             "reason": "unavailable",
             "message": t("middleware_unavailable", lang),
         }
+
+    # Phase 4 "Экспертиза": brief the operator with a short context summary
+    # as their first message. Never blocks/breaks the handoff — see
+    # send_operator_handoff_summary's own try/except.
+    await send_operator_handoff_summary(chat_service, middleware_client, session.id)
 
     await hub.publish(session.id, "mode_changed", mode="queue")
     return {"ok": True, "mode": "queue", "message": t("searching_operator", lang)}

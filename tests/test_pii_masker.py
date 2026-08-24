@@ -444,7 +444,7 @@ class TestFaqNodePiiBoundary:
             def bind_tools(self, tools):
                 return _StubBoundLLM()
 
-        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: _StubLLM())
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: _StubLLM())
 
         state = {
             "last_user_text": "моя карта 1234 5678 9012 3456 заблокирована",

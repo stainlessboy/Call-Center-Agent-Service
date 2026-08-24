@@ -39,6 +39,12 @@ class AgentClient:
             human_mode=human_mode,
         )
 
+    async def get_handoff_context(self, session_id: str) -> dict:
+        """Read-only dialog/profile/messages snapshot for the operator
+        handoff summary (app/agent/handoff.py). See Agent.get_handoff_context
+        for the never-raises contract."""
+        return await self._agent.get_handoff_context(session_id=session_id)
+
     async def resume_human_mode(self, session_id: str, operator_reply: str) -> str:
         """Resume a graph interrupted in human_mode, injecting operator reply."""
         return await self._agent.resume_human_mode(

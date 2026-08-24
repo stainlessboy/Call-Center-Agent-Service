@@ -5,7 +5,7 @@ import logging as _logging
 import os
 from typing import List, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
 from langgraph.prebuilt import ToolNode
 from openai import APIError
 
@@ -16,6 +16,7 @@ from app.agent.constants import (
     FLOW_SHOW_OFFICES,
     FLOW_SHOW_PRODUCTS,
 )
+from app.agent.faq_rephrase import rephrase_faq_answer
 from app.agent.i18n import (
     at,
     get_calc_questions,
@@ -23,7 +24,7 @@ from app.agent.i18n import (
     get_main_menu_buttons,
     get_system_policy,
 )
-from app.agent.intent import _is_back_trigger
+from app.agent.intent import _detect_product_category, _is_back_trigger
 from app.agent.qualify import QUALIFY_CATEGORIES
 from app.agent.llm import (
     _get_chat_openai,
@@ -39,7 +40,9 @@ from app.agent.products import (
     _format_product_list_text,
     _get_products_by_category,
 )
+from app.agent.recommend import rank_products
 from app.agent.state import BotState, _default_dialog, _reset_dialog
+from app.agent.streaming import get_on_token_callback
 from app.agent.tools import _FAQ_TOOLS, is_faq_sentinel
 from app.utils.faq_tools import _faq_lookup, faq_precheck_answer, get_faq_fallback
 
@@ -48,6 +51,46 @@ _agent_logger = _logging.getLogger(__name__)
 # Instantiated once at module load — ToolNode is stateless and safe to reuse
 # across turns, avoiding repeated construction inside the per-turn tool loop.
 _FAQ_TOOL_NODE = ToolNode(_FAQ_TOOLS)
+
+
+async def _run_llm_round(llm_with_tools, loop_msgs: list, on_token) -> AIMessage:
+    """Run one round of the tool-calling loop.
+
+    Mini App streaming (Phase 3, see app/agent/streaming.py): when `on_token`
+    is set, stream the round via `.astream()` and forward text chunks to the
+    callback live, as they arrive. The moment a `tool_call_chunks` delta
+    appears we know this round turned out to be a tool call, not prose for
+    the user — stop forwarding further chunks for the rest of the round
+    (nothing already sent can be un-sent, but OpenAI tool-calling rounds do
+    not interleave prose with a tool call in practice, so this only ever
+    silently drops an all-empty round). Telegram — and any Mini App turn
+    where streaming wasn't armed — never sets `on_token`, so this always
+    takes the plain `.ainvoke()` branch: behavior there is byte-for-byte
+    unchanged from before Phase 3.
+
+    Either branch returns a fully-accumulated AIMessage(-chunk) exposing the
+    same `.content` / `.tool_calls` / usage shape the caller's round-handling
+    logic already expects from `.ainvoke()`.
+    """
+    if on_token is None:
+        return await llm_with_tools.ainvoke(loop_msgs)
+
+    acc: Optional[AIMessage] = None
+    is_tool_round = False
+    async for chunk in llm_with_tools.astream(loop_msgs):
+        acc = chunk if acc is None else acc + chunk
+        if chunk.tool_call_chunks:
+            is_tool_round = True
+            continue
+        if is_tool_round:
+            continue
+        text = extract_text_content(chunk)
+        if text:
+            try:
+                await on_token(text)
+            except Exception:
+                _agent_logger.debug("on_token callback failed", exc_info=True)
+    return acc if acc is not None else AIMessage(content="")
 
 
 def _normalize_user_text(text: str) -> str:
@@ -83,11 +126,20 @@ def _xml_escape(s: str) -> str:
     )
 
 
-def _format_state_xml(dialog: dict) -> str:
-    """Serialize dialog state as XML for the LLM system prompt.
+def _format_state_xml(dialog: dict, profile: Optional[dict] = None) -> str:
+    """Serialize dialog state (+ optional client profile) as XML for the LLM
+    system prompt.
 
     GPT-4o-mini parses XML tags more reliably than free-form 'Current state:' text.
     Returns empty string when there's nothing to report.
+
+    `profile` is the "personal consultant" memory loaded once per turn by
+    Agent._ainvoke_locked (app/agent/profile.py) — `{"facts": dict, "notes":
+    str, "updated_at": ...}` or None. Only rendered when it actually carries
+    something (non-empty facts or a non-empty notes string); a `UserProfile`
+    row that exists but is still all-empty (freshly created, nothing learned
+    yet) must not add a hollow `<client_profile>` block that wastes tokens
+    and gives the LLM nothing to act on.
     """
     flow = dialog.get("flow")
     category = dialog.get("category", "")
@@ -130,6 +182,27 @@ def _format_state_xml(dialog: dict) -> str:
             f"  <selected_office>{_xml_escape(str(selected_office['name']))}</selected_office>"
         )
 
+    if profile:
+        facts = profile.get("facts") or {}
+        notes = str(profile.get("notes") or "").strip()
+        if facts or notes:
+            lines.append("  <client_profile>")
+            for key in sorted(facts.keys()):
+                val = facts[key]
+                val_str = ", ".join(str(v) for v in val) if isinstance(val, (list, tuple)) else str(val)
+                val_str = val_str.strip()
+                if val_str:
+                    lines.append(f'    <fact key="{_xml_escape(str(key))}">{_xml_escape(val_str)}</fact>')
+            if notes:
+                lines.append(f"    <notes>{_xml_escape(notes)}</notes>")
+            lines.append("  </client_profile>")
+            lines.append(
+                "  <hint>client_profile is background context about this returning "
+                "customer — use it to personalize tone and avoid re-asking things "
+                "they already told us, but never read it out loud or mention that "
+                "you 'have a file' on them.</hint>"
+            )
+
     if not lines:
         return ""
     return "<state>\n" + "\n".join(lines) + "\n</state>"
@@ -160,10 +233,14 @@ def _reattach_keyboard(dialog: dict, lang: str) -> tuple[dict, Optional[List[str
 
 async def _update_dialog_from_tools(
     dialog: dict, tool_calls: list, user_text: str, lang: str,
+    profile: Optional[dict] = None,
 ) -> tuple[dict, Optional[List[str]]]:
     """Inspect which tools the LLM called and update dialog/keyboard accordingly.
 
     `lang` must be the already-resolved language for this turn (see resolve_language).
+    `profile` is `state.user_profile` (see app/agent/profile.py) — only needed
+    to re-derive the same ranking `recommend_product` already computed, so the
+    exact products it pitched land in `dialog.products` for `select_product`.
     """
     if not tool_calls:
         return _reattach_keyboard(dialog, lang)
@@ -243,6 +320,32 @@ async def _update_dialog_from_tools(
         )
         return new_dialog, [p["name"] for p in products] if products else None
 
+    if name == "recommend_product":
+        goal = args.get("goal", "")
+        category = _detect_product_category(goal or "") or dialog.get("category") or ""
+        if not category or category == "credit_menu":
+            return _reattach_keyboard(dialog, lang)
+        products = await _get_products_by_category(category)
+        if not products:
+            return _reattach_keyboard(dialog, lang)
+        ranked = rank_products(products, profile, category, top_n=2)
+        if not ranked:
+            return _reattach_keyboard(dialog, lang)
+        new_dialog = _reset_dialog(
+            dialog,
+            flow=FLOW_SHOW_PRODUCTS,
+            category=category,
+            products=ranked,
+            last_recommendation={
+                "category": category,
+                "goal": goal,
+                "products": [p.get("name") for p in ranked],
+            },
+            last_lang=lang,
+        )
+        keyboard = [p["name"] for p in ranked] or None
+        return new_dialog, keyboard
+
     if name == "select_product":
         product_name = args.get("product_name", "")
         products = list(dialog.get("products") or [])
@@ -287,7 +390,18 @@ async def _update_dialog_from_tools(
     # tool is re-enabled, restore the keyboard-from-options branch here.
 
     if name == "request_operator":
-        return {**dialog, "operator_requested": True}, None
+        return {
+            **dialog,
+            "operator_requested": True,
+            # Surfaced to a human operator in the Phase 4 handoff summary
+            # (app/agent/handoff.py) when this turn escalates via the
+            # "Живой оператор" button — see nodes/human_mode.py / commands.py.
+            "operator_reason": args.get("reason", ""),
+        }, None
+
+    if name == "clarify":
+        options = [str(o).strip() for o in (args.get("options") or []) if str(o).strip()]
+        return dict(dialog), (options[:4] or None)
 
     return _reattach_keyboard(dialog, lang)
 
@@ -310,8 +424,8 @@ _PRODUCTIVE_TOOLS = frozenset({
     "find_office", "select_office",
     "get_office_types_info", "get_currency_info", "show_credit_menu",
     "get_products", "select_product", "start_calculator",
-    "custom_loan_calculator", "request_operator",
-    # "clarify" — temporarily disabled, see app/agent/tools.py
+    "custom_loan_calculator", "request_operator", "recommend_product",
+    "compare_products", "what_if_scenario", "affordability_check", "clarify",
 })
 
 
@@ -405,12 +519,18 @@ async def node_faq(state: BotState) -> dict:
         except Exception:
             faq_precheck = None
         if faq_precheck:
+            # Reword the verbatim DB answer into a natural reply before it
+            # ships — this path skips the LLM entirely, so nothing else
+            # would ever rephrase it. Guarded internally: falls back to
+            # faq_precheck itself (verbatim) on any failure or if the
+            # rewrite drops/changes a fact — see app/agent/faq_rephrase.py.
+            answer_text = await rephrase_faq_answer(faq_precheck, normalized_text, lang)
             new_dialog = {**dialog, "last_lang": lang}
             return _finalize_turn(
-                state, faq_precheck, new_dialog, None, is_fallback=False
+                state, answer_text, new_dialog, None, is_fallback=False
             )
 
-    llm = _get_chat_openai()
+    llm = _get_chat_openai(role="consultant")
 
     # Build message list for LLM.
     # Stable per-language policy and dynamic <state> XML go in SEPARATE
@@ -426,7 +546,7 @@ async def node_faq(state: BotState) -> dict:
     existing_msgs = list(state.get("messages") or [SystemMessage(content=policy)])
     history_tail = existing_msgs[1:] if existing_msgs and isinstance(existing_msgs[0], SystemMessage) else list(existing_msgs)
 
-    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "3000"))
+    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "16000"))
     if history_tail:
         history_tail = trim_messages(
             history_tail,
@@ -437,7 +557,7 @@ async def node_faq(state: BotState) -> dict:
             allow_partial=False,
         )
 
-    state_xml = _format_state_xml(dialog)
+    state_xml = _format_state_xml(dialog, state.get("user_profile"))
     chat_msgs: list = [SystemMessage(content=policy)]
     if state_xml:
         chat_msgs.append(SystemMessage(content=state_xml))
@@ -464,6 +584,7 @@ async def node_faq(state: BotState) -> dict:
             is_fallback = False
         new_dialog, keyboard = await _update_dialog_from_tools(dialog, [], user_text, lang)
         new_dialog["last_lang"] = lang
+        new_dialog["clarify_last_turn"] = False
         return _finalize_turn(state, answer, new_dialog, keyboard, is_fallback=is_fallback)
 
     # parallel_tool_calls=False keeps the per-round contract simple: the loop
@@ -476,12 +597,23 @@ async def node_faq(state: BotState) -> dict:
         llm_with_tools = llm.bind_tools(_FAQ_TOOLS, parallel_tool_calls=False)
     except TypeError:
         llm_with_tools = llm.bind_tools(_FAQ_TOOLS)
-    max_rounds = 3
+    on_token = get_on_token_callback()
+    ui_blocks_acc: list[dict] = []
+    max_rounds = 5
+    # clarify anti-loop guard (Phase 4 — see the re-enable comment above
+    # `clarify` in app/agent/tools.py): if the turn that produced the
+    # CURRENT dialog was itself a clarify prompt, the model must not call
+    # clarify again this turn. `clarify_displayed` tracks whether THIS
+    # turn's own clarify call (if any) is the one actually shown to the
+    # user, so `dialog["clarify_last_turn"]` can be set correctly below for
+    # the NEXT turn's guard check.
+    clarify_guard_active = bool(dialog.get("clarify_last_turn"))
+    clarify_displayed = False
     try:
         loop_msgs = list(chat_msgs)
         hit_limit_with_pending_tools = False
         for round_idx in range(max_rounds):
-            ai_msg = await llm_with_tools.ainvoke(loop_msgs)
+            ai_msg = await _run_llm_round(llm_with_tools, loop_msgs, on_token)
             loop_msgs.append(ai_msg)
             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
 
@@ -498,6 +630,45 @@ async def node_faq(state: BotState) -> dict:
             new_tool_msgs = tool_results.get("messages", [])
             loop_msgs.extend(new_tool_msgs)
 
+            # Mini App structured blocks (Phase 3): tools converted to
+            # response_format="content_and_artifact" (app/agent/tools.py) put
+            # their ui_block dict on ToolMessage.artifact — never in .content,
+            # so this never reaches the LLM's context. Accumulated across
+            # every round of the turn (not just the one that becomes `answer`)
+            # per the Phase 3 spec; the one case this would be misleading —
+            # a get_products() call intercepted by the FLOW_QUALIFY entry
+            # below — is handled by NOT passing ui_blocks_acc into that
+            # branch's _finalize_turn call further down.
+            for _tm in new_tool_msgs:
+                _artifact = getattr(_tm, "artifact", None)
+                if _artifact:
+                    ui_blocks_acc.append(_artifact)
+
+            last_tc_name = tool_calls[-1].get("name") if tool_calls else None
+
+            if last_tc_name == "clarify" and clarify_guard_active:
+                # Second consecutive clarify attempt on the same ambiguity —
+                # drop this tool result (don't display it, don't count it as
+                # progress) and make it physically impossible to call again
+                # this turn by rebinding without it, so the next round falls
+                # through to faq_lookup / a direct answer instead.
+                _agent_logger.info(
+                    "node_faq: clarify anti-loop guard triggered, session=%s",
+                    state.get("session_id"),
+                )
+                if new_tool_msgs:
+                    # Neutralize the blocked ToolMessage's content so a later
+                    # round-limit fallback (`_last_useful_tool_output`, which
+                    # walks loop_msgs backward for the last non-sentinel
+                    # ToolMessage) can never resurrect the very clarify
+                    # prompt this guard just suppressed.
+                    new_tool_msgs[-1].content = ""
+                clarify_guard_active = False  # only strip once
+                _remaining_tools = [t for t in _FAQ_TOOLS if getattr(t, "name", None) != "clarify"]
+                try:
+                    llm_with_tools = llm.bind_tools(_remaining_tools, parallel_tool_calls=False)
+                except TypeError:
+                    llm_with_tools = llm.bind_tools(_remaining_tools)
             # Display-tool short-circuit: tools return pre-formatted user-facing
             # text (product cards, office details, currency tables, calc results,
             # etc.). gpt-4o-mini consistently summarizes these in the wrapping
@@ -506,7 +677,24 @@ async def node_faq(state: BotState) -> dict:
             # LLM should chain to clarify/request_operator, so keep looping.
             # Also skip error ToolMessages — they are internal feedback for the
             # model (handle_tool_errors=True pattern) and must never reach users.
-            if new_tool_msgs:
+            #
+            # Confident-FAQ rephrase (2026-08-11): a STRICT-tier faq_lookup
+            # result is real, non-sentinel text — it lands in this branch just
+            # like a product card or office detail, and would otherwise ship
+            # the raw DB row verbatim (the i18n "rephrase, don't recite"
+            # policy has no effect here because there is no further LLM turn
+            # to follow it — the short-circuit's whole point is to skip one).
+            # A LOW-confidence/no-match faq_lookup result is a sentinel, so it
+            # never enters this branch at all — the loop keeps going and the
+            # LLM composes the reply itself, where the i18n policy DOES
+            # govern. Net architecture:
+            #   confident FAQ hit (pre-check above, OR faq_lookup here)
+            #       → deterministic rephrase_faq_answer() + fact guard
+            #   low-confidence FAQ candidates → sentinel skips this branch,
+            #       LLM composes the answer, i18n policy governs it
+            #   every other display tool (product card, office detail, calc
+            #       result, ...) → passed through AS-IS, never rephrased
+            elif new_tool_msgs:
                 last_msg = new_tool_msgs[-1]
                 last_content = str(getattr(last_msg, "content", "") or "").strip()
                 if (
@@ -514,7 +702,13 @@ async def node_faq(state: BotState) -> dict:
                     and not is_faq_sentinel(last_content)
                     and not _is_tool_error(last_msg)
                 ):
-                    answer = last_content
+                    if last_tc_name == "faq_lookup":
+                        answer = await rephrase_faq_answer(
+                            last_content, normalized_text or user_text, lang
+                        )
+                    else:
+                        answer = last_content
+                    clarify_displayed = last_tc_name == "clarify"
                     break
 
             if round_idx == max_rounds - 1:
@@ -529,6 +723,13 @@ async def node_faq(state: BotState) -> dict:
             )
             # Attempt to surface the last useful tool output directly so the
             # user gets their data even without an LLM wrapping turn.
+            # Deliberately NOT run through rephrase_faq_answer() even when the
+            # recovered content came from faq_lookup: this path only fires
+            # after hitting the round-limit degraded case, an already-rare
+            # failure mode — adding another LLM call here would spend an
+            # extra round-trip (and another timeout risk) on the least
+            # reliable path in the node instead of just shipping the verified
+            # DB text, which is always a safe answer on its own.
             recovered = _last_useful_tool_output(loop_msgs)
             if recovered:
                 answer = recovered
@@ -550,11 +751,20 @@ async def node_faq(state: BotState) -> dict:
         )
         if qualify_category:
             from app.agent.nodes.qualify_flow import start_qualify
-            q_answer, q_dialog, q_keyboard = await start_qualify(
-                qualify_category, user_text, lang
+            # NOTE: deliberately does NOT pass ui_blocks_acc here. The
+            # get_products() call that triggered this branch already
+            # produced a product_list artifact for the UNFILTERED category —
+            # but the questionnaire is about to override `answer` with its
+            # own question (or, if profile-prefill resolves it immediately,
+            # its own FILTERED product_list/comparison_table). Showing the
+            # premature unfiltered block would contradict the qualify text.
+            q_answer, q_dialog, q_keyboard, q_ui_blocks = await start_qualify(
+                qualify_category, user_text, lang, state.get("user_profile")
             )
             q_dialog["last_lang"] = lang
-            result = _finalize_turn(state, q_answer, q_dialog, q_keyboard, is_fallback=False)
+            result = _finalize_turn(
+                state, q_answer, q_dialog, q_keyboard, is_fallback=False, ui_blocks=q_ui_blocks,
+            )
             if turn_usage:
                 finalize_usage(turn_usage)
                 result["token_usage"] = turn_usage
@@ -631,14 +841,18 @@ async def node_faq(state: BotState) -> dict:
     # The dedicated detector in agent._ainvoke already wrote state["lang"]
     # for this turn. Trust it over any `lang` arg the LLM put in tool_calls.
     new_dialog, keyboard = await _update_dialog_from_tools(
-        dialog, tool_calls_made, user_text, lang,
+        dialog, tool_calls_made, user_text, lang, state.get("user_profile"),
     )
     new_dialog["last_lang"] = lang
+    # Anti-loop guard bookkeeping for the NEXT turn — see the guard set-up
+    # near the top of the tool-call loop above.
+    new_dialog["clarify_last_turn"] = clarify_displayed
 
     result = _finalize_turn(
         state, answer, new_dialog, keyboard,
         is_fallback=is_fallback,
         wrap_ai_generated=is_ai_generated,
+        ui_blocks=ui_blocks_acc,
     )
     if turn_usage:
         result["token_usage"] = turn_usage

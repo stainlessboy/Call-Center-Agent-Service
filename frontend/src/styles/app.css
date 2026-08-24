@@ -401,6 +401,11 @@ textarea {
   color: var(--ok);
 }
 
+.badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .notice {
   border-radius: var(--r-btn);
   padding: var(--sp-3);
@@ -857,6 +862,259 @@ textarea {
 .chat__quick {
   flex: none;
   padding: 0 var(--sp-4) var(--sp-2);
+}
+
+/* ── Chat UI blocks (structured cards under agent replies) ─────────────── */
+
+.ublocks {
+  align-self: flex-start;
+  width: 92%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.ublock {
+  background: var(--tg-section-bg);
+  border: 1px solid var(--tg-sep);
+  border-radius: 16px;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.ublock--list {
+  gap: var(--sp-2);
+}
+
+.ublock-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--track-title);
+}
+
+.ublock-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--tg-hint);
+}
+
+.ublock-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--tg-sep);
+  border-radius: 12px;
+  padding: 10px 11px;
+  width: 100%;
+  text-align: left;
+}
+
+.ublock-item--tap:active {
+  background: var(--tg-secondary-bg);
+}
+
+.ublock-item__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.ublock-item__name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.ublock-item__rate {
+  flex: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.ublock-item__meta {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--tg-hint);
+}
+
+.ublock-item__badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.ublock-personal {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border-radius: var(--r-field);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ublock-office__actions {
+  display: flex;
+  gap: var(--sp-2);
+  padding-top: 2px;
+}
+
+.ublock-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--r-field);
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ublock-action--primary {
+  flex: 1;
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+.ublock-rate {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 0;
+}
+
+.ublock-rate + .ublock-rate {
+  border-top: 1px solid var(--tg-sep);
+}
+
+.ublock-rate__icon {
+  flex: none;
+  font-size: 17px;
+}
+
+.ublock-rate__name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.ublock-rate__value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ublock-rate__diff {
+  flex: none;
+  min-width: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ublock-tiles {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.ublock-tile {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: var(--tg-secondary-bg);
+}
+
+.ublock-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 36px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tg-link);
+}
+
+.ublock-toggle .rot0,
+.ublock-toggle .rot90 {
+  transition: transform 0.15s ease;
+}
+
+.rot0 {
+  transform: rotate(0deg);
+}
+
+.rot90 {
+  transform: rotate(90deg);
+}
+
+.ublock-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: var(--tg-secondary-bg);
+}
+
+.ublock-chart__legend {
+  display: flex;
+  gap: var(--sp-3);
+  padding-bottom: 6px;
+  font-size: 12px;
+  color: var(--tg-sub);
+}
+
+.ublock-chart__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ublock-chart__legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+
+.ublock-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 3px;
+  font-size: 11px;
+  color: var(--tg-hint);
+}
+
+/* Blinking caret at the tail of the streaming bubble. */
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--tg-text);
+  animation: tgpulse 0.9s ease-in-out infinite;
 }
 
 /* ── Home ──────────────────────────────────────────────────────────────── */

@@ -157,6 +157,22 @@ await sio.emit("send-message", {"requestId": phone, "message": text})
 await sio.emit("send-leave",   {"requestId": phone})
 ```
 
+**Operator handoff summary** (Phase 4 "Экспертиза", `app/agent/handoff.py`):
+right after `start_chat` succeeds, both integration points
+(`app/bot/handlers/commands.py::enable_human_mode` and
+`app/miniapp/routes/chat.py::toggle_operator`) call
+`send_operator_handoff_summary`, which sends ONE extra `send-message` —
+`"[Сводка для оператора]\n<LLM-built RU briefing>"` — before any real
+customer message. There is no dedicated context field on `start-chat`'s
+fixed payload (`userPhone`/`userName`/`lang`/`requestId`/`telegramId`/
+`isTestRequest` only), so the summary rides the existing `send-message`
+channel instead. It is also persisted to `Message` with `role="system"`
+(`ChatService.save_system_note`) for audit purposes only — never shown to
+the client (`GET /chat/history` and `GET /sessions/{id}` both filter to
+`roles=("user", "agent", "operator")`). Building or sending the summary can
+never fail the handoff itself — every step is wrapped in try/except and
+logged, not raised.
+
 ### 5. Получение событий: канал `chat-event`
 
 Все события приходят в едином канале. Структура payload:

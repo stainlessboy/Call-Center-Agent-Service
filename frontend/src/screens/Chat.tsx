@@ -4,9 +4,11 @@ import { api, eventsSocketUrl } from '../api'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
 import { Chips } from '../components/ui'
+import { UiBlocksView } from '../components/UiBlocks'
 import { formatTime } from '../format'
 import { useApp, useChat, useNav, useT, type ChatEntry, type ScreenEntry } from '../store'
 import { haptic } from '../telegram'
+import { sanitizeUiBlocks } from '../uiBlocks'
 
 let entrySeq = 0
 const nextId = () => `m${++entrySeq}`
@@ -26,6 +28,7 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
     showOperatorButton,
     askRating,
     loaded,
+    stream,
     setAll,
     add,
     update,
@@ -35,6 +38,10 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
     setShowOperatorButton,
     setAskRating,
     setLoaded,
+    streamBegin,
+    streamToken,
+    streamDone,
+    streamFinalize,
   } = useChat()
 
   const [draft, setDraft] = useState(String(entry.params?.draft ?? ''))
@@ -65,6 +72,7 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
                   ? 'user'
                   : 'system') as ChatEntry['role'],
             text: message.text,
+            blocks: sanitizeUiBlocks(message.ui_blocks),
             at: message.created_at ? Date.parse(message.created_at) : Date.now(),
           })),
         )
@@ -121,6 +129,15 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
         case 'inactivity_warning':
           add({ id: nextId(), role: 'system', text: String(payload.message ?? ''), at: Date.now() })
           break
+        // Live token stream of the current bot turn (Phase 3). The store
+        // drops tokens outside an active turn, so late/duplicate events
+        // after the POST response are harmless.
+        case 'assistant_token':
+          streamToken(String(payload.text ?? ''))
+          break
+        case 'assistant_done':
+          streamDone()
+          break
         default:
           break
       }
@@ -132,7 +149,7 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
       closed = true
       socket?.close()
     }
-  }, [add, setAskRating, setMode, t])
+  }, [add, setAskRating, setMode, streamDone, streamToken, t])
 
   /* Network status → the offline plate in the feed. */
   useEffect(() => {
@@ -150,7 +167,7 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
   useEffect(() => {
     const node = feedRef.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [messages, typing, quickReplies])
+  }, [messages, typing, quickReplies, stream.text])
 
   const send = async (text: string) => {
     const trimmed = text.trim()
@@ -160,20 +177,45 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
     setDraft('')
     setQuickReplies([])
     setTyping(true)
+    // Open the streaming slot for this turn — assistant_token events may
+    // start arriving over the WS long before the POST response lands.
+    const turn = streamBegin()
     try {
       const reply = await api.sendMessage(trimmed)
       update(localId, { pending: false })
       if (reply.blocked === 'daily_limit') {
+        streamFinalize(undefined, turn)
         setBlocked(reply.text)
         setShowOperatorButton(true)
         return
       }
-      add({ id: nextId(), role: reply.human_mode ? 'system' : 'agent', text: reply.text, at: Date.now() })
+      // Replace the live bubble with the final message in one store update;
+      // tokens that straggle in after this are dropped by the store.
+      streamFinalize(
+        {
+          id: nextId(),
+          role: reply.human_mode ? 'system' : 'agent',
+          text: reply.text,
+          blocks: sanitizeUiBlocks(reply.ui_blocks),
+          at: Date.now(),
+        },
+        turn,
+      )
       setQuickReplies(reply.quick_replies)
       setShowOperatorButton(reply.show_operator_button)
       if (reply.human_mode) setMode('operator')
     } catch {
-      update(localId, { pending: false, failed: true })
+      // The POST failed, but if tokens streamed in, the turn did complete
+      // server-side — keep the accumulated text instead of dropping the answer.
+      const { stream: current, streamTurn } = useChat.getState()
+      const streamed = streamTurn === turn ? current.text : ''
+      if (streamed) {
+        streamFinalize({ id: nextId(), role: 'agent', text: streamed, at: Date.now() }, turn)
+        update(localId, { pending: false })
+      } else {
+        streamFinalize(undefined, turn)
+        update(localId, { pending: false, failed: true })
+      }
       haptic.error()
     } finally {
       setTyping(false)
@@ -229,10 +271,22 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
           <div className="system">{t('chat.disclaimer')}</div>
 
           {messages.map((message) => (
-            <Bubble key={message.id} entry={message} operatorLabel={t('chat.operatorLabel')} />
+            <Bubble
+              key={message.id}
+              entry={message}
+              operatorLabel={t('chat.operatorLabel')}
+              onSend={mode === 'bot' && !blocked ? (value) => void send(value) : undefined}
+            />
           ))}
 
-          {typing ? (
+          {stream.phase !== 'idle' && stream.text ? (
+            <div className="bubble bubble--in">
+              <RichText text={stream.text} />
+              {stream.phase === 'accepting' ? <span className="stream-caret" /> : null}
+            </div>
+          ) : null}
+
+          {typing && !stream.text ? (
             <div className="typing" aria-label={t('chat.searching')}>
               <i />
               <i />
@@ -356,7 +410,15 @@ export function ChatScreen({ entry }: { entry: ScreenEntry }) {
   )
 }
 
-function Bubble({ entry, operatorLabel }: { entry: ChatEntry; operatorLabel: string }) {
+function Bubble({
+  entry,
+  operatorLabel,
+  onSend,
+}: {
+  entry: ChatEntry
+  operatorLabel: string
+  onSend?: (text: string) => void
+}) {
   if (entry.role === 'system') {
     return <div className="system">{entry.text}</div>
   }
@@ -368,15 +430,22 @@ function Bubble({ entry, operatorLabel }: { entry: ChatEntry; operatorLabel: str
       : 'bubble bubble--in'
 
   return (
-    <div className={`${className}${entry.pending ? ' bubble--pending' : ''}`}>
-      {entry.role === 'operator' ? <div className="bubble__label">{operatorLabel}</div> : null}
-      <RichText text={entry.text} />
-      {isOut ? (
-        <div className="bubble__time num">
-          {formatTime(entry.at)} {entry.failed ? '!' : entry.pending ? '…' : '✓✓'}
+    <>
+      {entry.text ? (
+        <div className={`${className}${entry.pending ? ' bubble--pending' : ''}`}>
+          {entry.role === 'operator' ? <div className="bubble__label">{operatorLabel}</div> : null}
+          <RichText text={entry.text} />
+          {isOut ? (
+            <div className="bubble__time num">
+              {formatTime(entry.at)} {entry.failed ? '!' : entry.pending ? '…' : '✓✓'}
+            </div>
+          ) : null}
         </div>
       ) : null}
-    </div>
+      {entry.role === 'agent' && entry.blocks?.length ? (
+        <UiBlocksView blocks={entry.blocks} onSend={onSend} />
+      ) : null}
+    </>
   )
 }
 

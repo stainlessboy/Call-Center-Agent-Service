@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging as _logging
+import os
 from typing import Any, Dict, Optional, Sequence
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -12,11 +13,20 @@ from app.agent.i18n import at
 from app.agent.graph import build_graph
 from app.agent.lang_detect import detect_language
 from app.agent.lang_heuristic import check_lang_mismatch, looks_worth_llm_recheck
+from app.agent.memory_extract import extract_and_store
 from app.agent.pii_masker import mask_pii
+from app.agent.profile import load_user_profile
 from app.agent.state import AgentTurnResult, BotState, _default_dialog
 from app.utils.faq_tools import reset_faq_turn_cache
 
 _agent_logger = _logging.getLogger(__name__)
+
+
+def _memory_extract_enabled() -> bool:
+    """MEMORY_EXTRACT_ENABLED env flag (default true) — see CLAUDE.md."""
+    return (os.getenv("MEMORY_EXTRACT_ENABLED") or "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 # Backoff schedule (seconds) between retries of a failed checkpoint read in
 # `_aload_existing_state`. A transient DB blip should not silently look like
@@ -47,6 +57,31 @@ class Agent:
         # routing at the load balancer — an in-memory lock cannot coordinate
         # across processes.
         self._session_locks: Dict[str, asyncio.Lock] = {}
+        # Fire-and-forget background tasks (currently: the memory-extractor
+        # kicked off after each turn — see _launch_background_task). A plain
+        # `asyncio.create_task(...)` with the result discarded is a known
+        # footgun: nothing holds a strong reference to the Task, so the event
+        # loop is free to garbage-collect it mid-flight (silently dropping
+        # the extraction). Keeping a strong reference here until the task's
+        # own done-callback removes it prevents that.
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _launch_background_task(self, coro, *, name: str) -> asyncio.Task:
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._background_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                _agent_logger.warning(
+                    "Background task %s failed: %s", t.get_name(), exc, exc_info=exc,
+                )
+
+        task.add_done_callback(_on_done)
+        return task
 
     def _get_session_lock(self, session_id: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_id)
@@ -201,6 +236,20 @@ class Agent:
         # from older code is silently dropped by node_faq's history-tail logic.
         prior = list(existing.get("messages") or [])
 
+        # "Personal consultant" memory: load once per turn, before the graph
+        # runs, so node_faq can inject it into the system prompt. A load
+        # failure (DB blip) must not break the turn — log and fall back to
+        # None, same as "no profile yet" for a brand-new user.
+        user_profile: Optional[dict] = None
+        if user_id is not None:
+            try:
+                user_profile = await load_user_profile(user_id)
+            except Exception as exc:
+                _agent_logger.warning(
+                    "Failed to load user profile for user %s: %s", user_id, exc,
+                )
+                user_profile = None
+
         state_in: BotState = {
             "last_user_text": user_text,
             "messages": prior,
@@ -214,6 +263,7 @@ class Agent:
             "user_id": user_id,
             "show_operator_button": False,
             "token_usage": None,
+            "user_profile": user_profile,
         }
         # Fresh per-turn faq_search memoization scope: node_faq's strict
         # pre-check and the faq_lookup tool (invoked later in the same turn's
@@ -221,12 +271,30 @@ class Agent:
         # result instead of paying for the embedding call + lexical scan twice.
         reset_faq_turn_cache()
         out = await self._graph.ainvoke(state_in, config=config)
+        answer_text = str(out.get("answer") or "")
+
+        # Fire-and-forget memory extraction: NOT awaited, must not add to turn
+        # latency. Skipped for human_mode turns (nothing useful to extract from
+        # an operator handoff turn — the operator's reply isn't LLM-analyzable
+        # customer content the same way) and empty answers (nothing happened).
+        if (
+            user_id is not None
+            and not human_mode
+            and answer_text
+            and _memory_extract_enabled()
+        ):
+            self._launch_background_task(
+                extract_and_store(user_id, user_text, answer_text, user_profile),
+                name=f"memory_extract:{session_id}",
+            )
+
         return AgentTurnResult(
-            text=str(out.get("answer") or at("faq_fallback", out.get("lang") or detected_lang)),
+            text=answer_text or at("faq_fallback", out.get("lang") or detected_lang),
             keyboard_options=out.get("keyboard_options") or None,
             show_operator_button=bool(out.get("show_operator_button")),
             token_usage=out.get("token_usage") or None,
             suggested_language=suggested_lang,
+            ui_blocks=out.get("ui_blocks") or None,
         )
 
     async def send_message(
@@ -238,6 +306,37 @@ class Agent:
         human_mode: bool = False,
     ) -> AgentTurnResult:
         return await self._ainvoke(session_id, text, language, human_mode=human_mode, user_id=user_id)
+
+    async def get_handoff_context(self, session_id: str) -> Dict[str, Any]:
+        """Best-effort, read-only snapshot of this session's current dialog,
+        client profile, and message history — for building the operator
+        handoff summary (see app/agent/handoff.py). Deliberately does NOT
+        take the per-session lock (`_session_locks`): this only ever runs
+        right after a human_mode handoff already committed, and a summary is
+        a nice-to-have that must never block on / contend with an in-flight
+        turn. Never raises — a read failure just means a thinner summary.
+        """
+        try:
+            config = self._build_config(session_id)
+            existing = await self._aload_existing_state(config)
+        except Exception as exc:
+            _agent_logger.warning(
+                "get_handoff_context: failed to load state for session %s: %s", session_id, exc,
+            )
+            return {}
+
+        dialog = existing.get("dialog") or {}
+        messages = existing.get("messages") or []
+        user_id = existing.get("user_id")
+        profile: Optional[dict] = None
+        if user_id is not None:
+            try:
+                profile = await load_user_profile(user_id)
+            except Exception as exc:
+                _agent_logger.warning(
+                    "get_handoff_context: failed to load profile for user %s: %s", user_id, exc,
+                )
+        return {"dialog": dialog, "messages": messages, "user_profile": profile}
 
     async def resume_human_mode(self, session_id: str, operator_reply: str) -> str:
         """Resume a graph interrupted in human_mode node, injecting operator reply."""

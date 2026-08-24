@@ -54,7 +54,7 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.nodes import faq as faq_module
         from app.agent.state import _default_dialog
 
-        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: None)
         # The deterministic pre-check now goes through faq_precheck_answer
         # (stricter: both legs must be strict) — stub it to miss so the guard
         # path (_faq_lookup) below is what's actually under test.
@@ -84,7 +84,7 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.nodes import faq as faq_module
         from app.agent.state import _default_dialog
 
-        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: None)
         # node_faq's deterministic pre-check now goes through the stricter
         # faq_precheck_answer (both legs must be strict) — stub it to miss so
         # we actually reach the None-LLM guard, whose own (single-leg)
@@ -390,7 +390,7 @@ class TestCalcFlowFallbackStreakE2E:
 
         # No LLM available → extract_calc_value degrades to {"type": "unparsed"}
         # deterministically, without hitting the network.
-        monkeypatch.setattr(calc_extractor, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(calc_extractor, "_get_chat_openai", lambda role=None: None)
 
         dialog = {
             **_default_dialog(),
@@ -593,23 +593,25 @@ class TestCustomLoanCalculatorSanityCaps:
     async def test_excessive_term_returns_range_message_not_crash(self):
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000, term_months=3600, downpayment=0, state={"lang": "ru"},
         )
 
         assert result
         assert "600" in result  # states the allowed max term in months
+        assert artifact is None
 
     @pytest.mark.asyncio
     async def test_excessive_amount_returns_range_message_not_crash(self):
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000_000, term_months=60, downpayment=0, state={"lang": "ru"},
         )
 
         assert result
         assert "10 000 000 000" in result
+        assert artifact is None
 
     @pytest.mark.asyncio
     async def test_within_bounds_still_computes_normally(self):
@@ -619,9 +621,12 @@ class TestCustomLoanCalculatorSanityCaps:
         a coincidental/fragile assertion)."""
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000, term_months=60, downpayment=0, state={"lang": "ru"},
         )
 
         assert "слишком" not in result
         assert "50 000 000" in result
+        assert artifact["type"] == "calc_result"
+        assert artifact["data"]["schedule"]
+        assert len(artifact["data"]["schedule"]) == 60

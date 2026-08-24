@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.db.models import FaqItem
 from app.db.session import get_session
 from app.utils.data_loaders import _load_faq_items, _normalize_language_code
-from app.utils.text_utils import normalize_text, token_set
+from app.utils.text_utils import normalize_text, token_set_content
 
 _logger = logging.getLogger(__name__)
 
@@ -73,7 +73,9 @@ def get_faq_fallback(lang: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Lexical scoring (unchanged from the previous implementation).
+# Lexical scoring. The three-leg shape (containment / difflib seq / token F1)
+# is unchanged from the pgvector-split refactor; the token-F1 leg itself was
+# tightened later (see the comment inline below) to strip filler words.
 # ---------------------------------------------------------------------------
 
 def _faq_similarity(a: str, b: str) -> float:
@@ -92,13 +94,19 @@ def _faq_similarity(a: str, b: str) -> float:
     else:
         containment = 0.0
     seq = difflib.SequenceMatcher(a=na, b=nb).ratio()
-    ta = token_set(na)
-    tb = token_set(nb)
+    ta = token_set_content(na)
+    tb = token_set_content(nb)
     if ta and tb and (inter := len(ta & tb)):
         # F1 of token-level precision (query coverage) and recall (FAQ coverage).
         # Old |A∩B|/|B| was insensitive to *extra* query tokens — e.g. query
         # "карту нерезидентам" matched FAQ "Как открыть виртуальную карту?" at
         # 0.75 because "нерезидентам" (the discriminative token) was ignored.
+        # token_set_content() (not plain token_set()) strips question-frame/
+        # filler words ("что", "такое", "давайте", "хочу", "узнать", ...)
+        # before the overlap is computed — those words dilute F1 without
+        # carrying the query's actual topic. Measured: "давайте мне интересно
+        # эскроу счет" vs "Что такое Эскроу?" went from 0.444 to 0.667 and
+        # correctly became the best match instead of an unrelated row.
         token_score = (2 * inter) / (len(ta) + len(tb))
     else:
         token_score = 0.0

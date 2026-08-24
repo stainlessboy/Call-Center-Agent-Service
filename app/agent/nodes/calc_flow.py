@@ -24,9 +24,12 @@ from app.agent.llm import (
 from app.agent.nodes.helpers import _finalize_turn, _save_lead_async
 from app.agent.pii_masker import mask_pii
 from app.agent.products import _format_product_list_text
-from app.agent.rate_rules import rate_bounds, select_rate
+from app.agent.rate_rules import income_type_from_dialog as _income_type_from_dialog
+from app.agent.rate_rules import resolve_effective_rate
 from app.agent.state import BotState, _default_dialog, _reset_dialog
+from app.agent.ui_blocks import credit_calc_result_block, deposit_calc_result_block
 from app.config import get_settings
+from app.utils.amortization import amortize, dti_ratio
 from app.utils.faq_tools import _faq_lookup
 from app.utils.pdf_generator import generate_amortization_pdf
 
@@ -114,57 +117,23 @@ def _clamp_downpayment(dp: float, product: dict) -> tuple[float, bool]:
     return dp, False
 
 
-def _income_type_from_dialog(dialog: dict) -> str | list[str] | None:
-    """Income types the questionnaire established, for rate matching.
-
-    A single answer is returned as a plain string; a branch that left several
-    candidates open returns them all — ``select_rate`` matches a rule whose
-    income type is among them, instead of ignoring the axis entirely.
-    """
-    qualify_answers = (dialog or {}).get("qualify_answers") or {}
-    income_types = qualify_answers.get("income_types") or []
-    if not income_types:
-        return None
-    if len(income_types) == 1:
-        return income_types[0]
-    return list(income_types)
-
-
 def _lookup_credit_rate(product: dict, calc_slots: dict, dialog: dict) -> float:
     """Find the best matching rate from rate_rules for the user's inputs.
 
-    Uses the rate-rule engine (select_rate). Falls back to rate_bounds minimum,
-    then to the product aggregate rate_min_pct, then to
-    ``Settings.default_custom_loan_rate_pct`` (``DEFAULT_CUSTOM_LOAN_RATE_PCT``
-    env var, read live via ``get_settings()`` rather than cached at import
-    time — see app/config.py).
+    Thin wrapper around ``rate_rules.resolve_effective_rate`` — the shared
+    3-tier fallback chain (matched rule → cheapest usable rule → product
+    aggregate rate → ``Settings.default_custom_loan_rate_pct``) also used by
+    the Phase 4 ``what_if_scenario``/``affordability_check`` tools
+    (app/agent/tools.py), so all three surfaces resolve a rate identically.
     """
-    rules = product.get("rate_rules") or []
-
-    matched_rule = select_rate(
-        rules,
+    return resolve_effective_rate(
+        product,
         age=calc_slots.get("age"),
         amount=calc_slots.get("amount"),
         term_months=calc_slots.get("term_months"),
         downpayment_pct=calc_slots.get("downpayment"),
         income_type=_income_type_from_dialog(dialog),
     )
-    if matched_rule is not None:
-        rate = matched_rule.get("rate_min_pct")
-        if rate is not None:
-            return float(rate)
-
-    # Fallback 1: lowest rate across all usable rules.
-    low, _ = rate_bounds(rules)
-    if low is not None:
-        return float(low)
-
-    # Fallback 2: aggregate product rate.
-    aggregate = product.get("rate_min_pct") or product.get("rate_pct")
-    if aggregate is not None:
-        return float(aggregate)
-
-    return get_settings().default_custom_loan_rate_pct
 
 
 def _lookup_deposit_rate(product: dict, calc_slots: dict) -> float:
@@ -412,7 +381,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             else:
                 faq_ans = await _faq_lookup(user_text, lang) or ""
                 if not faq_ans:
-                    llm = _get_chat_openai()
+                    llm = _get_chat_openai(role="consultant")
                     if llm:
                         try:
                             ai_msg = await llm.ainvoke([
@@ -532,7 +501,15 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
             "calc_slots": calc_slots,
             "lead_step": "offer",
         }
-        result = _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+        ui_block = deposit_calc_result_block(
+            product_name=product_name,
+            amount=amount,
+            term_months=term_months,
+            rate_pct=rate_pct,
+            interest_total=total_interest,
+            total=amount + total_interest,
+        )
+        result = _finalize_turn(state, answer, lead_dialog, lead_keyboard, ui_blocks=[ui_block])
         if turn_usage:
             result["token_usage"] = turn_usage
         return result
@@ -544,6 +521,26 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
     principal = amount - dp_abs
     principal_fmt = f"{principal:,}".replace(",", " ")
     dp_abs_fmt = f"{dp_abs:,}".replace(",", " ")
+    # Same annuity math as the PDF (app/utils/amortization.py — single source
+    # of truth), computed separately here to build the Mini App's calc_result
+    # ui_block: the PDF generator returns a file path, not the numbers, and
+    # the bot's text templates never showed monthly_payment/total/overpayment
+    # even pre-Phase-3 (the PDF carried that), so this is a net-new value, not
+    # a duplicated computation the user could see disagree.
+    amort = amortize(principal, rate_pct, term_months)
+    ui_block = credit_calc_result_block(
+        amort, product_name=product_name, amount=amount, downpayment=dp_abs,
+    )
+    # Deterministic DTI (debt-to-income) check (Phase 4 "Экспертиза") — this
+    # finalization is a deterministic node, the LLM persona's own soft DTI
+    # rule (i18n system policy, Phase 1) never runs here. `dti_ratio` is
+    # None when the client's income isn't known yet (no profile fact) —
+    # that's the common case and produces no warning, not a false one.
+    profile = state.get("user_profile") or {}
+    income_monthly = (profile.get("facts") or {}).get("income_monthly")
+    dti = dti_ratio(amort.monthly_payment, income_monthly)
+    ui_block["data"]["dti_ratio"] = round(dti, 4) if dti is not None else None
+    show_dti_warning = dti is not None and dti > get_settings().dti_warn_ratio
     try:
         pdf_path = await asyncio.to_thread(
             generate_amortization_pdf,
@@ -578,6 +575,12 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         )
     if adjustment_note:
         answer = f"{adjustment_note}\n\n{answer}"
+    if show_dti_warning:
+        # `lead_keyboard` already carries "🔄 Пересчитать" (btn_recalculate) —
+        # tapping it re-enters the existing recalculate flow (_is_recalculate
+        # branch in _handle_lead_step), so no new keyboard option is needed,
+        # just point the client at the one already shown this turn.
+        answer = f"{answer}\n\n" + at("dti_warning_credit", lang, ratio=f"{dti * 100:.0f}")
 
     lead_dialog = {
         **_default_dialog(),
@@ -587,7 +590,7 @@ async def _handle_calc_step(state: BotState, user_text: str, dialog: dict) -> di
         "calc_slots": calc_slots,
         "lead_step": "offer",
     }
-    result = _finalize_turn(state, answer, lead_dialog, lead_keyboard)
+    result = _finalize_turn(state, answer, lead_dialog, lead_keyboard, ui_blocks=[ui_block])
     if turn_usage:
         result["token_usage"] = turn_usage
     return result

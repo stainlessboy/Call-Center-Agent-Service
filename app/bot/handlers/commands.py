@@ -20,6 +20,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from app.agent.handoff import send_operator_handoff_summary
 from app.bot.i18n import menu_action_from_text, menu_label, normalize_lang, t
 from app.bot.keyboards.common import contact_keyboard, location_keyboard
 from app.bot.keyboards.feedback import language_keyboard
@@ -1204,6 +1205,11 @@ async def enable_human_mode(callback: CallbackQuery, chat_service: ChatService) 
     if not ok:
         await chat_service.set_human_mode(session_id, False)
         await callback.message.answer(t("middleware_unavailable", lang))
+    else:
+        # Phase 4 "Экспертиза": brief the operator with a short context
+        # summary as their first message. Never blocks/breaks the handoff —
+        # see send_operator_handoff_summary's own try/except.
+        await send_operator_handoff_summary(chat_service, middleware_client, session_id)
 
 
 @router.callback_query(F.data.startswith("bot:"))

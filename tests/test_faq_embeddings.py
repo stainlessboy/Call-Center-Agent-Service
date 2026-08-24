@@ -92,6 +92,93 @@ class TestFaqSimilarityContainment:
         assert score < 0.75  # below lex strict
 
 
+# ── token_set_content: stopword-aware token set for the F1 leg ────────────
+
+class TestTokenSetContent:
+    def test_strips_stopwords(self):
+        from app.utils.text_utils import token_set, token_set_content
+        full = token_set("что такое эскроу")
+        content = token_set_content("что такое эскроу")
+        assert content == {"эскро"}
+        assert content < full  # strictly smaller — filler words were removed
+
+    def test_token_set_is_untouched(self):
+        """token_set() is shared with intent classification — it must keep
+        returning every token, unfiltered, regardless of this change."""
+        from app.utils.text_utils import token_set
+        assert token_set("что такое эскроу") == {"что", "так", "эскро"}
+
+    def test_all_stopword_query_falls_back_to_unstripped_set(self):
+        """A query made entirely of filler words must not collapse to an
+        empty set — that would score 0.0 against every FAQ row instead of
+        just not benefiting from the filter."""
+        from app.utils.text_utils import token_set, token_set_content
+        query = "что такое"
+        assert token_set_content(query) == token_set(query)
+        assert token_set_content(query) != set()
+
+    def test_stopwords_matched_by_stem_not_raw_form(self):
+        """Inflected filler words ('хочу', 'узнать') must still be stripped —
+        the stopword set is compared in stemmed space, same as token_set()
+        stems its own tokens."""
+        from app.utils.text_utils import token_set_content
+        assert token_set_content("хочу узнать про эскроу") == {"эскро"}
+
+    def test_content_words_never_collide_with_stopword_stems(self):
+        """Sanity check against accidental over-stripping: common banking
+        nouns used throughout the FAQ table must never stem to the same
+        value as a stopword."""
+        from app.utils.text_utils import token_stem
+        from app.utils.text_utils import _STOPWORD_STEMS  # noqa: SLF001 (test-only)
+        banking_words = [
+            "карту", "счет", "кредит", "вклад", "ипотеку", "автокредит",
+            "микрозайм", "эскроу", "паспорт", "пароль", "перевод",
+            "комиссия", "филиал", "оплатить", "заблокировать", "погасить",
+            "документы", "ставка", "баланс", "приложение",
+        ]
+        for word in banking_words:
+            assert token_stem(word) not in _STOPWORD_STEMS, word
+
+
+# ── _faq_similarity: stopword-aware F1 leg (escrow-miss fix) ──────────────
+
+class TestFaqSimilarityStopwordAware:
+    """Regression coverage for the live incident (2026-08-11): 'давайте мне
+    интересно эскроу счет' scored below an UNRELATED FAQ row ('Как узнать
+    баланс счета?') because filler words ('что', 'такое', 'давайте', 'мне',
+    'интересно') diluted the token-F1 leg against the real escrow row ('Что
+    такое Эскроу?'). Numbers below are measured against the actual escrow
+    FAQ row from the bug report (id=129 in the live dev DB)."""
+
+    _ESCROW_Q = "Что такое Эскроу?"
+
+    def test_natural_paraphrase_gains(self):
+        from app.utils.faq_tools import _faq_similarity
+        score = _faq_similarity("давайте мне интересно эскроу счет", self._ESCROW_Q)
+        assert score == pytest.approx(0.667, abs=0.01)  # was 0.367 before the fix
+
+    def test_short_query_gains(self):
+        from app.utils.faq_tools import _faq_similarity
+        score = _faq_similarity("эскроу счет", self._ESCROW_Q)
+        assert score == pytest.approx(0.667, abs=0.01)  # was 0.444 before the fix
+
+    def test_full_sentence_reaches_strict(self):
+        from app.utils.faq_tools import _faq_similarity
+        score = _faq_similarity("хочу узнать про эскроу", self._ESCROW_Q)
+        assert score == pytest.approx(1.0, abs=0.01)  # was 0.579 before the fix
+        assert score >= 0.75  # crosses lex strict — this is the actual bug fix
+
+    def test_mortgage_microloan_hijack_pair_unaffected(self):
+        """The measured production hijack ('Хочу оформить ипотеку' silently
+        answered from a микрозайм FAQ row — see faq_precheck_answer's
+        docstring and TestFaqPrecheckAnswer below) must NOT gain any score
+        from stopword stripping. Real pair from the live dev DB (id=74)."""
+        from app.utils.faq_tools import _faq_similarity
+        score = _faq_similarity("Хочу оформить ипотеку", "Хочу оформить микрозайм")
+        assert score == pytest.approx(0.727, abs=0.01)  # unchanged by the fix
+        assert score < 0.75  # stays below lex strict
+
+
 # ── faq_search (hybrid) ───────────────────────────────────────────────────
 
 class TestHybridLookup:
