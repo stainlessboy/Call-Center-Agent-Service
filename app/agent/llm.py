@@ -76,8 +76,9 @@ def provider_connection() -> dict[str, Any]:
     Shared by the main agent LLM and the language detector so they always talk
     to the same backend. The model name is NOT included — each caller picks its
     own (the agent uses the full model, the detector may use a cheaper one).
-    Note: FAQ embeddings deliberately ignore this and always use OPENAI_* —
-    semantic search stays on OpenAI even when chat runs on Qwen.
+    Note: FAQ search deliberately ignores this and always uses OPENAI_* —
+    Weaviate vectorizes via text2vec-openai and the rerank calls
+    FAQ_RERANK_MODEL directly, even when chat runs on Qwen.
     """
     if not _use_gpt():
         return {
