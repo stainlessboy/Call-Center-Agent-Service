@@ -17,9 +17,17 @@ services:
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.39.2
     restart: unless-stopped
+    ports:
+      # Публикуются для доступа с рабочей машины (Weaviate Console, скрипты
+      # переиндексации, отладка запросов). Доступ закрыт API-ключом —
+      # анонимный запрещён ниже, так что открытый порт != открытая база.
+      # WEAVIATE_BIND=127.0.0.1 закрывает порты снаружи, оставляя их
+      # доступными через SSH-туннель — предпочтительный режим, если постоянный
+      # внешний доступ не нужен.
+      - "${WEAVIATE_BIND:-0.0.0.0}:${WEAVIATE_PUBLISH_HTTP:-8080}:8080"
+      - "${WEAVIATE_BIND:-0.0.0.0}:${WEAVIATE_PUBLISH_GRPC:-50051}:50051"
     environment:
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
-      # Порты наружу не публикуются — доступ только из compose-сети.
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
       AUTHENTICATION_APIKEY_ENABLED: "true"
       AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY is required}

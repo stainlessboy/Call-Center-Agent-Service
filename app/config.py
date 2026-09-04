@@ -45,9 +45,7 @@ class Settings:
     minio_password: str | None
     daily_message_limit: int
     rate_limit_per_minute: int
-    faq_embedding_enabled: bool
     faq_embedding_model: str
-    faq_embedding_dim: int
     faq_sem_strict_threshold: float
     faq_sem_low_threshold: float
     faq_lex_strict_threshold: float
@@ -154,9 +152,9 @@ def get_settings() -> Settings:
         minio_password=(os.getenv("MINIO_PASSWORD") or "").strip() or None,
         daily_message_limit=_parse_positive_int(os.getenv("DAILY_MESSAGE_LIMIT"), default=30),
         rate_limit_per_minute=_parse_positive_int(os.getenv("RATE_LIMIT_PER_MINUTE"), default=20),
-        faq_embedding_enabled=_parse_bool(os.getenv("FAQ_EMBEDDING_ENABLED"), default=True),
+        # Модель для векторизации в коллекции Weaviate (text2vec-openai).
+        # Смена требует полной переиндексации — старые векторы несовместимы.
         faq_embedding_model=(os.getenv("FAQ_EMBEDDING_MODEL") or "text-embedding-3-small").strip(),
-        faq_embedding_dim=_parse_positive_int(os.getenv("FAQ_EMBEDDING_DIM"), default=1536),
         faq_sem_strict_threshold=_parse_float(os.getenv("FAQ_SEM_STRICT_THRESHOLD"), default=0.60),
         faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.45),
         faq_lex_strict_threshold=_parse_float(os.getenv("FAQ_LEX_STRICT_THRESHOLD"), default=0.75),

@@ -21,7 +21,7 @@ from app.bot.keyboards.feedback import feedback_keyboard
 from app.bot.middlewares.chat_service import ChatServiceMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
 from app.config import get_settings
-from app.db.events import register_faq_embedding_events
+from app.db.events import register_faq_index_events
 from app.utils import vector_store
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
     if not settings.bot_token:
         raise RuntimeError("BOT_TOKEN is not set")
 
-    register_faq_embedding_events()
+    register_faq_index_events()
 
     # FAQ-индекс. ensure_schema() никогда не роняет старт: если Weaviate
     # недоступен, поиск деградирует до отсутствия кандидатов, а не до

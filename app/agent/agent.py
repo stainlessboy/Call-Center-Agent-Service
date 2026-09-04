@@ -267,8 +267,8 @@ class Agent:
         }
         # Fresh per-turn faq_search memoization scope: node_faq's strict
         # pre-check and the faq_lookup tool (invoked later in the same turn's
-        # ToolNode loop, same asyncio task) then share one hybrid-search
-        # result instead of paying for the embedding call + lexical scan twice.
+        # ToolNode loop, same asyncio task) then share one search result
+        # instead of paying for the retrieval + LLM rerank twice.
         reset_faq_turn_cache()
         out = await self._graph.ainvoke(state_in, config=config)
         answer_text = str(out.get("answer") or "")

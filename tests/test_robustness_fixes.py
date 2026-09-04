@@ -9,7 +9,7 @@ robustness fixes:
     lookup fallback instead.
   - app/utils/faq_tools.py: faq_search() is memoized within a single agent
     turn (via reset_faq_turn_cache) so the node_faq strict pre-check and the
-    faq_lookup tool don't pay for the embedding call + lexical scan twice.
+    faq_lookup tool don't pay for the retrieval + LLM rerank twice.
 
 Also covers the 2026-07 audit fixes (C-2 through C-6, C-9):
 

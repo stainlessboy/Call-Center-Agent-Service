@@ -114,13 +114,9 @@ def _invalidate() -> None:
         logger.debug("faq cache invalidation skipped", exc_info=True)
 
 
-def register_faq_embedding_events() -> None:
-    """Idempotent: safe to call multiple times (subsequent calls are no-ops).
-
-    Name kept for backward compatibility with the FastAPI lifespan import; the
-    listeners now sync the Weaviate index rather than recompute embeddings.
-    """
-    if getattr(register_faq_embedding_events, "_registered", False):
+def register_faq_index_events() -> None:
+    """Idempotent: safe to call multiple times (subsequent calls are no-ops)."""
+    if getattr(register_faq_index_events, "_registered", False):
         return
     event.listen(FaqItem, "after_insert", _on_insert_or_update)
     event.listen(FaqItem, "after_update", _on_insert_or_update)
@@ -129,4 +125,4 @@ def register_faq_embedding_events() -> None:
     event.listen(Session, "after_commit", _after_commit)
     event.listen(Session, "after_rollback", _after_rollback)
     event.listen(Session, "after_soft_rollback", _after_rollback)
-    register_faq_embedding_events._registered = True  # type: ignore[attr-defined]
+    register_faq_index_events._registered = True  # type: ignore[attr-defined]
