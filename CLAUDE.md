@@ -126,16 +126,17 @@ app/
 │   └── routes/               # bootstrap, catalog, calc, leads, branches, misc, chat
 ├── utils/
 │   ├── data_loaders.py       # Async DB loaders for products and FAQ
-│   ├── faq_tools.py          # Hybrid FAQ search: lexical + pgvector semantic (tri-tier)
+│   ├── faq_tools.py          # FAQ search: Weaviate hybrid retrieval + LLM rerank
+│   ├── vector_store.py       # The only module that talks to Weaviate (search/upsert/reindex)
 │   ├── amortization.py       # Annuity math shared by PDF, bot calculator, Mini App
 │   ├── pdf_generator.py      # PDF amortization schedule generator
-│   ├── text_utils.py         # Shared text normalization / stemming
+│   ├── text_utils.py         # normalize_text() — FAQ cache keys
 │   ├── working_hours.py      # Operator working-hours window (bot + Mini App)
 │   └── cbu_rates.py          # CBU exchange rates fetcher
 ├── db/
 │   ├── models.py             # SQLAlchemy ORM models
 │   ├── session.py            # Async session factory
-│   ├── events.py             # SQLAlchemy events (FAQ embedding recompute on change)
+│   ├── events.py             # SQLAlchemy events (sync FAQ rows into Weaviate after commit)
 │   └── alembic/              # Alembic migrations
 └── config.py                 # Dataclass settings with @lru_cache get_settings()
 
@@ -209,7 +210,7 @@ Tools that need dialog state declare `state: Annotated[dict, InjectedState] = No
 
 **Mini App structured data (Phase 3, extended Phase 4)**: `find_office`, `select_office`, `get_currency_info`, `get_products`, `select_product`, `compare_products`, `custom_loan_calculator`, `what_if_scenario`, `affordability_check`, `recommend_product` use `response_format="content_and_artifact"` — they return `(text, artifact | None)`, where `artifact` is a `{"type": ..., "data": ...}` UI block. `ToolNode` puts it on `ToolMessage.artifact`, never in `.content`, so it never reaches the LLM's context. `node_faq` accumulates every round's non-`None` artifacts into `state.ui_blocks`; `nodes/calc_flow.py` and `nodes/qualify_flow.py` build their own blocks directly (deterministic nodes, no tool call). Full JSON schema per block type, WS streaming events, and the persistence decision: [docs/MINIAPP.md "UI blocks"](docs/MINIAPP.md#ui-blocks).
 
-`faq_lookup` is a hybrid search over the `faq` table: lexical (difflib/token overlap, with question-frame/filler words like "что"/"такое"/"хочу"/"давайте" stripped from the token-overlap leg via `token_set_content()` in `app/utils/text_utils.py` — natural paraphrases score much closer to the matching FAQ question than a bare keyword query would) + semantic (pgvector cosine over `text-embedding-3-small` embeddings), each leg mapped to a tri-tier confidence (strict / low / none). On `strict` the DB answer is reworded before it ships — NOT by the LLM's own wrapping turn (the display-tool short-circuit in `node_faq` `break`s before one happens), but by `faq_rephrase.rephrase_faq_answer()`, the same guarded helper the pre-check uses; on `low` the closest FAQ questions AND their answer text are surfaced to the LLM as candidates (`FAQ_SEM_TOP_K`) so it can answer directly in the same round instead of needing a second `faq_lookup` call.
+`faq_lookup` searches the `faq` table in two stages. **Retrieval**: one Weaviate hybrid query (BM25 + vector, fused by `FAQ_HYBRID_ALPHA=0.9`) returns up to `FAQ_CANDIDATE_LIMIT=20` candidates — `app/utils/vector_store.py` is the only module that talks to Weaviate. **Rerank**: one `gpt-4o-mini` call picks the entry that actually answers the question, or refuses; its refusal *is* the confidence signal, which is why no score thresholds remain. Tiers map onto that: `strict` = the rerank picked an entry (answer it directly, reworded by `faq_rephrase.rephrase_faq_answer()`); `none` = nothing matched or the rerank refused; `low` = the rerank could not run (disabled / no key / OpenAI down), so the candidates and their answer text are surfaced to the LLM as before. The rerank prompt carries a BOUNDARY rule that refuses product-catalog and calculator intents ("Хочу оформить ипотеку") so the FAQ cannot swallow them — it is measured, do not reword it casually. Weaviate's own `reranker-transformers` module is deliberately NOT used: its English ms-marco cross-encoders score 3/18 on Cyrillic against 18/18 for `gpt-4o-mini`.
 
 `node_faq`'s own deterministic strict pre-check (`faq_precheck_answer`, stricter than the tier above — see its docstring in `app/utils/faq_tools.py`) skips the LLM entirely on an unambiguous strict hit. Since there's no LLM turn to rephrase it there, `app/agent/faq_rephrase.py::rephrase_faq_answer()` runs one extra tight LLM call to reword the DB text naturally, guarded by a deterministic check that discards the rephrase (falling back to the verbatim DB answer) if any number or URL from the source is missing from the result, or the length looks off — switchable via `FAQ_REPHRASE_ENABLED`.
 
@@ -286,7 +287,7 @@ The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `c
 - Supports custom `OPENAI_BASE_URL` for OpenAI-compatible APIs
 - Built-in token usage tracking and cost calculation per model
 - **Provider switch (`USE_GPT`)**: `true` (default) → OpenAI; `false` → Qwen via Together AI (`QWEN_MODEL`/`QWEN_BASE_URL`/`QWEN_API_KEY` or `TOGETHER_API_KEY`). The switch covers BOTH the main agent LLM and the language detector (`lang_detect.py`) via the shared `provider_connection()` helper. The detector can use a cheaper model with `QWEN_LANG_DETECTOR_MODEL` (Qwen mode) or `LANG_DETECTOR_MODEL` (GPT mode).
-- **FAQ embeddings always use OpenAI** (`app/utils/embeddings.py` reads `OPENAI_API_KEY`/`OPENAI_BASE_URL` directly, ignoring `USE_GPT`) — semantic FAQ search stays on OpenAI even when chat runs on Qwen. Keep `OPENAI_API_KEY` set, or disable semantic search with `FAQ_EMBEDDING_ENABLED=false`.
+- **FAQ search always uses OpenAI**, ignoring `USE_GPT`: Weaviate vectorizes via `text2vec-openai`, and the rerank in `app/utils/faq_tools.py` calls `FAQ_RERANK_MODEL` directly. Keep `OPENAI_API_KEY` set, or turn the rerank off with `FAQ_RERANK_ENABLED=false` (retrieval still works; measurably worse on Uzbek).
 - Cost tracking only knows OpenAI prices (`_MODEL_PRICING`); Qwen turns report `cost=0`.
 - **`LLM_MAX_TOKENS`** (default `3000`): output token cap for the main agent LLM. For non-reasoning models this is a cap (they stop when done). Reasoning models (e.g. `openai/gpt-oss-20b`) share this budget across analysis + final channels — the old 512 was too small for a final answer to fit.
 - **`LANG_DETECTOR_MAX_TOKENS`** (default `512`): output token cap for the language detector. Same reasoning: 5 tokens was entirely consumed by the analysis channel on reasoning models.
@@ -306,9 +307,9 @@ The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `c
 
 Core: `User`, `ChatSession`, `Message`, `Lead`, `UserProfile` (facts + relationship notes — see "Personal consultant" memory above)
 Products: `CreditProductOffer` (+ `CreditRateRule` — per-product dynamic rate rules), `DepositProductOffer`, `CardProductOffer`
-Knowledge: `FaqItem` (with per-language pgvector embedding columns), offices: `Filial`, `SalesOffice`, `SalesPoint`
+Knowledge: `FaqItem` (question/answer in 3 languages — searchable text only; vectors live in Weaviate), offices: `Filial`, `SalesOffice`, `SalesPoint`
 
-FAQ embeddings are recomputed automatically on insert/update via SQLAlchemy events (`app/db/events.py`); the Postgres image must provide the pgvector extension (`pgvector/pgvector:pg16` in docker-compose).
+FAQ rows are mirrored into the Weaviate index by SQLAlchemy listeners (`app/db/events.py`), buffered during the flush and pushed **after** the Postgres commit so a rolled-back edit leaves no phantom entry. Index writes are best-effort — the "Переиндексировать FAQ" button in `/admin/seed` rebuilds the index from Postgres and is the repair path for any drift.
 
 LangGraph checkpointing: `memory` (dev) | `postgres` (prod) — configured via `LANGGRAPH_CHECKPOINT_BACKEND`.
 
@@ -365,10 +366,12 @@ Sessions / operator mode:
 - `MINIO_BASE_URL`, `MINIO_USERNAME`, `MINIO_PASSWORD` — media forwarding to operators
 
 FAQ search:
-- `FAQ_EMBEDDING_ENABLED` (default `true`), `FAQ_EMBEDDING_MODEL` (default `text-embedding-3-small`), `FAQ_EMBEDDING_DIM` (default `1536`)
-- `FAQ_SEM_STRICT_THRESHOLD` / `FAQ_SEM_LOW_THRESHOLD` — semantic (embedding cosine) FAQ tiers (defaults `0.60` / `0.45`)
-- `FAQ_LEX_STRICT_THRESHOLD` / `FAQ_LEX_LOW_THRESHOLD` — lexical FAQ tiers (defaults `0.75` / `0.55`); legacy `FAQ_STRICT_THRESHOLD`/`FAQ_LOW_CONFIDENCE_THRESHOLD` are ignored
-- `FAQ_SEM_TOP_K` — semantic candidates surfaced to the LLM on low confidence (default `3`)
+- `WEAVIATE_ENABLED` (default `true`), `WEAVIATE_HTTP_HOST` / `WEAVIATE_GRPC_HOST` (default `localhost`), `WEAVIATE_HTTP_PORT` (`8080`) / `WEAVIATE_GRPC_PORT` (`50051`), `WEAVIATE_SECURE`, `WEAVIATE_API_KEY` (required in prod), `WEAVIATE_COLLECTION` (`FaqItem`), `WEAVIATE_TIMEOUT` (`10`)
+- `FAQ_EMBEDDING_MODEL` (default `text-embedding-3-small`) — now the model in the collection's `text2vec-openai` config; changing it needs a reindex
+- `FAQ_HYBRID_ALPHA` — vector-vs-BM25 balance, `0`=keywords only, `1`=vector only (default `0.9`, measured)
+- `FAQ_CANDIDATE_LIMIT` — how many candidates retrieval hands the rerank (default `20`)
+- `FAQ_RERANK_ENABLED` / `FAQ_RERANK_MODEL` — the LLM rerank (defaults `true` / `gpt-4o-mini`)
+- The four `FAQ_SEM_*`/`FAQ_LEX_*` thresholds were removed with the two-leg search; setting them logs a warning
 - `FAQ_REPHRASE_ENABLED` — rewords a verified FAQ DB answer into the LLM's own words before it ships, preserving every fact/number/rate/term/link (default `true`); covers both `node_faq`'s deterministic strict pre-check (via `app/agent/faq_rephrase.py`, one extra guarded LLM call since there's no LLM turn there otherwise) and the `faq_lookup` tool's system-policy instruction to rephrase rather than recite
 
 Telegram Mini App:
@@ -422,3 +425,6 @@ Telegram Mini App:
 - `/migrate` — create and apply Alembic migrations
 - `/seed` — prints instructions for seeding via `/admin/seed` (no CLI scripts)
 - `/check` — syntax check all Python files
+- `/start-bot` — запуск бота локально: ngrok на 8001 → публичный URL в `.env` (`WEBHOOK_BASE_URL`, `MINIAPP_URL`) → `python3 main.py` → проверка `/health` и `getWebhookInfo`
+
+**Триггер без слэша:** если пользователь пишет «запускай бота», «запусти бота», «подними бот», «старт бота», «запусти проект» (или то же самое на английском/узбекском) — сразу вызывай скил `start-bot` через Skill tool и иди по его шагам. Не запускай ngrok/`main.py` вручную и не переспрашивай подтверждение — сама просьба и есть подтверждение.

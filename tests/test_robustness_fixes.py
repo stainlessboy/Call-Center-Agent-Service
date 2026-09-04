@@ -117,8 +117,8 @@ class TestFaqSearchTurnCache:
     async def test_second_identical_call_is_cached_after_reset(self, monkeypatch):
         """Within a turn (reset_faq_turn_cache called once), a second
         faq_search call with the same (query, language) must not re-run the
-        embedding call."""
-        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        retrieval + rerank."""
+        monkeypatch.setenv("FAQ_RERANK_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
@@ -126,26 +126,24 @@ class TestFaqSearchTurnCache:
         from app.utils import faq_tools
         from app.utils.faq_tools import faq_search, reset_faq_turn_cache
 
-        embed_calls = 0
+        search_calls = 0
 
-        async def fake_embed_texts(texts):
-            nonlocal embed_calls
-            embed_calls += 1
-            # None vector short-circuits _semantic_lookup before it touches
-            # the DB — we only care about the embed_texts call count here.
-            return [None for _ in texts]
+        async def fake_search(query, language=None, limit=None):
+            nonlocal search_calls
+            search_calls += 1
+            # An empty candidate list short-circuits before the rerank — we
+            # only care about how often the retrieval leg is entered here.
+            return []
 
         try:
-            with patch(
-                "app.utils.embeddings.embed_texts", new=AsyncMock(side_effect=fake_embed_texts)
-            ), patch.object(
-                faq_tools, "_lexical_lookup", new=AsyncMock(return_value=(None, 0.0))
+            with patch.object(
+                faq_tools.vector_store, "search", new=AsyncMock(side_effect=fake_search)
             ):
                 reset_faq_turn_cache()
                 await faq_search("как заблокировать карту", "ru")
                 await faq_search("как заблокировать карту", "ru")
 
-            assert embed_calls == 1
+            assert search_calls == 1
         finally:
             get_settings.cache_clear()
 
@@ -153,9 +151,9 @@ class TestFaqSearchTurnCache:
     async def test_not_cached_without_reset(self, monkeypatch):
         """Without an active turn cache (contextvar left at its default
         None), faq_search must behave exactly as before — every call hits
-        the embedding leg fresh. This proves non-agent callers (tests,
-        scripts) are unaffected by the memoization."""
-        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        retrieval fresh. This proves non-agent callers (tests, scripts) are
+        unaffected by the memoization."""
+        monkeypatch.setenv("FAQ_RERANK_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
@@ -166,23 +164,21 @@ class TestFaqSearchTurnCache:
         # Make sure no turn-cache is active regardless of test execution order.
         faq_tools._faq_turn_cache.set(None)
 
-        embed_calls = 0
+        search_calls = 0
 
-        async def fake_embed_texts(texts):
-            nonlocal embed_calls
-            embed_calls += 1
-            return [None for _ in texts]
+        async def fake_search(query, language=None, limit=None):
+            nonlocal search_calls
+            search_calls += 1
+            return []
 
         try:
-            with patch(
-                "app.utils.embeddings.embed_texts", new=AsyncMock(side_effect=fake_embed_texts)
-            ), patch.object(
-                faq_tools, "_lexical_lookup", new=AsyncMock(return_value=(None, 0.0))
+            with patch.object(
+                faq_tools.vector_store, "search", new=AsyncMock(side_effect=fake_search)
             ):
                 await faq_search("как заблокировать карту", "ru")
                 await faq_search("как заблокировать карту", "ru")
 
-            assert embed_calls == 2
+            assert search_calls == 2
         finally:
             get_settings.cache_clear()
 

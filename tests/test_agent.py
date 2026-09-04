@@ -2472,20 +2472,20 @@ class TestFaqLookupNoMatch:
 # ---- Task 2: faq_search hybrid -------------------------------------------
 
 class TestFaqSearchBasics:
-    def test_exact_lexical_match_is_strict(self):
+    def test_rerank_pick_is_strict(self):
         from app.utils.faq_tools import faq_search
-        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[
-            {"q": "как заблокировать карту", "a": "Через приложение"}
-        ])), patch("app.utils.faq_tools._semantic_lookup", new=AsyncMock(return_value=[])):
+        from app.utils.vector_store import FaqHit
+        hits = [FaqHit(1, "ru", "как заблокировать карту", "Через приложение", 0.9)]
+        with patch("app.utils.faq_tools.vector_store.search", new=AsyncMock(return_value=hits)), \
+             patch("app.utils.faq_tools._llm_rerank", new=AsyncMock(return_value=(0, True))):
             result = _run(faq_search("как заблокировать карту", "ru"))
         assert result.tier == "strict"
         assert result.answer == "Через приложение"
-        assert 0.0 <= result.lex_score <= 1.0
+        assert 0.0 <= result.score <= 1.0
 
-    def test_no_items_returns_none_tier(self):
+    def test_no_candidates_returns_none_tier(self):
         from app.utils.faq_tools import faq_search
-        with patch("app.utils.faq_tools._load_faq_items", new=AsyncMock(return_value=[])), \
-             patch("app.utils.faq_tools._semantic_lookup", new=AsyncMock(return_value=[])):
+        with patch("app.utils.faq_tools.vector_store.search", new=AsyncMock(return_value=[])):
             result = _run(faq_search("anything", "ru"))
         assert result.answer is None
         assert result.tier == "none"

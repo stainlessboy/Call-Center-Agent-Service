@@ -105,6 +105,55 @@
       </div>
     </div>
 
+    <!-- Tariffs Card -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fa-solid fa-percent me-2"></i>
+            Тарифы (ставки)
+          </h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Процентные ставки по кредитным продуктам: одна строка &mdash; один тариф.
+            <br>Суммы, цели и залог берутся из файла продуктов и здесь не меняются.
+          </p>
+          <form method="post" enctype="multipart/form-data">
+            <input type="hidden" name="action" value="tariffs">
+            <div class="mb-3">
+              <label class="form-label">Режим импорта</label>
+              <div class="form-selectgroup">
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="replace" class="form-selectgroup-input" checked>
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-rotate me-1"></i> Перезаписать
+                  </span>
+                </label>
+                <label class="form-selectgroup-item">
+                  <input type="radio" name="mode" value="append" class="form-selectgroup-input">
+                  <span class="form-selectgroup-label">
+                    <i class="fa-solid fa-plus me-1"></i> Дополнить
+                  </span>
+                </label>
+              </div>
+              <small class="form-hint">Ручные тарифы, заведённые в админке, сохраняются в обоих режимах.</small>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Excel-файл тарифов (обязательно)</label>
+              <input type="file" name="tariffs_file" class="form-control" accept=".xlsx,.xls" required>
+              <small class="form-hint">Лист «Тарифы»: категория, продукт, тип дохода, срок, взнос, ставка.</small>
+            </div>
+            <button type="submit" class="btn btn-primary w-100"
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Импорт...'; this.form.submit();">
+              <i class="fa-solid fa-upload me-2"></i>
+              Импортировать тарифы
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
     <!-- FAQ Card -->
     <div class="col-lg-4">
       <div class="card">
@@ -248,22 +297,23 @@
         <div class="card-header">
           <h3 class="card-title">
             <i class="fa-solid fa-vector-square me-2"></i>
-            FAQ — пересчитать эмбеддинги
+            FAQ — переиндексировать поиск
           </h3>
         </div>
         <div class="card-body">
           <p class="text-muted mb-3">
-            Заполняет недостающие векторы для уже существующих FAQ-записей
-            (например, после миграции добавления pgvector). Идемпотентно —
-            повторное нажатие безопасно: пропустит то, что уже посчитано.
-            Стоимость: ~$0.001 на 100 записей × 3 языка.
+            Пересобирает поисковый индекс FAQ в Weaviate из базы, с нуля.
+            Нужно, если правки не попали в индекс (Weaviate был недоступен)
+            или базу восстанавливали из бэкапа мимо приложения. Повторное
+            нажатие безопасно. Векторы считает сам Weaviate — вызовов OpenAI
+            со стороны приложения нет.
           </p>
           <form method="post">
-            <input type="hidden" name="action" value="recompute_embeddings">
+            <input type="hidden" name="action" value="reindex_faq">
             <button type="submit" class="btn btn-outline-primary"
-                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Считаю...'; this.form.submit();">
+                    onclick="this.disabled=true; this.innerHTML='<span class=\'spinner-border spinner-border-sm me-2\'></span>Индексирую...'; this.form.submit();">
               <i class="fa-solid fa-arrows-rotate me-2"></i>
-              Пересчитать эмбеддинги
+              Переиндексировать FAQ
             </button>
           </form>
         </div>
