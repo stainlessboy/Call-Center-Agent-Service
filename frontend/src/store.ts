@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { api, type Bootstrap, type CalcResult, type Lang, type ProductDetail, type ThemeName } from './api'
 import { translate } from './i18n'
 import { applyStoredTheme } from './telegram'
+import type { UiBlock } from './uiBlocks'
 
 /* ── Navigation ──────────────────────────────────────────────────────── */
 
@@ -235,12 +236,35 @@ export interface ChatEntry {
   id: string
   role: ChatRole
   text: string
+  /** Structured cards under an agent reply (see uiBlocks.ts). */
+  blocks?: UiBlock[]
   pending?: boolean
   failed?: boolean
   at: number
 }
 
 export type ChatMode = 'bot' | 'queue' | 'operator'
+
+/**
+ * Streaming-bubble lifecycle for a bot turn (tokens arrive over the WS,
+ * the final message over the POST response — either may land first):
+ *
+ *   idle ──send()──▶ accepting ──assistant_done──▶ closed ─┐
+ *     ▲                  │                                 │
+ *     └──── POST reply (streamFinalize) ◀──────────────────┘
+ *
+ * - `accepting`: assistant_token events append to `text` (live bubble).
+ * - `closed`: assistant_done arrived before the POST reply — the bubble
+ *   freezes and keeps showing the accumulated text until the POST lands.
+ * - `streamFinalize` (POST landed): the final message (text + blocks)
+ *   replaces the bubble in the same store update, so there is no frame
+ *   where both are visible. Any token arriving in `idle` is a straggler
+ *   from an already-finalized turn and is dropped.
+ */
+export interface StreamState {
+  phase: 'idle' | 'accepting' | 'closed'
+  text: string
+}
 
 interface ChatState {
   messages: ChatEntry[]
@@ -251,6 +275,10 @@ interface ChatState {
   showOperatorButton: boolean
   askRating: boolean
   loaded: boolean
+  stream: StreamState
+  /** Monotonic turn id — a finalize from a superseded turn must not clobber
+   * the live slot of a newer one (rapid consecutive sends). */
+  streamTurn: number
   setAll: (messages: ChatEntry[]) => void
   add: (entry: ChatEntry) => void
   update: (id: string, patch: Partial<ChatEntry>) => void
@@ -260,6 +288,15 @@ interface ChatState {
   setShowOperatorButton: (show: boolean) => void
   setAskRating: (ask: boolean) => void
   setLoaded: (loaded: boolean) => void
+  /** Open the streaming slot for a new turn; returns its turn id. */
+  streamBegin: () => number
+  streamToken: (chunk: string) => void
+  streamDone: () => void
+  /** Close the live bubble and, in the same update, append the final
+   * message — the atomicity prevents a flash of bubble+final together.
+   * With a stale `turn` (a newer send already began) the final message is
+   * still appended, but the newer turn's live slot is left untouched. */
+  streamFinalize: (final?: ChatEntry, turn?: number) => void
 }
 
 export const useChat = create<ChatState>((set) => ({
@@ -271,6 +308,8 @@ export const useChat = create<ChatState>((set) => ({
   showOperatorButton: false,
   askRating: false,
   loaded: false,
+  stream: { phase: 'idle', text: '' },
+  streamTurn: 0,
   setAll: (messages) => set({ messages }),
   add: (entry) => set((s) => ({ messages: [...s.messages, entry] })),
   update: (id, patch) =>
@@ -282,6 +321,29 @@ export const useChat = create<ChatState>((set) => ({
   setShowOperatorButton: (showOperatorButton) => set({ showOperatorButton }),
   setAskRating: (askRating) => set({ askRating }),
   setLoaded: (loaded) => set({ loaded }),
+  streamBegin: () => {
+    let turn = 0
+    set((s) => {
+      turn = s.streamTurn + 1
+      return { streamTurn: turn, stream: { phase: 'accepting', text: '' } }
+    })
+    return turn
+  },
+  streamToken: (chunk) =>
+    set((s) =>
+      s.stream.phase === 'accepting'
+        ? { stream: { phase: 'accepting', text: s.stream.text + chunk } }
+        : s,
+    ),
+  streamDone: () =>
+    set((s) =>
+      s.stream.phase === 'accepting' ? { stream: { phase: 'closed', text: s.stream.text } } : s,
+    ),
+  streamFinalize: (final, turn) =>
+    set((s) => ({
+      messages: final ? [...s.messages, final] : s.messages,
+      stream: turn == null || turn === s.streamTurn ? { phase: 'idle', text: '' } : s.stream,
+    })),
 }))
 
 /* ── Lead ────────────────────────────────────────────────────────────── */

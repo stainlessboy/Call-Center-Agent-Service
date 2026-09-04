@@ -177,3 +177,37 @@ def format_branches_list(objs: List[OfficeObj], lang: str = "ru") -> str:
     if not objs:
         return ""
     return "\n\n".join(format_branch_card(o, lang) for o in objs)
+
+
+# ---------------------------------------------------------------------------
+# ui_blocks serialization (Mini App, Phase 3 — see docs/MINIAPP.md "UI blocks")
+# ---------------------------------------------------------------------------
+
+def office_public_dict(obj: OfficeObj) -> dict:
+    """JSON-safe office dict for ui_blocks (office_list / office_detail).
+
+    Raw bilingual fields (ru/uz — there is no name_en/address_en in the
+    source data) plus coordinates, left for the Mini App to localize and
+    render its own map/card, mirroring how product dicts carry name/name_en/
+    name_uz instead of a pre-picked string. `landmark_*`/`region_*`/
+    `location_url` only exist on some office types — `getattr(..., None)`
+    keeps this one function generic across Filial/SalesOffice/SalesPoint
+    instead of three near-duplicate serializers.
+    """
+    return {
+        "id": obj.id,
+        "office_type": obj.OFFICE_TYPE_CODE,
+        "name_ru": obj.name_ru,
+        "name_uz": getattr(obj, "name_uz", None),
+        "address_ru": obj.address_ru,
+        "address_uz": getattr(obj, "address_uz", None),
+        "region_ru": getattr(obj, "region_ru", None),
+        "region_uz": getattr(obj, "region_uz", None),
+        "landmark_ru": getattr(obj, "landmark_ru", None),
+        "landmark_uz": getattr(obj, "landmark_uz", None),
+        "location_url": getattr(obj, "location_url", None),
+        "latitude": obj.latitude,
+        "longitude": obj.longitude,
+        "phone": obj.phone,
+        "hours": obj.hours,
+    }

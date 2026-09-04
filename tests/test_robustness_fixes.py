@@ -54,7 +54,7 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.nodes import faq as faq_module
         from app.agent.state import _default_dialog
 
-        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: None)
         # The deterministic pre-check now goes through faq_precheck_answer
         # (stricter: both legs must be strict) — stub it to miss so the guard
         # path (_faq_lookup) below is what's actually under test.
@@ -84,7 +84,7 @@ class TestNodeFaqNoneLLMGuard:
         from app.agent.nodes import faq as faq_module
         from app.agent.state import _default_dialog
 
-        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: None)
         # node_faq's deterministic pre-check now goes through the stricter
         # faq_precheck_answer (both legs must be strict) — stub it to miss so
         # we actually reach the None-LLM guard, whose own (single-leg)
@@ -117,8 +117,8 @@ class TestFaqSearchTurnCache:
     async def test_second_identical_call_is_cached_after_reset(self, monkeypatch):
         """Within a turn (reset_faq_turn_cache called once), a second
         faq_search call with the same (query, language) must not re-run the
-        embedding call."""
-        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        retrieval + rerank."""
+        monkeypatch.setenv("FAQ_RERANK_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
@@ -126,26 +126,24 @@ class TestFaqSearchTurnCache:
         from app.utils import faq_tools
         from app.utils.faq_tools import faq_search, reset_faq_turn_cache
 
-        embed_calls = 0
+        search_calls = 0
 
-        async def fake_embed_texts(texts):
-            nonlocal embed_calls
-            embed_calls += 1
-            # None vector short-circuits _semantic_lookup before it touches
-            # the DB — we only care about the embed_texts call count here.
-            return [None for _ in texts]
+        async def fake_search(query, language=None, limit=None):
+            nonlocal search_calls
+            search_calls += 1
+            # An empty candidate list short-circuits before the rerank — we
+            # only care about how often the retrieval leg is entered here.
+            return []
 
         try:
-            with patch(
-                "app.utils.embeddings.embed_texts", new=AsyncMock(side_effect=fake_embed_texts)
-            ), patch.object(
-                faq_tools, "_lexical_lookup", new=AsyncMock(return_value=(None, 0.0))
+            with patch.object(
+                faq_tools.vector_store, "search", new=AsyncMock(side_effect=fake_search)
             ):
                 reset_faq_turn_cache()
                 await faq_search("как заблокировать карту", "ru")
                 await faq_search("как заблокировать карту", "ru")
 
-            assert embed_calls == 1
+            assert search_calls == 1
         finally:
             get_settings.cache_clear()
 
@@ -153,9 +151,9 @@ class TestFaqSearchTurnCache:
     async def test_not_cached_without_reset(self, monkeypatch):
         """Without an active turn cache (contextvar left at its default
         None), faq_search must behave exactly as before — every call hits
-        the embedding leg fresh. This proves non-agent callers (tests,
-        scripts) are unaffected by the memoization."""
-        monkeypatch.setenv("FAQ_EMBEDDING_ENABLED", "true")
+        retrieval fresh. This proves non-agent callers (tests, scripts) are
+        unaffected by the memoization."""
+        monkeypatch.setenv("FAQ_RERANK_ENABLED", "true")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
         from app.config import get_settings
         get_settings.cache_clear()
@@ -166,23 +164,21 @@ class TestFaqSearchTurnCache:
         # Make sure no turn-cache is active regardless of test execution order.
         faq_tools._faq_turn_cache.set(None)
 
-        embed_calls = 0
+        search_calls = 0
 
-        async def fake_embed_texts(texts):
-            nonlocal embed_calls
-            embed_calls += 1
-            return [None for _ in texts]
+        async def fake_search(query, language=None, limit=None):
+            nonlocal search_calls
+            search_calls += 1
+            return []
 
         try:
-            with patch(
-                "app.utils.embeddings.embed_texts", new=AsyncMock(side_effect=fake_embed_texts)
-            ), patch.object(
-                faq_tools, "_lexical_lookup", new=AsyncMock(return_value=(None, 0.0))
+            with patch.object(
+                faq_tools.vector_store, "search", new=AsyncMock(side_effect=fake_search)
             ):
                 await faq_search("как заблокировать карту", "ru")
                 await faq_search("как заблокировать карту", "ru")
 
-            assert embed_calls == 2
+            assert search_calls == 2
         finally:
             get_settings.cache_clear()
 
@@ -390,7 +386,7 @@ class TestCalcFlowFallbackStreakE2E:
 
         # No LLM available → extract_calc_value degrades to {"type": "unparsed"}
         # deterministically, without hitting the network.
-        monkeypatch.setattr(calc_extractor, "_get_chat_openai", lambda: None)
+        monkeypatch.setattr(calc_extractor, "_get_chat_openai", lambda role=None: None)
 
         dialog = {
             **_default_dialog(),
@@ -593,23 +589,25 @@ class TestCustomLoanCalculatorSanityCaps:
     async def test_excessive_term_returns_range_message_not_crash(self):
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000, term_months=3600, downpayment=0, state={"lang": "ru"},
         )
 
         assert result
         assert "600" in result  # states the allowed max term in months
+        assert artifact is None
 
     @pytest.mark.asyncio
     async def test_excessive_amount_returns_range_message_not_crash(self):
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000_000, term_months=60, downpayment=0, state={"lang": "ru"},
         )
 
         assert result
         assert "10 000 000 000" in result
+        assert artifact is None
 
     @pytest.mark.asyncio
     async def test_within_bounds_still_computes_normally(self):
@@ -619,9 +617,12 @@ class TestCustomLoanCalculatorSanityCaps:
         a coincidental/fragile assertion)."""
         from app.agent.tools import custom_loan_calculator
 
-        result = await custom_loan_calculator.coroutine(
+        result, artifact = await custom_loan_calculator.coroutine(
             amount=50_000_000, term_months=60, downpayment=0, state={"lang": "ru"},
         )
 
         assert "слишком" not in result
         assert "50 000 000" in result
+        assert artifact["type"] == "calc_result"
+        assert artifact["data"]["schedule"]
+        assert len(artifact["data"]["schedule"]) == 60

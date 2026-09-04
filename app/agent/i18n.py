@@ -73,8 +73,9 @@ _SYSTEM_POLICY_RU = """## РОЛЬ
 - Поиск офиса (используй `find_office`)
 
 `faq_lookup` возвращает:
-- Текст ответа — передай его клиенту.
-- Строку `FAQ_LOW_CONFIDENCE` или `NO_MATCH_IN_FAQ` — уверенного ответа нет. В ОБОИХ случаях:
+- Текст ответа — уверенный ответ найден в базе. Перескажи его своими словами, естественно, на языке клиента — но сохрани ВСЕ факты, цифры, ставки, сроки, условия и ссылки ТОЧНО как в источнике. Ничего от себя не добавляй.
+- Строку `FAQ_LOW_CONFIDENCE` с ближайшими вопросами FAQ И их ответами — уверенного совпадения нет, но есть кандидаты. Если один из них явно отвечает на вопрос клиента — ответь по нему В ЭТОМ ЖЕ ходу (тем же способом: своими словами, факты точно как в источнике), НЕ вызывай `faq_lookup` повторно ради этого. Если ни один не подходит — переходи к следующему пункту.
+- Строку `NO_MATCH_IN_FAQ` (в том числе если ни один кандидат из `FAQ_LOW_CONFIDENCE` не подошёл):
   - Если вопрос — ОБЩАЯ финансово-банковская тема (термин, определение, как работает аннуитет, что такое первоначальный взнос/ESCROW/APR, типичная процедура): ответь сам — кратко, на языке клиента, ПО СУЩЕСТВУ. Никогда не выдумывай конкретику банка: ставки, тарифы, сроки, названия продуктов, адреса филиалов, списки документов — всё, чего НЕТ в результатах инструментов. НЕ добавляй сам дисклеймер про оператора и не пиши «это общий ответ» — система автоматически обернёт твой ответ шапкой «Ассистент» и припиской про оператора.
   - Если вопрос узко-банковский и ты не можешь на него ответить — честно скажи, что пока не располагаешь этой информацией. Система сама покажет кнопку оператора после пары безрезультатных ответов. Сам зови `request_operator` только если клиент явно просит живого человека.
 
@@ -93,6 +94,16 @@ XML-блок `<state>` в этом промте несёт текущий диа
 - `<offices>` — пронумерованный список офисов, который сейчас показан после вызова `find_office`
 - `<selected_office>` — офис, который клиент выбрал
 Если клиент прислал только число («2»), сопоставь его с продуктом по этому индексу через `select_product`.
+
+## ПЕРСОНА И СТИЛЬ
+Ты — персональный консультант банка Asaka: тёплый профессионал, а не «бот» и не справочная система. Клиент должен чувствовать, что с ним разговаривает живой сотрудник, который на его стороне.
+- **Эмпатия перед фактами.** Если клиент описывает свою ситуацию (беспокойство о сумме, спешка, отказ, неприятная история) — сначала коротко по-человечески признай это одной фразой, потом переходи к сути. Не превращай это в отдельный ритуал на каждый ход — только когда в сообщении клиента есть эмоция или контекст, который стоит признать.
+- **Простой язык.** Банковский термин (аннуитет, первоначальный взнос, эскроу, годовая ставка и т.п.) при первом употреблении в разговоре поясняй одной короткой фразой в скобках — дальше можно использовать термин свободно.
+- **Всегда предлагай следующий шаг.** Каждый ответ завершай конкретным действием или вопросом («Хотите, рассчитаю ваш платёж?», «Показать ближайший офис?») — КРОМЕ случаев, когда клиент явно прощается или закрывает тему. Это не должно звучать как навязчивая допродажа — один естественный шаг, не список вариантов.
+- **Не дави.** Одно предложение за один ход. Если клиент промолчал в ответ на предложение или сменил тему — не повторяй его снова.
+- **Финансовая забота (усиление правила про 40-50%).** Если из разговора известен доход клиента, а обсуждаемый ежемесячный платёж превышает примерно 45% этого дохода — обязательно мягко предупреди об этом (одна фраза, без нотаций) и предложи вариант с меньшим платежом (больше срок, меньше сумма, меньше взнос). Это не отменяет запрет придумывать ставки/цифры — предупреждение о нагрузке на бюджет и есть твоя обязанность, а не выдумка.
+- **Уместный cross-sell.** После УСПЕШНОГО расчёта платежа или выбора конкретного продукта можно сделать РОВНО ОДНО смежное предложение (ипотека → страхование жилья или карта для платежей; вклад → карта, чтобы удобно получать проценты; автокредит → карта для платежей). Только если клиент ранее явно не отказывался от допродажи в этом разговоре. Если клиент отказался или проигнорировал — больше не предлагай в этом диалоге.
+Эта персона не отменяет ни одно из правил выше: ты по-прежнему никогда не обещаешь звонок/принятие заявки от своего имени, никогда не выдумываешь ставки, продукты, сроки или адреса, никогда не запрашиваешь персональные данные напрямую — тёплый тон касается ТОЛЬКО формы ответа, не его достоверности.
 """
 
 
@@ -158,8 +169,9 @@ EXCEPTIONS — do NOT call `faq_lookup`:
 - Office lookup (use `find_office`)
 
 `faq_lookup` returns:
-- Answer text — pass it to the user.
-- The literal string `FAQ_LOW_CONFIDENCE` or `NO_MATCH_IN_FAQ` — no confident match. In BOTH cases:
+- Answer text — a confident match was found. Rephrase it naturally, in your own words, in the customer's language — but keep every fact, number, rate, term, condition and link EXACTLY as given in the source. Never add anything of your own.
+- The literal string `FAQ_LOW_CONFIDENCE` with the closest FAQ entries AND their answers — no confident match, but there are candidates. If one of them clearly answers the customer's question, answer from it in THIS SAME turn (same rule: your own words, facts exactly as given) — do NOT call `faq_lookup` again for it. If none of them fits, move to the next bullet.
+- The literal string `NO_MATCH_IN_FAQ` (including when none of the `FAQ_LOW_CONFIDENCE` candidates fit):
   - If the question is GENERAL banking knowledge (a definition, how-it-works, what is annuity / downpayment / escrow / APR, the typical flow of taking a loan, common financial terms): answer it yourself — briefly and to the point, in the user's language. Never invent bank-specific facts: rates, fees, term lengths, product names, branch addresses, document lists, or anything else that is NOT in the tool results. DO NOT add a disclaimer about contacting an operator or note that "this is general information" — the system automatically wraps your answer with an "Assistant" header and the operator disclaimer.
   - If the question is bank-specific and you cannot answer it — say plainly that you don't have that information yet. The system surfaces an operator button automatically after a couple of unhelpful turns. Only call `request_operator` yourself if the user explicitly asks for a human.
 
@@ -178,6 +190,16 @@ The `<state>` XML block in this prompt carries the current dialog:
 - `<offices>` — numbered list of offices shown after `find_office`
 - `<selected_office>` — the office the user selected
 If the user sends just a number ("2"), map it to the product at that index via `select_product`.
+
+## PERSONA & STYLE
+You are a personal consultant at Asaka Bank: a warm professional, not a "bot" and not a lookup service. The customer should feel they are talking to a real staff member who is on their side.
+- **Empathy before facts.** If the customer describes their situation (worried about the amount, in a hurry, unhappy, a bad prior experience) — acknowledge it in one short human sentence first, then move to the substance. Don't turn this into a ritual on every turn — only when the customer's message carries an emotion or context worth acknowledging.
+- **Plain language.** The first time you use a banking term in the conversation (annuity, down payment, escrow, APR, etc.), explain it in one short parenthetical — after that you can use the term freely.
+- **Always offer the next step.** End every reply with a concrete action or question ("Want me to calculate your payment?", "Show you the nearest branch?") — EXCEPT when the customer is clearly saying goodbye or closing the topic. This must read as one natural next step, not a pushy list of options.
+- **Don't push.** One suggestion per turn. If the customer ignored a suggestion or changed the subject, don't repeat it.
+- **Financial care (reinforces the 40-50% rule above).** If the customer's income is known from the conversation and the monthly payment being discussed exceeds roughly 45% of it — you MUST gently flag this (one sentence, no lecturing) and offer an option with a smaller payment (longer term, smaller amount, larger down payment). This does not license inventing rates or numbers — flagging budget strain is your duty, not a guess.
+- **Light cross-sell.** After a SUCCESSFUL payment calculation or product selection, you may make EXACTLY ONE related suggestion (mortgage → home insurance or a card for payments; deposit → a card for convenient interest payouts; auto loan → a card for payments). Only if the customer has not already declined a cross-sell earlier in this conversation. If they decline or ignore it, do not offer again in this conversation.
+This persona does not override any rule above: you still never promise a callback or accepted application on your own behalf, never invent rates, products, terms or addresses, and never ask for personal data directly — the warm tone changes ONLY the form of the reply, never its accuracy.
 """
 
 
@@ -246,8 +268,9 @@ ISTISNOLAR — `faq_lookup` ni chaqirMANG:
 - Ofis qidirish (`find_office` ishlating)
 
 `faq_lookup` uchta narsadan birini qaytaradi:
-- Javob matni — uni mijozga yuboring.
-- `FAQ_LOW_CONFIDENCE` yoki `NO_MATCH_IN_FAQ` satri — ishonchli moslik yo'q. IKKALA holatda ham:
+- Javob matni — bazadan ishonchli javob topildi. Uni o'z so'zlaringiz bilan, tabiiy tarzda, mijoz tilida qayta bering — lekin barcha faktlar, raqamlar, stavkalar, muddatlar, shartlar va havolalarni manbadagidek ANIQ saqlang. O'zingizdan hech narsa qo'shmang.
+- `FAQ_LOW_CONFIDENCE` satri — eng yaqin FAQ savollari VA ularning javoblari bilan birga — ishonchli moslik yo'q, lekin nomzodlar bor. Agar ulardan biri mijozning savoliga aniq javob bersa — SHU javobda o'sha nomzoddan foydalanib javob bering (xuddi shu qoida: o'z so'zlaringiz bilan, faktlar manbadagidek aniq), buning uchun `faq_lookup` ni qayta chaqirMANG. Agar hech biri mos kelmasa — keyingi bandga o'ting.
+- `NO_MATCH_IN_FAQ` satri (shu jumladan `FAQ_LOW_CONFIDENCE` nomzodlaridan hech biri mos kelmagan holat ham):
   - Agar savol UMUMIY bank/moliya bilimi bo'lsa (ta'rif, qanday ishlaydi, annuitet nima, boshlang'ich to'lov nima, ESCROW/APR nima, kredit olishning odatiy tartibi, umumiy bank atamalari): foydalanuvchi tilida qisqa va aniq javob bering. Bank haqidagi aniq ma'lumotlarni HECH QACHON o'ylab topmang: foiz stavkalari, tariflar, muddatlar, mahsulot nomlari, filial manzillari, hujjatlar ro'yxati — natijalarda BO'LMAGAN hech narsani. O'zingiz operator haqida eslatma yoki "bu umumiy javob" izohini QO'SHMANG — tizim sizning javobingizni avtomatik ravishda "Yordamchi" sarlavhasi va operator haqida eslatma bilan o'rab oladi.
   - Agar savol mahsus bank-savol bo'lsa va siz javob berolmasangiz — bu ma'lumot hozircha sizda yo'qligini ochiq ayting. Bir necha foydasiz javobdan keyin tizim operator tugmasini avtomatik ko'rsatadi. O'zingiz `request_operator` ni faqat mijoz aniq jonli odam so'raganda chaqiring.
 
@@ -266,6 +289,16 @@ Ushbu promtdagi `<state>` XML bloki joriy dialogni saqlaydi:
 - `<offices>` — `find_office` chaqirilgandan keyin ko'rsatilgan raqamlangan ofislar ro'yxati
 - `<selected_office>` — mijoz tanlagan ofis
 Mijoz faqat raqam ("2") yuborsa, uni shu indeksdagi mahsulot bilan `select_product` orqali moslang.
+
+## PERSONA VA USLUB
+Siz Asaka bankining shaxsiy maslahatchisisiz: iliq professional, "bot" yoki ma'lumot xizmati emas. Mijoz o'zi bilan haqiqiy xodim gaplashayotganini, u mijoz tomonida ekanligini his qilishi kerak.
+- **Faktlardan oldin empatiya.** Agar mijoz o'z vaziyatini tasvirlasa (summa haqida tashvish, shoshilinch holat, noroziligi, oldingi yoqimsiz tajriba) — avval bir qisqa insoniy jumla bilan buni tan oling, keyin mohiyatga o'ting. Buni har bir qadamda takrorlanadigan rasmga aylantirmang — faqat mijoz xabarida tan olishga arziydigan hissiyot yoki kontekst bo'lsa.
+- **Oddiy til.** Suhbatda bank atamasini (annuitet, boshlang'ich to'lov, eskrou, yillik stavka va h.k.) birinchi marta ishlatganingizda, uni bitta qisqa qavs ichidagi jumla bilan tushuntiring — keyin atamani erkin ishlatishingiz mumkin.
+- **Har doim keyingi qadamni taklif qiling.** Har bir javobni aniq harakat yoki savol bilan yakunlang ("To'lovingizni hisoblab beraymi?", "Eng yaqin filialni ko'rsataymi?") — mijoz aniq xayrlashayotgan yoki mavzuni yopayotgan hollar BUNDAN MUSTASNO. Bu zo'rlab sotish kabi eshitilmasligi kerak — bitta tabiiy qadam, variantlar ro'yxati emas.
+- **Bosim o'tkazmang.** Bir qadamda bitta taklif. Agar mijoz taklifga javob bermagan yoki mavzuni o'zgartirgan bo'lsa — uni qayta takrorlamang.
+- **Moliyaviy g'amxo'rlik (yuqoridagi 40-50% qoidasini kuchaytiradi).** Agar suhbatdan mijozning daromadi ma'lum bo'lsa va muhokama qilinayotgan oylik to'lov undan taxminan 45% dan oshsa — buni albatta muloyimlik bilan ogohlantiring (bitta jumla, va'z aytmasdan) va kichikroq to'lovli variantni taklif qiling (uzunroq muddat, kichikroq summa, kattaroq boshlang'ich to'lov). Bu stavka yoki raqamlarni o'ylab topishga ruxsat bermaydi — byudjetga yuk haqida ogohlantirish sizning majburiyatingiz, taxmin emas.
+- **O'rinli cross-sell.** MUVAFFAQIYATLI to'lov hisob-kitobidan yoki mahsulot tanlovidan keyin FAQAT BITTA tegishli taklif qilishingiz mumkin (ipoteka → uy-joy sug'urtasi yoki to'lovlar uchun karta; omonat → foizni qulay olish uchun karta; avtokredit → to'lovlar uchun karta). Faqat mijoz shu suhbatda avval cross-sell dan aniq voz kechmagan bo'lsa. Agar u voz kechsa yoki e'tiborsiz qoldirsa — shu suhbatda boshqa taklif qilmang.
+Bu persona yuqoridagi hech qanday qoidani bekor qilmaydi: siz hamon o'z nomingizdan qo'ng'iroq yoki qabul qilingan arizani va'da qilmaysiz, stavka, mahsulot, muddat yoki manzillarni o'ylab topmaysiz, shaxsiy ma'lumotlarni to'g'ridan-to'g'ri so'ramaysiz — iliq ohang FAQAT javobning shaklini o'zgartiradi, uning to'g'riligini emas.
 """
 
 
@@ -465,6 +498,36 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "Unfortunately, no products were found for the selected conditions.",
         "uz": "Afsuski, tanlangan shartlar bo'yicha mos mahsulotlar topilmadi.",
     },
+    "qualify_prefill_prefix": {
+        "ru": "Исходя из того, что {fact}, пропущу пару вопросов.\n\n",
+        "en": "Since {fact}, I'll skip a couple of questions.\n\n",
+        "uz": "{fact} bo'lgani uchun, bir nechta savolni o'tkazib yuboraman.\n\n",
+    },
+    "qualify_prefill_income_payroll": {
+        "ru": "вы получаете зарплату на карту Asaka Bank",
+        "en": "your salary is paid to an Asaka Bank card",
+        "uz": "maoshingiz Asaka Bank kartasiga tushadi",
+    },
+    "qualify_prefill_income_official": {
+        "ru": "у вас официальная зарплата",
+        "en": "you have an official salary",
+        "uz": "sizda rasmiy ish haqi bor",
+    },
+    "qualify_prefill_income_no_official": {
+        "ru": "вы работаете без официального трудоустройства",
+        "en": "you work without official employment",
+        "uz": "siz rasmiy ishga joylashmasdan ishlaysiz",
+    },
+    "qualify_prefill_currency": {
+        "ru": "вам удобнее в {currency}",
+        "en": "{currency} works better for you",
+        "uz": "sizga {currency} qulayroq",
+    },
+    "qualify_prefill_generic": {
+        "ru": "у нас уже есть информация о вас",
+        "en": "we already have some information about you",
+        "uz": "siz haqingizda bizda allaqachon ma'lumot bor",
+    },
     "qualify_no_offers": {
         "ru": "К сожалению, у нас нет предложений по данным условиям.",
         "en": "Unfortunately, we have no offers for these conditions.",
@@ -559,6 +622,38 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "Choose a product category.",
         "uz": "Mahsulot toifasini tanlang.",
     },
+
+    # ── recommend_product tool ─────────────────────────────────────────────
+    "recommend_no_goal": {
+        "ru": "Расскажите чуть подробнее, что вы хотите — например, накопить, купить квартиру или машину — и я подберу подходящий продукт.",
+        "en": "Tell me a bit more about what you're aiming for — saving up, buying a home or a car — and I'll find a matching product.",
+        "uz": "Nima uchun maqsad qo'yganingizni birroz batafsil ayting — jamg'arish, uy yoki mashina olish — men mos mahsulotni topib beraman.",
+    },
+    "recommend_top_header": {
+        "ru": "Под вашу цель лучше всего подходит ({category}):",
+        "en": "For your goal, this fits best ({category}):",
+        "uz": "Maqsadingiz uchun eng mosi ({category}):",
+    },
+    "recommend_alt_header": {
+        "ru": "Также можно рассмотреть:",
+        "en": "You could also consider:",
+        "uz": "Shuningdek quyidagini ham ko'rib chiqishingiz mumkin:",
+    },
+    "recommend_footer": {
+        "ru": "Рассказать подробнее об одном из них или сразу посчитать платёж?",
+        "en": "Want more details on one of these, or shall I calculate the payment right away?",
+        "uz": "Ulardan biri haqida batafsil aytaymi yoki darhol to'lovni hisoblaymi?",
+    },
+    "recommend_reason_best_rate": {
+        "ru": "самая низкая ставка",
+        "en": "lowest rate",
+        "uz": "eng past stavka",
+    },
+    "recommend_reason_age_fit": {
+        "ru": "подходит по возрасту",
+        "en": "fits your age",
+        "uz": "yoshingizga mos",
+    },
     "compare_header": {
         "ru": "Продукты нашего банка:\n{products}\n\nСравни только продукты из списка. Не упоминай другие банки.",
         "en": "Our bank's products:\n{products}\n\nCompare only the products from this list. Do not mention other banks.",
@@ -645,6 +740,21 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "en": "Alright, stopped the questionnaire. How can I help you?",
         "uz": "Xo'p, so'rovnomani to'xtatdim. Sizga qanday yordam bera olaman?",
     },
+
+    # ── Recap (resuming a stale in-progress flow) ─────────────────────────
+    "recap_offer": {
+        "ru": "С возвращением! Продолжим с того места, где остановились — {description}?",
+        "en": "Welcome back! Shall we continue where we left off — {description}?",
+        "uz": "Xush kelibsiz! To'xtagan joyimizdan davom etamizmi — {description}?",
+    },
+    "recap_generic_progress": {
+        "ru": "оформление заявки",
+        "en": "your application",
+        "uz": "arizangiz",
+    },
+    "btn_recap_continue": {"ru": "▶️ Продолжить", "en": "▶️ Continue", "uz": "▶️ Davom etish"},
+    "btn_recap_restart": {"ru": "🔄 Начать заново", "en": "🔄 Start over", "uz": "🔄 Qaytadan boshlash"},
+    "btn_recap_other": {"ru": "❓ Другой вопрос", "en": "❓ Different question", "uz": "❓ Boshqa savol"},
 
     # ── Calc side-question prompt ─────────────────────────────────────────
     "calc_side_system": {
@@ -804,6 +914,7 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
 
     # ── Product card labels ───────────────────────────────────────────────
     "label_rate": {"ru": "📊 Ставка", "en": "📊 Rate", "uz": "📊 Stavka"},
+    "label_personal_rate": {"ru": "✨ Для вас", "en": "✨ For you", "uz": "✨ Siz uchun"},
     "label_amount": {"ru": "💰 Сумма", "en": "💰 Amount", "uz": "💰 Summa"},
     "label_term": {"ru": "📅 Срок", "en": "📅 Term", "uz": "📅 Muddat"},
     "label_downpayment": {"ru": "💵 Первый взнос", "en": "💵 Down payment", "uz": "💵 Boshlang'ich to'lov"},
@@ -954,6 +1065,135 @@ AGENT_TEXTS: dict[str, dict[str, str]] = {
         "ru": "Можете ответить:",
         "en": "You can answer:",
         "uz": "Quyidagicha javob berishingiz mumkin:",
+    },
+
+    # ── compare_products tool (Phase 4 "Экспертиза") ───────────────────────
+    "compare_title": {
+        "ru": "📊 Сравнение продуктов",
+        "en": "📊 Product comparison",
+        "uz": "📊 Mahsulotlarni solishtirish",
+    },
+    "compare_footer": {
+        "ru": "Рассказать подробнее о каком-то одном из них или сразу посчитать платёж?",
+        "en": "Want more detail on one of these, or shall I calculate the payment right away?",
+        "uz": "Ulardan biri haqida batafsil aytaymi yoki darhol to'lovni hisoblaymi?",
+    },
+    "compare_no_products": {
+        "ru": "Пока не вижу продуктов для сравнения — сначала покажите список, например «покажи ипотеки».",
+        "en": "I don't see any products to compare yet — first show a list, e.g. \"show me mortgages\".",
+        "uz": "Solishtirish uchun mahsulotlar hali ko'rinmayapti — avval ro'yxatni ko'rsating, masalan «ipotekalarni ko'rsat».",
+    },
+    "compare_not_enough_products": {
+        "ru": "Не смог сопоставить минимум два продукта из вашего запроса. Доступные варианты: {names}",
+        "en": "I couldn't match at least two products from your request. Available options: {names}",
+        "uz": "So'rovingizdan kamida ikkita mahsulotni aniqlay olmadim. Mavjud variantlar: {names}",
+    },
+
+    # ── what_if_scenario tool (Phase 4) ─────────────────────────────────────
+    "what_if_no_product": {
+        "ru": "Уточните, о каком продукте гипотетический расчёт — выберите его из списка или назовите.",
+        "en": "Let me know which product this hypothetical is for — pick it from the list or name it.",
+        "uz": "Qaysi mahsulot bo'yicha gipotetik hisob-kitob ekanini ayting — ro'yxatdan tanlang yoki nomini ayting.",
+    },
+    "what_if_missing_params": {
+        "ru": "Для гипотетического расчёта укажите хотя бы сумму и срок.",
+        "en": "For a what-if calculation, please give at least the amount and the term.",
+        "uz": "Gipotetik hisob-kitob uchun kamida summa va muddatni ko'rsating.",
+    },
+    "what_if_not_for_deposit": {
+        "ru": "Такой сценарий доступен для кредитных продуктов. Для вклада используйте обычный калькулятор вклада.",
+        "en": "This scenario is available for credit products. For a deposit, please use the regular deposit calculator.",
+        "uz": "Bu stsenariy kredit mahsulotlari uchun mavjud. Omonat uchun oddiy omonat kalkulyatoridan foydalaning.",
+    },
+    "what_if_invalid_amounts": {
+        "ru": "Укажите корректные суммы: сумма должна быть больше первоначального взноса.",
+        "en": "Please provide valid amounts: the amount must exceed the down payment.",
+        "uz": "Iltimos, to'g'ri summalarni kiriting: summa boshlang'ich to'lovdan katta bo'lishi kerak.",
+    },
+    "what_if_result": {
+        "ru": (
+            "<b>Гипотетический расчёт{product_suffix}</b>\n\n"
+            "💰 Сумма: {amount} сум\n"
+            "💵 Первоначальный взнос: {downpayment} сум ({dp_pct}%)\n"
+            "📅 Срок: {term} мес.\n"
+            "📊 Ставка: {rate}% годовых\n\n"
+            "📆 Ежемесячный платёж: <b>{monthly} сум</b>\n"
+            "💳 Общая выплата: {total} сум\n"
+            "📈 Переплата: {overpayment} сум\n\n"
+            "<i>Это предварительный сценарий — он не сохраняется как ваш активный расчёт.</i>"
+        ),
+        "en": (
+            "<b>What-if calculation{product_suffix}</b>\n\n"
+            "💰 Amount: {amount} UZS\n"
+            "💵 Down payment: {downpayment} UZS ({dp_pct}%)\n"
+            "📅 Term: {term} months\n"
+            "📊 Rate: {rate}% per annum\n\n"
+            "📆 Monthly payment: <b>{monthly} UZS</b>\n"
+            "💳 Total payout: {total} UZS\n"
+            "📈 Overpayment: {overpayment} UZS\n\n"
+            "<i>This is a preview scenario — it is not saved as your active calculation.</i>"
+        ),
+        "uz": (
+            "<b>Gipotetik hisob-kitob{product_suffix}</b>\n\n"
+            "💰 Summa: {amount} so'm\n"
+            "💵 Boshlang'ich to'lov: {downpayment} so'm ({dp_pct}%)\n"
+            "📅 Muddat: {term} oy\n"
+            "📊 Stavka: {rate}% yillik\n\n"
+            "📆 Oylik to'lov: <b>{monthly} so'm</b>\n"
+            "💳 Jami to'lov: {total} so'm\n"
+            "📈 Ortiqcha to'lov: {overpayment} so'm\n\n"
+            "<i>Bu — dastlabki stsenariy, u sizning faol hisobingiz sifatida saqlanmaydi.</i>"
+        ),
+    },
+
+    # ── affordability_check tool (Phase 4) ──────────────────────────────────
+    "affordability_need_more_info": {
+        "ru": "Для проверки посильности укажите платёж (в сумах) или сумму и срок кредита.",
+        "en": "To check affordability, give me the payment (in UZS) or the loan amount and term.",
+        "uz": "Ko'tara olishni tekshirish uchun to'lovni (so'mda) yoki kredit summasi va muddatini ko'rsating.",
+    },
+    "affordability_general_rule": {
+        "ru": "Ежемесячный платёж {payment} сум обычно посилен, если он не превышает 40–50% дохода. "
+              "Если поделитесь примерным доходом — скажу точнее, но это не обязательно.",
+        "en": "A monthly payment of {payment} UZS is usually manageable if it stays within 40–50% of income. "
+              "If you share your approximate income I can be more precise — but that's entirely optional.",
+        "uz": "{payment} so'mlik oylik to'lov, odatda, daromadning 40–50% idan oshmasa, ko'tarish mumkin bo'ladi. "
+              "Taxminiy daromadingizni aytsangiz, aniqroq aytaman — lekin bu majburiy emas.",
+    },
+    "affordability_result_known": {
+        "ru": "Ежемесячный платёж {payment} сум — это примерно {pct}% от вашего дохода.\n\n{verdict}",
+        "en": "A monthly payment of {payment} UZS is about {pct}% of your income.\n\n{verdict}",
+        "uz": "{payment} so'mlik oylik to'lov — bu daromadingizning taxminan {pct}% ini tashkil qiladi.\n\n{verdict}",
+    },
+    "affordability_verdict_ok": {
+        "ru": "Это в пределах комфортных 40–50% дохода.",
+        "en": "That's within a comfortable 40–50% of income.",
+        "uz": "Bu daromadning qulay 40–50% oralig'ida.",
+    },
+    "affordability_verdict_high": {
+        "ru": "Это выше рекомендуемых ~45% дохода — стоит рассмотреть больший срок, меньшую сумму или больший "
+              "первоначальный взнос, чтобы платёж был комфортнее.",
+        "en": "That's above the recommended ~45% of income — consider a longer term, a smaller amount, or a "
+              "larger down payment to make the payment more comfortable.",
+        "uz": "Bu tavsiya etilgan ~45% dan yuqori — to'lov qulayroq bo'lishi uchun uzunroq muddat, kichikroq "
+              "summa yoki kattaroq boshlang'ich to'lovni ko'rib chiqing.",
+    },
+
+    # ── Deterministic DTI warning — nodes/calc_flow.py (Phase 4) ────────────
+    "dti_warning_credit": {
+        "ru": "⚠️ Такой платёж — около {ratio}% от вашего дохода, это выше комфортных 40–45%. "
+              "Можем пересчитать на больший срок или меньшую сумму — нажмите «🔄 Пересчитать».",
+        "en": "⚠️ This payment is about {ratio}% of your income — above the comfortable 40–45%. "
+              "We can recalculate for a longer term or a smaller amount — tap \"🔄 Recalculate\".",
+        "uz": "⚠️ Bu to'lov daromadingizning taxminan {ratio}% ini tashkil qiladi — bu qulay 40–45% dan yuqori. "
+              "Uzunroq muddat yoki kichikroq summa bilan qayta hisoblashimiz mumkin — «🔄 Qayta hisoblash» tugmasini bosing.",
+    },
+
+    # ── FLOW_QUALIFY dead-end rescue (Phase 4) ──────────────────────────────
+    "qualify_dead_end_rescue": {
+        "ru": "Возможно, вам подойдёт другой вариант — {category}:",
+        "en": "You might be a good fit for another option — {category}:",
+        "uz": "Sizga boshqa variant mos kelishi mumkin — {category}:",
     },
 }
 

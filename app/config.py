@@ -52,12 +52,29 @@ class Settings:
     faq_sem_low_threshold: float
     faq_lex_strict_threshold: float
     faq_lex_low_threshold: float
+    faq_rephrase_enabled: bool
+    # ── Weaviate-индекс FAQ ────────────────────────────────────────────
+    weaviate_enabled: bool
+    weaviate_http_host: str
+    weaviate_http_port: int
+    weaviate_grpc_host: str
+    weaviate_grpc_port: int
+    weaviate_secure: bool
+    weaviate_api_key: str | None
+    weaviate_collection: str
+    weaviate_timeout: float
+    faq_hybrid_alpha: float
+    faq_candidate_limit: int
+    faq_rerank_enabled: bool
+    faq_rerank_model: str
     default_custom_loan_rate_pct: float
+    dti_warn_ratio: float
     miniapp_enabled: bool
     miniapp_url: str | None
     miniapp_dev_mode: bool
     miniapp_dev_user_id: int
     miniapp_init_data_ttl_seconds: int
+    miniapp_streaming_enabled: bool
 
 
 def _parse_webhook_path(raw: str | None) -> str:
@@ -144,7 +161,43 @@ def get_settings() -> Settings:
         faq_sem_low_threshold=_parse_float(os.getenv("FAQ_SEM_LOW_THRESHOLD"), default=0.45),
         faq_lex_strict_threshold=_parse_float(os.getenv("FAQ_LEX_STRICT_THRESHOLD"), default=0.75),
         faq_lex_low_threshold=_parse_float(os.getenv("FAQ_LEX_LOW_THRESHOLD"), default=0.55),
+        # node_faq's deterministic strict-tier FAQ pre-check (app/agent/faq_rephrase.py)
+        # rewords the verbatim DB answer via one extra LLM call before it ships —
+        # switchable so it can be turned off in prod without a deploy if it
+        # ever misbehaves (falls back to the raw DB text, not a broken turn).
+        faq_rephrase_enabled=_parse_bool(os.getenv("FAQ_REPHRASE_ENABLED"), default=True),
+        # ── Weaviate: гибридный (BM25 + вектор) индекс FAQ ─────────────────
+        # Векторизацию делает сам Weaviate через text2vec-openai, поэтому
+        # FAQ_EMBEDDING_MODEL здесь тоже используется — но уже как параметр
+        # схемы коллекции, а не для вызова OpenAI из приложения.
+        weaviate_enabled=_parse_bool(os.getenv("WEAVIATE_ENABLED"), default=True),
+        weaviate_http_host=(os.getenv("WEAVIATE_HTTP_HOST") or "localhost").strip(),
+        weaviate_http_port=_parse_positive_int(os.getenv("WEAVIATE_HTTP_PORT"), default=8080),
+        weaviate_grpc_host=(
+            os.getenv("WEAVIATE_GRPC_HOST") or os.getenv("WEAVIATE_HTTP_HOST") or "localhost"
+        ).strip(),
+        weaviate_grpc_port=_parse_positive_int(os.getenv("WEAVIATE_GRPC_PORT"), default=50051),
+        weaviate_secure=_parse_bool(os.getenv("WEAVIATE_SECURE"), default=False),
+        weaviate_api_key=(os.getenv("WEAVIATE_API_KEY") or "").strip() or None,
+        weaviate_collection=(os.getenv("WEAVIATE_COLLECTION") or "FaqItem").strip(),
+        weaviate_timeout=_parse_float(os.getenv("WEAVIATE_TIMEOUT"), default=10.0),
+        # alpha=0.9 — доля вектора против BM25. Подобрано замером на 18
+        # размеченных перефразировках: ru 17/18 (0.75 -> 16, 1.0 -> 16).
+        faq_hybrid_alpha=_parse_float(os.getenv("FAQ_HYBRID_ALPHA"), default=0.9),
+        # Сколько кандидатов гибрид отдаёт реранкеру. 20 хватало во всех
+        # замерах (верная запись ни разу не оказалась ниже 20-й позиции).
+        faq_candidate_limit=_parse_positive_int(os.getenv("FAQ_CANDIDATE_LIMIT"), default=20),
+        # Свой LLM-реранкер вместо reranker-модуля Weaviate: локальные
+        # cross-encoder (ms-marco) обучены на английском и на кириллице
+        # деградируют до 3/18, тогда как gpt-4o-mini даёт 18/18 на ru и uz.
+        faq_rerank_enabled=_parse_bool(os.getenv("FAQ_RERANK_ENABLED"), default=True),
+        faq_rerank_model=(os.getenv("FAQ_RERANK_MODEL") or "gpt-4o-mini").strip(),
         default_custom_loan_rate_pct=_parse_float(os.getenv("DEFAULT_CUSTOM_LOAN_RATE_PCT"), default=20.0),
+        # Debt-to-income warning threshold (Phase 4 "Экспертиза"): a monthly
+        # payment above this share of the client's known income triggers a
+        # soft warning — both the deterministic calc_flow finalization and
+        # the affordability_check tool read this live via get_settings().
+        dti_warn_ratio=_parse_float(os.getenv("DTI_WARN_RATIO"), default=0.45),
         miniapp_enabled=_parse_bool(os.getenv("MINIAPP_ENABLED"), default=True),
         miniapp_url=(os.getenv("MINIAPP_URL") or "").strip() or None,
         # Local browser testing without Telegram: accepts requests with no
@@ -155,4 +208,9 @@ def get_settings() -> Settings:
         miniapp_init_data_ttl_seconds=_parse_positive_int(
             os.getenv("MINIAPP_INIT_DATA_TTL_SECONDS"), default=86400
         ),
+        # Live token streaming to the Mini App chat screen over the existing
+        # /api/miniapp/ws socket (node_faq only — see app/agent/streaming.py).
+        # Telegram never reads this flag; disabling it just makes node_faq
+        # take its plain .ainvoke() path for Mini App turns too.
+        miniapp_streaming_enabled=_parse_bool(os.getenv("MINIAPP_STREAMING_ENABLED"), default=True),
     )

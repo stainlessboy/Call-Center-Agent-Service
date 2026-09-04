@@ -16,6 +16,7 @@ from app.agent.rate_rules import (
     needs_age,
     needs_downpayment,
     rate_bounds,
+    select_rate_value,
 )
 from app.utils.data_loaders import (
     _fmt_pct_range,
@@ -227,13 +228,88 @@ def _format_product_list_text(products: list[dict], category: str, lang: str = "
     return "\n".join(lines)
 
 
-def _format_product_card(product: dict, category: str, lang: str = "ru") -> str:
+def _personal_rate_pct(product: dict, profile: Optional[dict]) -> Optional[float]:
+    """Numeric personal rate for a credit product, or None if it can't be
+    resolved unambiguously from the client's profile alone.
+
+    Only resolves from age and/or income type — `select_rate_value`
+    (app/agent/rate_rules.py) already treats unpassed axes as "unknown" and
+    excludes any rule that constrains an axis we didn't supply (e.g.
+    amount/term/downpayment), so a rule that can only be resolved with
+    numbers the customer hasn't given yet correctly yields no match here.
+    Shared by `_personal_rate_line` (Telegram text) and the `product_card`
+    ui_block's `personal_rate_pct` field (Mini App, Phase 3) — one resolution
+    path for both surfaces.
+    """
+    facts = (profile or {}).get("facts") or {}
+    age = facts.get("age")
+    income_type = facts.get("income_type")
+    if age is None and income_type is None:
+        return None
+    rules = product.get("rate_rules") or []
+    if not rules:
+        return None
+    rate = select_rate_value(rules, age=age, income_type=income_type)
+    return float(rate) if rate is not None else None
+
+
+def _personal_rate_line(product: dict, profile: Optional[dict], lang: str) -> Optional[str]:
+    """Best-effort "Для вас: X%" line for a credit product card (Telegram text)."""
+    rate = _personal_rate_pct(product, profile)
+    if rate is None:
+        return None
+    return f"{at('label_personal_rate', lang)}: {rate:.1f}%"
+
+
+# ---------------------------------------------------------------------------
+# ui_blocks serialization (Mini App, Phase 3 — see docs/MINIAPP.md "UI blocks")
+# ---------------------------------------------------------------------------
+
+_INTERNAL_PRODUCT_KEYS = ("rate_rules", "_recommend_reasons", "_recommend_score")
+
+
+def _product_public_dict(product: dict) -> dict:
+    """JSON-safe product dict for ui_blocks (product_list / product_card /
+    comparison_table).
+
+    Drops `rate_rules` — the raw per-tier rate-matching input consumed by
+    app/agent/rate_rules.py, internal-only and can be large. Keeps
+    `rate_matrix` / `rate_schedule` (the per-condition DISPLAY lists already
+    used by the bot's text card — small, already client-appropriate).
+    Renames `_recommend_reasons` (set by app/agent/recommend.py::rank_products)
+    to a public `reason` key; drops the debug-only `_recommend_score`.
+    """
+    out = {k: v for k, v in product.items() if k not in _INTERNAL_PRODUCT_KEYS}
+    reasons = product.get("_recommend_reasons")
+    if reasons:
+        out["reason"] = list(reasons)
+    return out
+
+
+def _comparison_columns(category: str) -> list[str]:
+    """Which product fields are meaningfully comparable side-by-side for a
+    category — a hint for the Mini App's comparison_table renderer."""
+    if category in ("mortgage", "autoloan", "microloan", "education_credit"):
+        return ["rate", "term", "amount", "downpayment"]
+    if category == "deposit":
+        return ["rate", "term", "min_amount", "currency"]
+    if category in ("debit_card", "fx_card"):
+        return ["network", "annual_fee", "cashback"]
+    return []
+
+
+def _format_product_card(
+    product: dict, category: str, lang: str = "ru", profile: Optional[dict] = None,
+) -> str:
     name = _html.escape(_localized_name(product, lang))
     lines = [f"<b>{name}</b>\n"]
 
     if category in ("mortgage", "autoloan", "microloan", "education_credit"):
         if product.get("rate"):
             lines.append(f"{at('label_rate', lang)}: {product['rate']}")
+        personal_rate_line = _personal_rate_line(product, profile, lang)
+        if personal_rate_line:
+            lines.append(personal_rate_line)
         if product.get("amount"):
             lines.append(f"{at('label_amount', lang)}: {product['amount']}")
         if product.get("term"):

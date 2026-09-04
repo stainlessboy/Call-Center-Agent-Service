@@ -51,6 +51,19 @@ NODE_DEAD_END = "dead_end"
 _YES_TOKENS = ("да", "ha", "yes", "bor", "есть")
 _NO_TOKENS = ("нет", "yo'q", "yoq", "no", "yq")
 
+# ---------------------------------------------------------------------------
+# Profile-based prefill text — see prefill_from_profile() below. The SAME
+# UserProfile.facts["income_type"] value needs different representative text
+# depending on WHICH question it's answering ("да"/"нет" for "do you have an
+# official salary", but "асака"/"другой банк" for "whose card is it on") —
+# so this is keyed per-node (via each node's "profile_answer_text"), not a
+# single flat income_type -> text map.
+# ---------------------------------------------------------------------------
+_INCOME_TYPE_SALARY_TEXT = {"payroll": "да", "official": "да", "no_official": "нет"}
+_INCOME_TYPE_SALARY_CARD_TEXT = {"payroll": "асака", "official": "другой банк"}
+_INCOME_TYPE_SELF_EMPLOYED_TEXT = {"no_official": "самозанятый"}
+_DEPOSIT_CURRENCY_TEXT = {"UZS": "сум", "USD": "доллар", "EUR": "евро"}
+
 _TREES: dict[str, dict[str, Any]] = {
     # ── Autoloan ─────────────────────────────────────────────────────────
     "autoloan": {
@@ -59,6 +72,11 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_autoloan",
+                # Whether the client has an official salary is fully implied
+                # by UserProfile.facts.income_type (payroll/official → yes,
+                # no_official → no) — see prefill_from_profile() below.
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("официальн", "белая зарплата", "rasmiy"),
                      "goto": "salary_card"},
@@ -69,6 +87,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary_card": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_card",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_CARD_TEXT,
                 "options": [
                     {"label": "btn_asaka", "match": ("асака", "asaka", "ваш банк", "вашего банка"),
                      "set": {"income_types": ["payroll"]}, "goto": "auto_brand"},
@@ -79,6 +99,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "self_employed": {
                 "type": NODE_QUESTION,
                 "q": "q_self_employed",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SELF_EMPLOYED_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("самозанят", "self employed", "yakka tartib", "tadbirkor"),
                      "set": {"income_types": ["no_official"]}, "goto": "auto_brand"},
@@ -106,6 +128,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_mortgage",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("официальн", "rasmiy"),
                      "goto": "salary_card"},
@@ -120,6 +144,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary_card": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_card",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_CARD_TEXT,
                 "options": [
                     {"label": "btn_asaka", "match": ("асака", "asaka", "ваш банк", "вашего банка"),
                      "set": {"income_types": ["payroll"]}, "goto": "market"},
@@ -130,6 +156,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "self_employed": {
                 "type": NODE_QUESTION,
                 "q": "q_self_employed",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SELF_EMPLOYED_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("самозанят", "self employed", "yakka tartib", "tadbirkor"),
                      "set": {"income_types": ["no_official"]}, "goto": "market"},
@@ -159,6 +187,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_microloan",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("официальн", "rasmiy"),
                      "goto": "salary_card"},
@@ -169,6 +199,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "salary_card": {
                 "type": NODE_QUESTION,
                 "q": "q_salary_card",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SALARY_CARD_TEXT,
                 "options": [
                     {"label": "btn_asaka", "match": ("асака", "asaka", "ваш банк"),
                      "set": {"income_types": ["payroll"]}, "goto": "channel"},
@@ -179,6 +211,8 @@ _TREES: dict[str, dict[str, Any]] = {
             "self_employed": {
                 "type": NODE_QUESTION,
                 "q": "q_self_employed",
+                "profile_key": "income_type",
+                "profile_answer_text": _INCOME_TYPE_SELF_EMPLOYED_TEXT,
                 "options": [
                     {"label": "btn_q_yes", "match": _YES_TOKENS + ("самозанят", "self employed", "yakka tartib", "tadbirkor"),
                      "set": {"income_types": ["no_official"]}, "goto": "result"},
@@ -216,6 +250,16 @@ _TREES: dict[str, dict[str, Any]] = {
             "currency": {
                 "type": NODE_QUESTION,
                 "q": "q_deposit_currency",
+                # NOTE: in practice the automatic profile-prefill walk (see
+                # prefill_from_profile below) never reaches this node, because
+                # "goal" (this tree's entry) is deliberately NOT marked — a
+                # free-text `facts.goals` list can't be mapped to
+                # topup/withdrawal unambiguously. Marked anyway since the
+                # node itself is unambiguous given a "currency" fact, and a
+                # future entry-node marking (or a direct call starting from
+                # here) would pick it up for free.
+                "profile_key": "currency",
+                "profile_answer_text": _DEPOSIT_CURRENCY_TEXT,
                 "options": [
                     {"label": "btn_currency_uzs", "match": ("сум", "so'm", "som", "uzs"),
                      "set": {"deposit_currency": "UZS"}, "goto": "result"},
@@ -332,20 +376,27 @@ def render_buttons(node: dict[str, Any], lang: str) -> list[str]:
     return [at(opt["label"], lang) for opt in node.get("options") or []]
 
 
-def prefill(category: str, text: str, lang: str = "ru") -> tuple[Optional[str], dict[str, Any]]:
+def prefill(
+    category: str, text: str, lang: str = "ru", start_node: Optional[str] = None,
+) -> tuple[Optional[str], dict[str, Any]]:
     """Pre-answer questions from a single free-text message ("if they say it all
     up front, skip the questions").
 
-    Walks the tree from the entry node, matching the message against each
-    question's options and following the branch. Stops at the first question it
-    cannot answer (returns that node key) or at a terminal (returns its key).
-    Returns (node_key, accumulated_answers).
+    Walks the tree from *start_node* (defaults to the tree's entry node),
+    matching the message against each question's options and following the
+    branch. Stops at the first question it cannot answer (returns that node
+    key) or at a terminal (returns its key). Returns (node_key, accumulated_answers).
+
+    `start_node` lets a caller chain this AFTER `prefill_from_profile` (below)
+    has already walked past some leading nodes — the two prefill sources
+    compose instead of racing (profile facts first, then whatever the
+    customer's own opening message also answers).
     """
     tree = get_tree(category)
     if not tree:
         return None, {}
     answers: dict[str, Any] = {}
-    node_key = tree["entry"]
+    node_key = start_node or tree["entry"]
     seen: set[str] = set()
     while node_key and node_key not in seen:
         seen.add(node_key)
@@ -358,6 +409,64 @@ def prefill(category: str, text: str, lang: str = "ru") -> tuple[Optional[str], 
         answers.update(opt.get("set") or {})
         node_key = opt.get("goto")
     return node_key, answers
+
+
+# ---------------------------------------------------------------------------
+# Profile-based prefill — "personal consultant" memory (Phase 2)
+# ---------------------------------------------------------------------------
+
+def prefill_from_profile(
+    category: str, facts: dict[str, Any], lang: str = "ru",
+) -> tuple[Optional[str], dict[str, Any], list[str]]:
+    """Auto-answer questions whose node carries a `profile_key` found in *facts*.
+
+    Walks the tree from the entry node exactly like `prefill()`, but instead
+    of matching a user message it looks up `facts[node["profile_key"]]`,
+    converts that value to representative text via the node's own
+    `profile_answer_text` map (e.g. `_INCOME_TYPE_SALARY_TEXT` — see the
+    module-level maps near `_YES_TOKENS` above), and resolves it through the
+    SAME `match_answer` used for real user input — so the acceptance
+    behavior (numeric index / localized label / token match) never has to be
+    duplicated. The text mapping is per-NODE, not just per-profile_key,
+    because the same `income_type` value needs different phrasing depending
+    on which question it's answering ("да"/"нет" for "do you have an
+    official salary" vs "асака"/"другой банк" for "whose card is it on").
+
+    Stops at the first node without a `profile_key`, or whose fact value is
+    missing/unmapped/unmatched — a node with no marking is a hard stop by
+    design (see the trees in _TREES above: only entry-adjacent income_type
+    nodes are marked, so the walk depth is intentionally shallow).
+
+    Returns (node_key, accumulated_answers, applied_profile_keys) — the third
+    element is which profile_key(s) actually produced an answer, so the
+    caller can tell the customer what was inferred (see qualify_flow.py).
+    """
+    tree = get_tree(category)
+    if not tree or not facts:
+        return (tree["entry"] if tree else None), {}, []
+    answers: dict[str, Any] = {}
+    applied: list[str] = []
+    node_key = tree["entry"]
+    seen: set[str] = set()
+    while node_key and node_key not in seen:
+        seen.add(node_key)
+        node = tree["nodes"].get(node_key)
+        if not node or node.get("type") != NODE_QUESTION:
+            return node_key, answers, applied
+        profile_key = node.get("profile_key")
+        if not profile_key:
+            return node_key, answers, applied
+        fact_value = facts.get(profile_key)
+        pseudo_text = (node.get("profile_answer_text") or {}).get(fact_value) if fact_value else None
+        if not pseudo_text:
+            return node_key, answers, applied
+        opt = match_answer(node, pseudo_text, lang)
+        if not opt:
+            return node_key, answers, applied
+        answers.update(opt.get("set") or {})
+        applied.append(profile_key)
+        node_key = opt.get("goto")
+    return node_key, answers, applied
 
 
 # ---------------------------------------------------------------------------

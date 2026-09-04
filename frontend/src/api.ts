@@ -1,5 +1,6 @@
 /** Typed client for the Mini App API (see app/miniapp/routes). */
 import { rawInitData } from './telegram'
+import type { UiBlock } from './uiBlocks'
 
 const BASE = '/api/miniapp'
 
@@ -268,6 +269,11 @@ export interface ChatMessage {
   role: string
   text: string
   created_at: string | null
+  /** Structured cards for agent turns ([] elsewhere). Sent by both
+   * /chat/history and the archive endpoint (/sessions/{id}). Kept
+   * `unknown[]` on the wire: old persisted blocks may predate the current
+   * schema, so the UI runs them through sanitizeUiBlocks first. */
+  ui_blocks?: unknown[]
 }
 
 export interface CalcPayload {
@@ -390,6 +396,7 @@ export const api = {
       human_mode: boolean
       session_id?: string
       has_pdf: boolean
+      ui_blocks?: UiBlock[]
       suggested_language: string | null
     }>('/chat/message', sessionId ? { text, session_id: sessionId } : { text }),
   toggleOperator: (enabled: boolean) =>

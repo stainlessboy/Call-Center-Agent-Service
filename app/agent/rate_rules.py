@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
+from app.config import get_settings
+
 # (min_key, max_key, input_key) for the numeric range axes a rule may constrain.
 _RANGE_AXES = (
     ("age_min", "age_max", "age"),
@@ -165,3 +167,74 @@ def select_rate_value(
     """Convenience wrapper returning just the matched rate (or None)."""
     rule = select_rate(rules, **inputs)
     return _rule_rate(rule) if rule is not None else None
+
+
+def resolve_effective_rate(
+    product: dict[str, Any],
+    *,
+    age: Optional[int] = None,
+    amount: Optional[float] = None,
+    term_months: Optional[int] = None,
+    downpayment_pct: Optional[float] = None,
+    income_type: Optional[str | Sequence[str]] = None,
+) -> float:
+    """Best usable rate for *product* given whatever inputs are known.
+
+    Single source of truth for the 3-tier fallback chain used by every
+    surface that needs "a rate, whatever it takes" (the bot's per-product
+    calculator in nodes/calc_flow.py, and the Phase 4 what_if_scenario /
+    affordability_check tools in app/agent/tools.py):
+
+      1. the best-matching rate_rules entry for the given inputs
+         (``select_rate``);
+      2. else the product's cheapest usable rule (``rate_bounds``);
+      3. else the product's own aggregate ``rate_min_pct``/``rate_pct``;
+      4. else ``Settings.default_custom_loan_rate_pct``
+         (``DEFAULT_CUSTOM_LOAN_RATE_PCT``), read live via ``get_settings()``.
+
+    Always returns a float — this function never fails to produce *a*
+    number, by design (every caller needs a rate to keep a calculation
+    moving, not a reason it couldn't compute one).
+    """
+    rules = product.get("rate_rules") or []
+    matched = select_rate(
+        rules,
+        age=age,
+        amount=amount,
+        term_months=term_months,
+        downpayment_pct=downpayment_pct,
+        income_type=income_type,
+    )
+    if matched is not None:
+        rate = matched.get("rate_min_pct")
+        if rate is not None:
+            return float(rate)
+
+    low, _ = rate_bounds(rules)
+    if low is not None:
+        return float(low)
+
+    aggregate = product.get("rate_min_pct") or product.get("rate_pct")
+    if aggregate is not None:
+        return float(aggregate)
+
+    return get_settings().default_custom_loan_rate_pct
+
+
+def income_type_from_dialog(dialog: Optional[dict[str, Any]]) -> str | list[str] | None:
+    """Income type(s) established by the FLOW_QUALIFY questionnaire, in the
+    shape ``select_rate``/``resolve_effective_rate`` expect for their
+    ``income_type`` kwarg.
+
+    A single answer is returned as a plain string; a branch that left
+    several candidates open (e.g. before the "whose card" question was
+    asked) returns them all, so a rule matches if the product's income_type
+    is among them rather than being silently excluded.
+    """
+    qualify_answers = (dialog or {}).get("qualify_answers") or {}
+    income_types = qualify_answers.get("income_types") or []
+    if not income_types:
+        return None
+    if len(income_types) == 1:
+        return income_types[0]
+    return list(income_types)

@@ -1,39 +1,54 @@
+"""FAQ search: Weaviate hybrid retrieval + an LLM rerank on top.
+
+Two stages, and only two:
+
+1. **Retrieval** — :func:`app.utils.vector_store.search` returns up to
+   ``FAQ_CANDIDATE_LIMIT`` candidates from one Weaviate hybrid query (BM25 and
+   vector fused by ``FAQ_HYBRID_ALPHA``).
+2. **Rerank** — one small LLM call picks the entry that actually answers the
+   question, or refuses. Its refusal *is* the confidence signal.
+
+This replaced a hand-rolled lexical leg (difflib + token-F1 + stopword lists),
+a pgvector cosine leg, and a tri-tier fusion with four tunable thresholds. Two
+measurements drove that:
+
+* The hybrid score cannot be thresholded — it is not comparable across
+  queries — so a confidence tier could not be derived from retrieval alone.
+* A cross-encoder reranker could have supplied one, but Weaviate's local
+  ``reranker-transformers`` module only ships English ``ms-marco`` models,
+  which collapse on Cyrillic (3/18 on a labelled Russian set). ``gpt-4o-mini``
+  scored 18/18 on the same set, 18/18 on Uzbek, and correctly refused 7 of 8
+  out-of-domain queries.
+
+The rerank always uses OpenAI, regardless of ``USE_GPT`` — the same policy the
+FAQ embeddings had before it. Keep ``OPENAI_API_KEY`` set, or turn the stage
+off with ``FAQ_RERANK_ENABLED=false``.
+"""
 from __future__ import annotations
 
-import asyncio
 import contextvars
-import difflib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from typing import NamedTuple, Optional
 
-from sqlalchemy import select, text
-
 from app.config import get_settings
-from app.db.models import FaqItem
-from app.db.session import get_session
-from app.utils.data_loaders import _load_faq_items, _normalize_language_code
-from app.utils.text_utils import normalize_text, token_set
+from app.utils.data_loaders import _normalize_language_code
+from app.utils.text_utils import normalize_text
+from app.utils import vector_store
 
 _logger = logging.getLogger(__name__)
 
-# Per-leg confidence thresholds live in app/config.py (FAQ_SEM_*/FAQ_LEX_*
-# env vars) — single source of truth. The two legs are on different scales:
-# embedding cosine ~0.5 is near-noise while lexical 0.5 is a moderate overlap,
-# so a shared threshold can't be calibrated for both. Each leg maps its score
-# to a tier ("strict" / "low" / "none") against its own pair, and the best
-# tier wins.
-
-if os.getenv("FAQ_STRICT_THRESHOLD") or os.getenv("FAQ_LOW_CONFIDENCE_THRESHOLD"):
-    _logger.warning(
-        "FAQ_STRICT_THRESHOLD / FAQ_LOW_CONFIDENCE_THRESHOLD are deprecated and "
-        "ignored — use FAQ_SEM_{STRICT,LOW}_THRESHOLD and FAQ_LEX_{STRICT,LOW}_THRESHOLD."
-    )
-
-# How many semantic candidates to fetch — surfaced to the LLM on low
-# confidence so it can pick the right FAQ entry or ask the user.
-_SEM_TOP_K: int = int(os.getenv("FAQ_SEM_TOP_K", "3"))
+for _dead in ("FAQ_STRICT_THRESHOLD", "FAQ_LOW_CONFIDENCE_THRESHOLD",
+              "FAQ_SEM_STRICT_THRESHOLD", "FAQ_SEM_LOW_THRESHOLD",
+              "FAQ_LEX_STRICT_THRESHOLD", "FAQ_LEX_LOW_THRESHOLD"):
+    if os.getenv(_dead):
+        _logger.warning(
+            "%s is set but ignored — per-leg score thresholds were removed with "
+            "the two-leg search; confidence now comes from the LLM rerank "
+            "(FAQ_RERANK_ENABLED / FAQ_RERANK_MODEL).", _dead,
+        )
 
 
 class FaqCandidate(NamedTuple):
@@ -44,24 +59,21 @@ class FaqCandidate(NamedTuple):
 
 @dataclass
 class FaqSearch:
-    """Result of a hybrid FAQ search."""
+    """Result of a FAQ search.
+
+    ``tier`` keeps its three values so callers read unchanged:
+
+    * ``strict`` — the rerank picked this entry; answer it directly.
+    * ``low``    — the rerank was unavailable (disabled, or the call failed),
+      so retrieval candidates are surfaced and the caller's own LLM decides.
+    * ``none``   — nothing matched, or the rerank refused.
+    """
 
     answer: Optional[str]
     tier: str  # "strict" | "low" | "none"
-    lex_score: float = 0.0
-    sem_score: float = 0.0
+    score: float = 0.0
     candidates: list[FaqCandidate] = field(default_factory=list)
 
-
-_TIER_RANK = {"none": 0, "low": 1, "strict": 2}
-
-
-def _score_tier(score: float, strict: float, low: float) -> str:
-    if score >= strict:
-        return "strict"
-    if score >= low:
-        return "low"
-    return "none"
 
 # Sentinel kept for backward compat (tests, imports). Use get_faq_fallback(lang) for display.
 FAQ_FALLBACK_REPLY = "__FAQ_FALLBACK__"
@@ -69,212 +81,148 @@ FAQ_FALLBACK_REPLY = "__FAQ_FALLBACK__"
 
 def get_faq_fallback(lang: str | None = None) -> str:
     from app.agent.i18n import at
+
     return at("faq_fallback", lang)
 
 
-# ---------------------------------------------------------------------------
-# Lexical scoring (unchanged from the previous implementation).
-# ---------------------------------------------------------------------------
-
-def _faq_similarity(a: str, b: str) -> float:
-    na = normalize_text(a)
-    nb = normalize_text(b)
-    if not na or not nb:
-        return 0.0
-    if na == nb:
-        return 1.0
-    if na in nb or nb in na:
-        # Containment scaled by length ratio — a short query inside a long FAQ
-        # question is weak evidence, not a perfect match. The old flat 1.0 made
-        # "кредит" a STRICT hit on the first question containing the word.
-        shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
-        containment = 0.5 + 0.5 * (len(shorter) / len(longer))
-    else:
-        containment = 0.0
-    seq = difflib.SequenceMatcher(a=na, b=nb).ratio()
-    ta = token_set(na)
-    tb = token_set(nb)
-    if ta and tb and (inter := len(ta & tb)):
-        # F1 of token-level precision (query coverage) and recall (FAQ coverage).
-        # Old |A∩B|/|B| was insensitive to *extra* query tokens — e.g. query
-        # "карту нерезидентам" matched FAQ "Как открыть виртуальную карту?" at
-        # 0.75 because "нерезидентам" (the discriminative token) was ignored.
-        token_score = (2 * inter) / (len(ta) + len(tb))
-    else:
-        token_score = 0.0
-    return max(seq, token_score, containment)
-
-
-async def _lexical_lookup(
-    query: str, language: str | None = None
-) -> tuple[Optional[str], float]:
-    """Best-match lexical lookup. Returns (answer, score)."""
-    items = await _load_faq_items(language)
-    best_answer: Optional[str] = None
-    best_score: float = 0.0
-    for item in items:
-        score = _faq_similarity(query, item.get("q") or "")
-        if score > best_score:
-            best_score = score
-            best_answer = item.get("a")
-    return best_answer, best_score
-
-
-# ---------------------------------------------------------------------------
-# Semantic scoring (new) — pgvector cosine via SQL.
-# ---------------------------------------------------------------------------
-
-# Process-local invalidation flag — bumped by SQLAlchemy event listeners after
-# any FaqItem write. The semantic lookup itself does not cache results (each
-# query goes to Postgres anyway), but external callers can read this counter
-# if they ever want to invalidate their own derived state.
+# Process-local invalidation counter — bumped by the SQLAlchemy listeners after
+# any FaqItem write. The index itself lives in Weaviate and every search is a
+# fresh query, so there is nothing to evict in-process; downstream caches (if
+# any) can observe this counter.
 _cache_generation = 0
 
 
 def invalidate_cache() -> None:
-    """Called by SQLAlchemy event listeners after FAQ writes.
-
-    With pgvector the FAQ vectors live in Postgres and every search is a fresh
-    SQL query, so there is nothing to evict in-process. We only bump a counter
-    that downstream caches (if any) can observe.
-    """
+    """Called by the SQLAlchemy event listeners after FAQ writes."""
     global _cache_generation
     _cache_generation += 1
 
 
-# Static column mapping — never interpolate user input into column names.
-_LANG_COLUMNS = {
-    "ru": ("embedding_ru", "answer_ru", "question_ru"),
-    "en": ("embedding_en", "answer_en", "question_en"),
-    "uz": ("embedding_uz", "answer_uz", "question_uz"),
-}
+# ---------------------------------------------------------------------------
+# Rerank
+# ---------------------------------------------------------------------------
+
+# Measured prompt — do not reword casually, both halves earned their place.
+# The BOUNDARY paragraph is what stops the FAQ from swallowing product intent:
+# without it "Хочу оформить ипотеку" matched a credit FAQ entry and never
+# reached get_products (the hijack this project already had an incident over).
+# With it, refusals on out-of-domain and product-intent queries went 5/8 → 7/8
+# with no loss on the 18 positive probes.
+_RERANK_SYSTEM = (
+    "ГРАНИЦА: если клиент хочет ПОДОБРАТЬ, ОФОРМИТЬ или РАССЧИТАТЬ продукт "
+    "(ипотека, автокредит, микрозайм, вклад, карта) — это НЕ вопрос к FAQ, "
+    'верни {"best": null, "conf": 0}: такой запрос обслуживает каталог '
+    "продуктов и калькулятор. FAQ отвечает только на вопросы КАК УСТРОЕНО и "
+    "ЧТО ДЕЛАТЬ ЕСЛИ.\n"
+    "Ты подбираешь запись FAQ банка под вопрос клиента. Тебе дан список "
+    "пронумерованных вопросов из базы. Верни СТРОГО JSON "
+    '{"best": <номер>, "conf": <0..1>} — номер записи, которая отвечает на '
+    'вопрос клиента. Если ни одна не подходит, верни {"best": null, "conf": 0}.'
+)
 
 
-def _semantic_leg_sql(lang: str) -> str:
-    """One per-language SELECT over its embedding column, ready for UNION ALL."""
-    emb_col, ans_col, q_col = _LANG_COLUMNS[lang]
-    return f"""
-        (SELECT
-            COALESCE({q_col}, question_ru) AS question,
-            COALESCE({ans_col}, answer_ru) AS answer,
-            1 - ({emb_col} <=> :vec ::vector) AS similarity
-        FROM faq
-        WHERE {emb_col} IS NOT NULL
-        ORDER BY {emb_col} <=> :vec ::vector
-        LIMIT :k)
-    """
+def _openai_kwargs() -> dict | None:
+    """AsyncOpenAI kwargs, or None when no API key is configured."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    kwargs: dict = {
+        "api_key": api_key,
+        "timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT") or 15.0),
+        "max_retries": int(os.getenv("OPENAI_MAX_RETRIES") or 1),
+    }
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+    return kwargs
 
 
-async def _semantic_lookup(
-    query: str, language: str | None = None
-) -> list[FaqCandidate]:
-    """pgvector cosine search — top-K candidates, best first. score ∈ [0, 1].
+async def _llm_rerank(query: str, hits: list) -> tuple[Optional[int], bool]:
+    """Pick the hit that answers *query*.
 
-    score = 1 - cosine_distance: 1.0 is identical, ~0.7+ is "strong match",
-    ~0.5 is "vaguely related", < 0.5 is noise. The embedding model is
-    multilingual, so for non-ru queries the ru column is searched as well —
-    rows that lack a translation (and its embedding) stay findable. Returns []
-    when the feature is disabled, the embedding fails, or no vectors exist.
+    Returns ``(index, ok)``: ``index`` into *hits* or ``None`` for a refusal,
+    and ``ok`` telling whether the rerank actually ran. A failed call returns
+    ``(None, False)`` so the caller can fall back to surfacing candidates
+    rather than silently reporting "no match".
     """
     settings = get_settings()
-    if not settings.faq_embedding_enabled:
-        return []
+    if not settings.faq_rerank_enabled or not hits:
+        return None, False
 
-    from app.utils.embeddings import embed_texts
+    kwargs = _openai_kwargs()
+    if kwargs is None:
+        _logger.warning("faq rerank skipped — OPENAI_API_KEY is not set")
+        return None, False
 
-    vectors = await embed_texts([query])
-    q_vec = vectors[0] if vectors else None
-    if q_vec is None:
-        return []
-
-    lang = _normalize_language_code(language)
-    legs = [_semantic_leg_sql(lang)]
-    if lang != "ru":
-        legs.append(_semantic_leg_sql("ru"))
-
-    # Render vector literal manually — pgvector accepts the textual form
-    # ``'[0.1, 0.2, ...]'`` cast to ``vector``.
-    vec_literal = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
-    sql = text(
-        "SELECT question, answer, similarity FROM ("
-        + " UNION ALL ".join(legs)
-        + ") AS c ORDER BY similarity DESC LIMIT :k"
-    )
     try:
-        async with get_session() as session:
-            result = await session.execute(sql, {"vec": vec_literal, "k": _SEM_TOP_K})
-            rows = result.all()
+        from openai import AsyncOpenAI
+    except ImportError:
+        _logger.error("openai package not installed — cannot rerank FAQ")
+        return None, False
+
+    listing = "\n".join(f"{i}. {h.question}" for i, h in enumerate(hits, 1))
+    client = None
+    try:
+        client = AsyncOpenAI(**kwargs)
+        response = await client.chat.completions.create(
+            model=settings.faq_rerank_model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _RERANK_SYSTEM},
+                {
+                    "role": "user",
+                    "content": f"Вопрос клиента: {query}\n\nЗаписи FAQ:\n{listing}",
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
     except Exception:
-        _logger.exception("semantic FAQ lookup failed")
-        return []
+        _logger.warning("faq rerank call failed", exc_info=True)
+        return None, False
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
-    candidates: list[FaqCandidate] = []
-    seen_answers: set[str] = set()
-    for question, answer, similarity in rows:
-        if not answer:
-            continue
-        answer = str(answer)
-        # The same row can surface via both the lang and the ru leg.
-        if answer in seen_answers:
-            continue
-        seen_answers.add(answer)
-        score = float(similarity) if similarity is not None else 0.0
-        # Clamp — small floating noise can push cosine above 1 or below -1.
-        score = min(1.0, max(0.0, score))
-        candidates.append(FaqCandidate(str(question or ""), answer, score))
-    return candidates
+    best = payload.get("best")
+    if best is None:
+        return None, True  # an explicit, trustworthy refusal
+    try:
+        idx = int(best)
+    except (TypeError, ValueError):
+        return None, True
+    if not 1 <= idx <= len(hits):
+        return None, True
+    return idx - 1, True
 
 
 # ---------------------------------------------------------------------------
-# Hybrid lookup — exposed APIs.
+# Search
 # ---------------------------------------------------------------------------
 
-import re as _re_faq
-
-def _normalize_answer(text: str) -> str:
-    """Minimal normalization for same-row comparison between legs.
-
-    Strips leading/trailing whitespace, casefoldes, and collapses internal
-    whitespace. Used only to decide whether two answer strings point at the
-    same FAQ row — not for display or scoring.
-    """
-    return _re_faq.sub(r"\s+", " ", (text or "").strip().casefold())
-
-
-# Per-turn memoization for faq_search. node_faq's strict pre-check (_faq_lookup)
-# and the faq_lookup tool invoked later in the same turn's ToolNode loop both
-# call faq_search with the same (query, language) pair on non-strict turns —
-# doubling embedding calls + lexical scans for nothing. The contextvar is set
-# fresh once per agent turn (see Agent._ainvoke → reset_faq_turn_cache) and,
-# because it's an asyncio contextvar, is inherited by every coroutine awaited
-# within that same task — including the ToolNode's tool call. Left at its
-# default None (no reset_faq_turn_cache call), faq_search behaves exactly as
-# before: no caching, every call hits the DB/embedding API fresh. This keeps
-# non-agent callers (tests, scripts, other code paths) unaffected.
+# Per-turn memoization. node_faq's pre-check and the faq_lookup tool invoked
+# later in the same turn's ToolNode loop both call faq_search with the same
+# (query, language) — without this they would pay for two rerank calls. Set
+# once per agent turn (Agent._ainvoke → reset_faq_turn_cache) and, being an
+# asyncio contextvar, inherited by every coroutine awaited in that task. Left
+# at its default None, faq_search behaves exactly as before: no caching.
 _faq_turn_cache: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "_faq_turn_cache", default=None
 )
 
 
 def reset_faq_turn_cache() -> None:
-    """Start a fresh per-turn faq_search memoization scope.
-
-    Call once near the start of each agent turn, before the graph runs.
-    """
+    """Start a fresh per-turn faq_search memoization scope."""
     _faq_turn_cache.set({})
 
 
 async def faq_search(query: str, language: str | None = None) -> FaqSearch:
-    """Hybrid FAQ search: lexical + semantic legs in parallel, per-leg tiers.
+    """Retrieve candidates from Weaviate, then let the LLM pick one.
 
-    Each leg maps its score to "strict" / "low" / "none" against its own
-    threshold pair; the leg with the better tier supplies the answer (semantic
-    wins ties — embeddings are the more reliable signal). Semantic candidates
-    are always attached so callers can surface alternatives on low confidence.
-
-    Memoized within the current agent turn (see _faq_turn_cache) — a second
-    call with the same (normalized query, language) in the same turn returns
-    the cached FaqSearch instead of re-querying.
+    Memoized within the current agent turn (see ``_faq_turn_cache``).
     """
     turn_cache = _faq_turn_cache.get()
     cache_key = None
@@ -284,133 +232,77 @@ async def faq_search(query: str, language: str | None = None) -> FaqSearch:
         if cached is not None:
             return cached
 
-    settings = get_settings()
-    if settings.faq_embedding_enabled:
-        # asyncio.gather (not two sequential `await task`s) so that if this
-        # coroutine itself gets cancelled (e.g. the per-turn
-        # AGENT_TIMEOUT_SECONDS wait_for in chat_service fires while we're
-        # awaiting the lexical leg), the cancellation propagates to BOTH
-        # tasks instead of leaving the semantic-lookup task (embedding call +
-        # Postgres round trip) running as an orphan in the background.
-        (lex_answer, lex_score), candidates = await asyncio.gather(
-            _lexical_lookup(query, language),
-            _semantic_lookup(query, language),
-        )
+    hits = await vector_store.search(query, language)
+    candidates = [FaqCandidate(h.question, h.answer, h.score) for h in hits]
+
+    if not hits:
+        result = FaqSearch(answer=None, tier="none", candidates=[])
     else:
-        lex_answer, lex_score = await _lexical_lookup(query, language)
-        candidates = []
-
-    sem_top = candidates[0] if candidates else None
-    sem_score = sem_top.score if sem_top else 0.0
-    sem_tier = (
-        _score_tier(sem_score, settings.faq_sem_strict_threshold, settings.faq_sem_low_threshold)
-        if sem_top else "none"
-    )
-    lex_tier = (
-        _score_tier(lex_score, settings.faq_lex_strict_threshold, settings.faq_lex_low_threshold)
-        if lex_answer else "none"
-    )
-
-    if sem_top and _TIER_RANK[sem_tier] >= _TIER_RANK[lex_tier]:
-        answer, tier, leg = sem_top.answer, sem_tier, "sem"
-    else:
-        answer, tier, leg = lex_answer, lex_tier, "lex"
-
-    # Cross-leg agreement promotion: if BOTH legs independently agree on the
-    # SAME FAQ entry at tier=low, treat it as strict. Two independent weak
-    # signals pointing at the same row are collectively a strong signal.
-    # Conservative: only promotes low+low agreement, never upgrades "none".
-    if (
-        sem_top is not None
-        and lex_answer is not None
-        and sem_tier == "low"
-        and lex_tier == "low"
-        and _normalize_answer(sem_top.answer) == _normalize_answer(lex_answer)
-    ):
-        tier = "strict"
+        idx, ok = await _llm_rerank(query, hits)
+        if idx is not None:
+            pick = hits[idx]
+            result = FaqSearch(
+                answer=pick.answer, tier="strict", score=pick.score, candidates=candidates
+            )
+        elif ok:
+            # The rerank ran and refused — trust it.
+            result = FaqSearch(
+                answer=None, tier="none", score=hits[0].score, candidates=candidates
+            )
+        else:
+            # The rerank could not run (disabled, no key, OpenAI down). Do NOT
+            # report "no match" — hand the candidates to the caller's own LLM,
+            # which is exactly what the "low" tier is for.
+            result = FaqSearch(
+                answer=None, tier="low", score=hits[0].score, candidates=candidates
+            )
 
     # Local import: app.agent.tools imports this module, so a module-level
     # import of app.agent would be circular.
     from app.agent.pii_masker import mask_pii
 
     safe_query = mask_pii(query)[:120]
-    if tier == "strict":
+    if result.tier == "strict":
         _logger.debug(
-            "faq_hit leg=%s lex=%.2f sem=%.2f query=%r",
-            leg, lex_score, sem_score, safe_query,
+            "faq_hit score=%.3f query=%r", result.score, safe_query
         )
     else:
         # INFO on purpose: unanswered queries are the signal for which FAQ
         # entries are missing — grep production logs for "faq_miss".
         _logger.info(
-            "faq_miss tier=%s lex=%.2f sem=%.2f query=%r top=%r",
-            tier, lex_score, sem_score, safe_query,
-            sem_top.question[:120] if sem_top else None,
+            "faq_miss tier=%s cands=%d query=%r top=%r",
+            result.tier, len(candidates), safe_query,
+            candidates[0].question[:120] if candidates else None,
         )
 
-    result = FaqSearch(
-        answer=answer if tier != "none" else None,
-        tier=tier,
-        lex_score=lex_score,
-        sem_score=sem_score,
-        candidates=candidates,
-    )
     if turn_cache is not None:
         turn_cache[cache_key] = result
     return result
 
 
 async def _faq_lookup(query: str, language: str | None = None) -> Optional[str]:
-    """Binary wrapper — returns answer iff the hybrid tier is strict, else None.
+    """Binary wrapper — returns the answer iff the tier is strict, else None.
 
-    Preserves the old contract for node_faq's APIError fallback and calc_flow's
-    side-question handler.
+    Preserves the contract node_faq's APIError fallback and calc_flow's
+    side-question handler were written against.
     """
     result = await faq_search(query, language)
-    if result.tier == "strict":
-        return result.answer
-    return None
+    return result.answer if result.tier == "strict" else None
 
 
 async def faq_precheck_answer(query: str, language: str | None = None) -> Optional[str]:
-    """Deterministic pre-check for node_faq's pre-LLM shortcut — deliberately
-    stricter than `_faq_lookup`/`faq_search`'s own tier.
+    """Deterministic pre-check for node_faq's pre-LLM shortcut.
 
-    `faq_search`'s combined tier is the BEST of the two legs (see the module
-    docstring): a single leg clearing its strict threshold is enough, even if
-    the other leg barely registered the query as related. That is fine for
-    the `faq_lookup` tool, where the LLM stays in the loop and can recover
-    from a bad match. It is NOT fine here: this function feeds node_faq's
-    pre-LLM shortcut, which returns the answer verbatim and skips the LLM (and
-    therefore every product/office tool) entirely for the turn — there is no
-    model left to notice a wrong match. This was tightened after a measured
-    production hijack: "Хочу оформить ипотеку" (mortgage intent) scored
-    lex=0.727/sem=0.667 — both individually below their strict thresholds
-    (lex 0.75, sem 0.60) — yet the combined tier was "strict" because it takes
-    the max of the two legs, and the answer returned was a FAQ entry about
-    микрозайм, a different product entirely, silently swallowing what should
-    have been a product-catalog request.
+    Returns an answer only on ``strict`` — i.e. only when the rerank positively
+    identified an entry. Taking this path skips node_faq's LLM turn (and with
+    it every product/office tool), so the guard against swallowing a
+    product-catalog request lives in the rerank prompt's BOUNDARY rule rather
+    than in a score threshold here.
 
-    Requires BOTH legs to independently clear their own strict threshold.
-    Measured lexical scores cleanly separate the two groups at the existing
-    FAQ_LEX_STRICT_THRESHOLD (0.75): genuine FAQ hits score 0.80-1.00 lexical,
-    measured hijacks score 0.45-0.73 lexical — semantic alone cannot separate
-    them (the ranges overlap), which is why both legs are checked here.
-
-    Because this checks raw per-leg scores rather than `faq_search`'s combined
-    tier, the tier's low+low cross-leg promotion has no effect on this
-    function — that promotion only ever produces tier="strict" out of two
-    "low" (sub-strict) legs, which this function's own bar rejects anyway.
-
-    When semantic search is disabled (`settings.faq_embedding_enabled` is
-    False) the semantic leg can never contribute a score, so requiring it to
-    also clear its threshold would mean this pre-check could never fire in
-    that configuration — fall back to lexical-only in that case.
+    It is no longer stricter than :func:`faq_search`'s own tier: the two-leg
+    version had to be, because the combined tier took the *max* of two
+    independently-thresholded legs and a single confident leg could carry a bad
+    match through. There is one signal now, and it already encodes the refusal.
     """
     result = await faq_search(query, language)
-    settings = get_settings()
-    lex_ok = result.lex_score >= settings.faq_lex_strict_threshold
-    if not settings.faq_embedding_enabled:
-        return result.answer if lex_ok else None
-    sem_ok = result.sem_score >= settings.faq_sem_strict_threshold
-    return result.answer if (lex_ok and sem_ok) else None
+    return result.answer if result.tier == "strict" else None

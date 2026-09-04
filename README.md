@@ -331,10 +331,10 @@ operator_reply = langgraph_interrupt({"user_message": user_text, "reason": "huma
 
 Гибридный поиск по таблице `faq` — две «ноги», каждая со своей трёхуровневой шкалой уверенности (strict / low / none):
 
-1. **Лексическая**: нормализация текста + `SequenceMatcher ratio` / token overlap; пороги `FAQ_LEX_STRICT_THRESHOLD=0.75` / `FAQ_LEX_LOW_THRESHOLD=0.55`.
-2. **Семантическая**: косинусная близость pgvector-эмбеддингов (`text-embedding-3-small`, колонки `embedding_ru/en/uz` в `FaqItem`); пороги `FAQ_SEM_STRICT_THRESHOLD=0.60` / `FAQ_SEM_LOW_THRESHOLD=0.45`.
+1. **Retrieval**: один гибридный запрос в Weaviate — BM25 + вектор, баланс через `FAQ_HYBRID_ALPHA=0.9`; возвращает до `FAQ_CANDIDATE_LIMIT=20` кандидатов.
+2. **Реранк**: один вызов `gpt-4o-mini` (`FAQ_RERANK_MODEL`) выбирает подходящую запись или отказывается. Отказ и есть сигнал уверенности — поэтому порогов по скорам больше нет.
 
-Берётся нога с более высоким уровнем. `strict` → ответ возвращается как есть; `low` → LLM получает `FAQ_LOW_CONFIDENCE` + ближайшие вопросы-кандидаты (`FAQ_SEM_TOP_K=3`) и может переспросить; `none` → `NO_MATCH_IN_FAQ` (fallback). Эмбеддинги пересчитываются автоматически при изменении FAQ (`app/db/events.py`). Промахи логируются как `faq_miss` (текст запроса проходит PII-маскирование).
+`strict` → реранк выбрал запись, ответ возвращается (переформулированный с проверкой фактов); `none` → ничего не подошло или реранк отказался; `low` → реранк не смог отработать (выключен / нет ключа / OpenAI недоступен), тогда кандидаты уходят в LLM как раньше. Векторизацию делает сам Weaviate (`text2vec-openai`), индекс синхронизируется после коммита (`app/db/events.py`), чинится кнопкой «Переиндексировать FAQ» в `/admin/seed`. Промахи логируются как `faq_miss` (текст запроса проходит PII-маскирование).
 
 ---
 
@@ -382,7 +382,7 @@ get_main_menu_buttons("ru")                  # → ["🏠 Ипотека", "🚗
 | `CreditRateRule` | `credit_rate_rules` | Правила ставок по возрасту/сумме/сроку/доходу (движок в `app/agent/rate_rules.py`) |
 | `DepositProductOffer` | `deposit_product_offers` | Вклады + ставки по срокам |
 | `CardProductOffer` | `card_product_offers` | Дебетовые/валютные карты |
-| `FaqItem` | `faq` | Вопрос-ответ на 3 языках + pgvector-эмбеддинги (`embedding_ru/en/uz`) |
+| `FaqItem` | `faq` | Вопрос-ответ на 3 языках (векторы живут в Weaviate) |
 | `Filial` | `filials` | Филиалы: адрес, телефон, координаты |
 | `SalesOffice` | `sales_offices` | Центры банковских услуг (ЦБУ) |
 | `SalesPoint` | `sales_points` | Точки продаж |
@@ -454,7 +454,8 @@ complex-agent-api/
 │   │   ├── seed_view.py        # /admin/seed — форма загрузки xlsx
 │   │   └── services/           # Парсинг xlsx + сид в БД
 │   └── utils/
-│       ├── faq_tools.py        # Гибридный FAQ-поиск (лексический + pgvector)
+│       ├── faq_tools.py        # FAQ-поиск: гибрид Weaviate + LLM-реранк
+│       ├── vector_store.py      # Единственная точка контакта с Weaviate
 │       ├── pdf_generator.py    # Аннуитетный PDF-график
 │       ├── text_utils.py       # Нормализация, стемминг
 │       ├── cbu_rates.py        # Курсы ЦБ РУз
@@ -708,7 +709,7 @@ crontab -e
 | `MAX_DIALOG_TOKENS` | — | `3000` | Токенный бюджет истории (через `count_tokens_approximately`) |
 | `MIDDLEWARE_*` | — | — | Asaka chat-middleware (см. docs/CHAT_MIDDLEWARE_INTEGRATION.md) |
 | `MINIO_BASE_URL/USERNAME/PASSWORD` | — | — | Пересылка медиа операторам |
-| `FAQ_EMBEDDING_*`, `FAQ_SEM_*`, `FAQ_LEX_*` | — | см. `.env.example` | Семантический/лексический FAQ-поиск |
+| `WEAVIATE_*`, `FAQ_HYBRID_ALPHA`, `FAQ_CANDIDATE_LIMIT`, `FAQ_RERANK_*` | — | см. `.env.example` | Гибридный FAQ-поиск и реранк |
 
 ---
 

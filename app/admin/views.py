@@ -523,8 +523,7 @@ class FaqItemAdmin(ModelView, model=FaqItem):
     ]
 
     # 1536-dim numpy arrays — useless to render and break Jinja's `if obj`.
-    column_details_exclude_list = ["embedding_ru", "embedding_en", "embedding_uz"]
-    form_excluded_columns = ["embedding_ru", "embedding_en", "embedding_uz", "created_at"]
+    form_excluded_columns = ["created_at"]
 
     column_labels = {
         "id": "ID",

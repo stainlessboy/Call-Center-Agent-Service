@@ -22,6 +22,7 @@ from app.bot.middlewares.chat_service import ChatServiceMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
 from app.config import get_settings
 from app.db.events import register_faq_embedding_events
+from app.utils import vector_store
 from app.db.session import AsyncSessionLocal
 from app.admin.setup import setup_admin
 from app.miniapp.hub import hub as miniapp_hub
@@ -75,6 +76,15 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("BOT_TOKEN is not set")
 
     register_faq_embedding_events()
+
+    # FAQ-индекс. ensure_schema() никогда не роняет старт: если Weaviate
+    # недоступен, поиск деградирует до отсутствия кандидатов, а не до
+    # упавшего приложения.
+    with suppress(Exception):
+        if await vector_store.ensure_schema():
+            logger.info("weaviate FAQ index ready")
+        else:
+            logger.warning("weaviate FAQ index unavailable — FAQ search degraded")
 
     bot = Bot(
         token=settings.bot_token,
@@ -271,6 +281,8 @@ async def lifespan(app: FastAPI):
         if middleware_client:
             with suppress(Exception):
                 await middleware_client.close_all()
+        with suppress(Exception):
+            await vector_store.close()
         with suppress(Exception):
             await agent_client.aclose()
         with suppress(Exception):

@@ -452,17 +452,23 @@ _ALL_AXIS_COLS: Tuple[str, ...] = tuple(
 
 
 def _product_condition_kind(
-    product: Optional[CreditProductOffer], section_name: str
+    product: Optional[CreditProductOffer],
+    section_name: str,
+    record_kind: Optional[str] = None,
 ) -> str:
     """The axis whose Excel-parsed bounds are kept for this product.
 
     An existing product's own ``rate_condition_kind`` wins so a manual choice in
-    SQLAdmin survives re-seeding; only a product that has none falls back to the
-    section default.
+    SQLAdmin survives re-seeding. Failing that, a kind stated by the source
+    record itself (the tariff sheet knows the axis per product, from the
+    "условия.xlsx" matrix) beats the coarse per-section default.
     """
     own = (getattr(product, "rate_condition_kind", None) or "").strip()
     if own:
         return own
+    stated = (record_kind or "").strip()
+    if stated:
+        return stated
     return _SECTION_CONDITION_KIND.get(section_name, "flat")
 
 
@@ -477,17 +483,46 @@ def _group_by_product(
 
 
 async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
+    """Upsert credit products and rate rules from a JSON manifest.
+
+    Thin wrapper: parses the manifest produced by ``products_excel.py`` and
+    hands the records to :func:`seed_records`, which owns all DB writes.
+    """
+    return await seed_records(_iter_structured_records(manifest_path), replace=replace)
+
+
+async def seed_records(
+    records: Iterable[Dict[str, Any]],
+    *,
+    replace: bool,
+    trim_axes: bool = True,
+    update_static: bool = True,
+) -> Tuple[int, int]:
     """Upsert one CreditProductOffer per (section, service) and (re)load its
-    Excel-derived rate rules.
+    rate rules from already-parsed *records*.
 
     Manual data is preserved: qualification tags on the product are never
     overwritten, and only ``source='seed'`` rules are replaced — hand-entered
     ('manual') rules survive a re-seed. ``replace`` mode additionally clears
-    seed rules for products that dropped out of the manifest.
+    seed rules for products that dropped out of the source file.
+
+    ``trim_axes`` keeps only the bounds on the product's ``rate_condition_kind``
+    axis and nulls the rest — a guard against the loose text parsing of the
+    "AI CHAT INFO" workbook, where a row may carry bounds it does not actually
+    vary by. Pass ``False`` for a source whose every row states its own bounds
+    explicitly (see ``tariffs_excel.py``): there the bounds are the data, and
+    dropping them would also drop what the product card shows (products.py
+    reads the term range straight off the rules).
+
+    ``update_static`` refreshes an existing product's amount/purpose/age/
+    collateral fields from the record. Pass ``False`` for a source that does
+    not carry them (the tariff sheet holds rates only) — otherwise every
+    re-seed would null out data loaded from the product workbook. New products
+    are always populated from the record regardless.
     """
     inserted = 0
     skipped = 0
-    grouped = _group_by_product(_iter_structured_records(manifest_path))
+    grouped = _group_by_product(records)
 
     async with get_session() as session:
         if replace:
@@ -505,7 +540,9 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
                     )
                 )
             ).scalar_one_or_none()
-            kind = _product_condition_kind(product, section_name)
+            kind = _product_condition_kind(
+                product, section_name, first.get("rate_condition_kind")
+            )
             keep_cols = set(_KIND_AXIS_COLS.get(kind, ()))
 
             if product is None:
@@ -520,8 +557,9 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
                 await session.flush()  # assign product.id for the FK
             else:
                 # Refresh static fields from Excel; leave qualify tags untouched.
-                for k in _PRODUCT_STATIC_KEYS:
-                    setattr(product, k, first.get(k))
+                if update_static:
+                    for k in _PRODUCT_STATIC_KEYS:
+                        setattr(product, k, first.get(k))
                 # Never overwrite an axis chosen in SQLAdmin — only fill a blank.
                 if not (product.rate_condition_kind or "").strip():
                     product.rate_condition_kind = kind
@@ -536,8 +574,9 @@ async def _seed(manifest_path: Path, replace: bool) -> Tuple[int, int]:
 
             for rec in recs:
                 # Keep only the bounds on the product's chosen axis; income stays.
+                # With trim_axes=False every bound the record states is kept.
                 axis_vals = {
-                    col: (rec.get(col) if col in keep_cols else None)
+                    col: (rec.get(col) if (not trim_axes or col in keep_cols) else None)
                     for col in _ALL_AXIS_COLS
                 }
                 session.add(

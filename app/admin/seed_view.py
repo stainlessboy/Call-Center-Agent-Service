@@ -68,6 +68,13 @@ async def _run_seed_cards(manifest_path: Path, replace: bool) -> tuple[int, int]
     return await _seed(manifest_path, replace=replace)
 
 
+async def _run_seed_tariffs(xlsx_path: Path, replace: bool) -> dict[str, Any]:
+    """Load rate rules from the tariff workbook (rates only, no product data)."""
+    from app.admin.services.tariffs_excel import seed_tariffs
+
+    return await seed_tariffs(xlsx_path, replace)
+
+
 async def _run_seed_faq(file_path: Path, replace: bool) -> dict[str, Any]:
     """Import FAQ from xlsx / csv / json (dispatched by file extension)."""
     from app.admin.services.faq_import import _extract_multilingual_items_any, _import_items
@@ -82,76 +89,41 @@ async def _run_seed_faq(file_path: Path, replace: bool) -> dict[str, Any]:
     return {"inserted": len(items), "languages": lang_counts}
 
 
-async def _run_recompute_faq_embeddings() -> dict[str, int]:
-    """Backfill missing FAQ embeddings.
+async def _run_reindex_faq_vectors() -> dict[str, int]:
+    """Rebuild the Weaviate FAQ index from Postgres, from scratch.
 
-    Walks rows where any of the three embedding columns is NULL, batches the
-    matching question texts to OpenAI per language, and UPDATEs the rows.
-    Idempotent — repeat invocations skip rows that are already filled. Per-row
-    failures (e.g. OpenAI quota, partial outage) are silently skipped; rerun
-    later to fill them in.
+    Postgres is the source of truth; the index is a mirror that cannot join
+    its transactions, so it can drift — a write that landed while Weaviate was
+    down, or a restore of the database behind its back. This is the repair
+    path for all of it: the collection is dropped and refilled, so entries
+    deleted in Postgres cannot survive in the index.
+
+    Weaviate vectorizes the text itself (``text2vec-openai``), so this makes
+    no OpenAI calls of its own.
     """
-    from sqlalchemy import or_, select as sql_select, update
+    from sqlalchemy import select as sql_select
 
     from app.db.models import FaqItem
     from app.db.session import get_session
-    from app.utils.embeddings import embed_texts
-
-    BATCH_SIZE = 100
-    counts = {"ru": 0, "en": 0, "uz": 0, "scanned": 0}
+    from app.utils import vector_store
 
     async with get_session() as session:
-        result = await session.execute(
-            sql_select(
-                FaqItem.id,
-                FaqItem.question_ru,
-                FaqItem.question_en,
-                FaqItem.question_uz,
-                FaqItem.embedding_ru,
-                FaqItem.embedding_en,
-                FaqItem.embedding_uz,
-            ).where(
-                or_(
-                    FaqItem.embedding_ru.is_(None),
-                    FaqItem.embedding_en.is_(None),
-                    FaqItem.embedding_uz.is_(None),
+        rows = (
+            await session.execute(
+                sql_select(
+                    FaqItem.id,
+                    FaqItem.question_ru, FaqItem.answer_ru,
+                    FaqItem.question_en, FaqItem.answer_en,
+                    FaqItem.question_uz, FaqItem.answer_uz,
                 )
             )
-        )
-        rows = result.all()
+        ).all()
 
-    counts["scanned"] = len(rows)
-    if not rows:
-        return counts
-
-    for lang in ("ru", "en", "uz"):
-        # Collect rows where this language's embedding is missing AND the
-        # question text exists.
-        targets: list[tuple[int, str]] = []
-        for row in rows:
-            faq_id, q_ru, q_en, q_uz, e_ru, e_en, e_uz = row
-            qmap = {"ru": q_ru, "en": q_en, "uz": q_uz}
-            emap = {"ru": e_ru, "en": e_en, "uz": e_uz}
-            if qmap[lang] and emap[lang] is None:
-                targets.append((faq_id, qmap[lang]))
-        if not targets:
-            continue
-
-        for start in range(0, len(targets), BATCH_SIZE):
-            chunk = targets[start : start + BATCH_SIZE]
-            vectors = await embed_texts([t for _, t in chunk])
-            async with get_session() as session:
-                col = {"ru": FaqItem.embedding_ru, "en": FaqItem.embedding_en, "uz": FaqItem.embedding_uz}[lang]
-                for (faq_id, _), vec in zip(chunk, vectors):
-                    if vec is None:
-                        continue
-                    await session.execute(
-                        update(FaqItem).where(FaqItem.id == faq_id).values({col: vec})
-                    )
-                    counts[lang] += 1
-                await session.commit()
-
-    return counts
+    payload = [
+        (i, {"ru": (q_ru, a_ru), "en": (q_en, a_en), "uz": (q_uz, a_uz)})
+        for i, q_ru, a_ru, q_en, a_en, q_uz, a_uz in rows
+    ]
+    return await vector_store.reindex(payload)
 
 
 async def _export_faq_rows() -> list[dict[str, Any]]:
@@ -399,12 +371,14 @@ class SeedAdmin(BaseView):
         try:
             if action == "products":
                 results = await self._seed_products(form)
+            elif action == "tariffs":
+                results = await self._seed_tariffs(form)
             elif action == "faq":
                 results = await self._seed_faq(form)
             elif action == "branches":
                 results = await self._seed_branches(form)
-            elif action == "recompute_embeddings":
-                results = await self._recompute_embeddings()
+            elif action == "reindex_faq":
+                results = await self._reindex_faq()
             else:
                 results = [{"label": "Ошибка", "status": "error", "detail": f"Неизвестное действие: {action}"}]
         except Exception as exc:
@@ -471,6 +445,66 @@ class SeedAdmin(BaseView):
 
         return results
 
+    # ── Tariffs: rate rules for existing credit products ─────────────────
+
+    async def _seed_tariffs(self, form: Any) -> list[dict]:
+        """Load the "Тарифы" workbook: rate rules only, one row per tariff.
+
+        Reports every rejected row rather than importing a partial sheet
+        quietly — a wrong rate reaches customers as a quoted percentage.
+        """
+        results: list[dict] = []
+        replace = form.get("mode") == "replace"
+        results.append({
+            "label": "Режим",
+            "status": "ok",
+            "detail": "Перезапись" if replace else "Дополнение",
+        })
+
+        upload = form.get("tariffs_file")
+        if not _has_upload(upload):
+            results.append({
+                "label": "Файл тарифов",
+                "status": "error",
+                "detail": "Загрузите xlsx-файл с листом «Тарифы».",
+            })
+            return results
+
+        with tempfile.TemporaryDirectory(prefix="seed_tariffs_") as tmp:
+            xlsx_path = Path(tmp) / upload.filename
+            size = await _save_upload(upload, xlsx_path)
+            results.append({
+                "label": "Загрузка файла",
+                "status": "ok",
+                "detail": f"'{upload.filename}' загружен ({size:,} байт)",
+            })
+
+            try:
+                report = await _run_seed_tariffs(xlsx_path, replace)
+            except Exception as exc:
+                results.append({"label": "Тарифы", "status": "error", "detail": str(exc)})
+                return results
+
+        results.append({
+            "label": "Тарифы",
+            "status": "ok",
+            "detail": (
+                f"Продуктов: {report['products']}, "
+                f"тарифов добавлено: {report['inserted']}, "
+                f"строк пропущено: {report['skipped']}"
+            ),
+        })
+        for issue in report["issues"]:
+            row = issue.get("row")
+            where = f"строка {row}" if row else "файл"
+            product = issue.get("product") or ""
+            results.append({
+                "label": f"{where} — {product}".strip(" —"),
+                "status": "error",
+                "detail": issue.get("message", ""),
+            })
+        return results
+
     # ── FAQ ───────────────────────────────────────────────────────────────
 
     async def _seed_faq(self, form: Any) -> list[dict]:
@@ -520,32 +554,36 @@ class SeedAdmin(BaseView):
 
         return results
 
-    # ── Backfill FAQ embeddings ──────────────────────────────────────────
+    # ── Rebuild the Weaviate FAQ index ───────────────────────────────────
 
-    async def _recompute_embeddings(self) -> list[dict]:
+    async def _reindex_faq(self) -> list[dict]:
+        label = "Переиндексация FAQ"
         results: list[dict] = []
         try:
-            counts = await _run_recompute_faq_embeddings()
+            counts = await _run_reindex_faq_vectors()
         except Exception as exc:
-            _logger.exception("Recompute FAQ embeddings failed")
+            _logger.exception("FAQ reindex failed")
             results.append({
-                "label": "Пересчёт эмбеддингов",
+                "label": label,
                 "status": "error",
                 "detail": f"{type(exc).__name__}: {exc}",
             })
             return results
-        if counts["scanned"] == 0:
+        if not counts.get("rows"):
             results.append({
-                "label": "Пересчёт эмбеддингов",
-                "status": "ok",
-                "detail": "Все эмбеддинги уже на месте — пересчитывать нечего.",
+                "label": label,
+                "status": "error",
+                "detail": (
+                    "Ничего не проиндексировано. Либо таблица FAQ пуста, либо "
+                    "Weaviate недоступен — проверьте WEAVIATE_* в .env и логи."
+                ),
             })
             return results
         details = ", ".join(f"{lang.upper()}: {counts[lang]}" for lang in ("ru", "en", "uz"))
         results.append({
-            "label": "Пересчёт эмбеддингов",
+            "label": label,
             "status": "ok",
-            "detail": f"Просмотрено строк: {counts['scanned']}. Обновлено: {details}.",
+            "detail": f"Строк в базе: {counts['rows']}. Проиндексировано — {details}.",
         })
         return results
 

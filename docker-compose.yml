@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: bankbot
@@ -11,5 +11,27 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # FAQ-индекс: гибридный поиск (BM25 + вектор) + векторизация через
+  # text2vec-openai. Реранк делает приложение (app/utils/vector_store.py +
+  # faq_tools) на gpt-4o-mini — локальные cross-encoder модули Weaviate
+  # непригодны для кириллицы (замер: 3/18 против 18/18).
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.39.2
+    restart: unless-stopped
+    ports:
+      # Порты хоста переопределяемы — 8080/50051 часто уже заняты другим проектом.
+      - "${WEAVIATE_HTTP_PORT:-8080}:8080"
+      - "${WEAVIATE_GRPC_PORT:-50051}:50051"
+    environment:
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      ENABLE_MODULES: "text2vec-openai"
+      DEFAULT_VECTORIZER_MODULE: none
+      OPENAI_APIKEY: ${OPENAI_API_KEY:-}
+      CLUSTER_HOSTNAME: node1
+    volumes:
+      - wvdata:/var/lib/weaviate
+
 volumes:
   pgdata:
+  wvdata:

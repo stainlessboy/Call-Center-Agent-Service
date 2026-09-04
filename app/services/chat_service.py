@@ -33,6 +33,11 @@ class AgentReply:
     # Set when the heuristic thinks the user just wrote in a different
     # language than User.language. The bot layer renders an inline confirm.
     suggested_language: Optional[str] = None
+    # Structured Mini App blocks for this turn (see app/agent/state.py
+    # BotState.ui_blocks / docs/MINIAPP.md "UI blocks"). The Telegram bot
+    # handler never reads this field — it's forwarded to the Mini App's
+    # POST /chat/message response and persisted alongside the reply Message.
+    ui_blocks: Optional[list] = None
 
 
 class ChatService:
@@ -154,6 +159,7 @@ class ChatService:
         latency_ms: Optional[int] = None,
         error_code: Optional[str] = None,
         llm_usage: Optional[dict] = None,
+        ui_blocks: Optional[list] = None,
     ) -> None:
         async with self.session_factory() as session:
             async with session.begin():
@@ -165,9 +171,17 @@ class ChatService:
                     latency_ms=latency_ms,
                     error_code=error_code,
                     llm_usage=llm_usage,
+                    ui_blocks=ui_blocks,
                 )
                 session.add(message)
             await session.commit()
+
+    async def save_system_note(self, session_id: str, text: str) -> None:
+        """Persist an internal/audit-only note (role="system") — never
+        surfaced to the client: both `GET /chat/history` and
+        `GET /sessions/{id}` filter to `roles=("user", "agent", "operator")`.
+        Used by the operator handoff summary (app/agent/handoff.py)."""
+        await self._save_message(session_id=session_id, role="system", text=text)
 
     async def handle_user_message(
         self,
@@ -257,12 +271,14 @@ class ChatService:
             agent_text = PDF_MARKER_RE.sub("", agent_text).strip()
 
         llm_usage = getattr(turn_result, "token_usage", None) or None
+        ui_blocks = getattr(turn_result, "ui_blocks", None) or None
         await self._save_message(
             session_id=chat_session.id,
             role="agent",
             text=agent_text,
             latency_ms=latency_ms,
             llm_usage=llm_usage,
+            ui_blocks=ui_blocks,
         )
         return AgentReply(
             text=agent_text,
@@ -272,6 +288,7 @@ class ChatService:
             keyboard_options=agent_keyboard,
             show_operator_button=getattr(turn_result, "show_operator_button", False),
             suggested_language=getattr(turn_result, "suggested_language", None),
+            ui_blocks=ui_blocks,
         )
 
     async def count_user_messages_today(self, user_id: int) -> int:

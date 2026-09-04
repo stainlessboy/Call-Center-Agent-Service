@@ -150,7 +150,7 @@ async def extract_calc_value(
         {"type": "question", "text": "..."} — user asked a question
         {"type": "unparsed"} — LLM unavailable, fallback to regex
     """
-    llm = _get_chat_openai()
+    llm = _get_chat_openai(role="extractor")
     if not llm:
         return {"type": "unparsed"}
 
@@ -303,7 +303,7 @@ async def extract_prefill_from_history(
     Returns a dict with keys like {"amount": 15000000, "term_months": 12}.
     Falls back to empty dict if LLM is unavailable or nothing is found.
     """
-    llm = _get_chat_openai()
+    llm = _get_chat_openai(role="extractor")
     if not llm:
         return {}
 
@@ -368,7 +368,7 @@ async def extract_updated_value(
         {"type": "unparsed"}
     All may include an "_usage" key with token counts.
     """
-    llm = _get_chat_openai()
+    llm = _get_chat_openai(role="extractor")
     if not llm:
         return {"type": "unparsed"}
 

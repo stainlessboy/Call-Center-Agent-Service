@@ -1,22 +1,29 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+import html as _html
+from typing import Annotated, Literal, Optional
 
 from langchain_core.tools import tool as lc_tool
 from langgraph.prebuilt import InjectedState
 
 from app.agent.i18n import (
+    _localized_name,
     at,
     category_label,
     get_calc_questions,
 )
+from app.agent.intent import _detect_product_category
 from app.agent.products import (
     _find_product_by_name,
     _format_product_card,
     _format_product_list_text,
     _get_products_by_category,
 )
+from app.agent.rate_rules import income_type_from_dialog, resolve_effective_rate
+from app.agent.recommend import rank_products
+from app.agent.ui_blocks import credit_calc_result_block
 from app.config import get_settings
+from app.utils.amortization import amortize, dti_ratio
 from app.utils.faq_tools import faq_search
 
 # All supported product categories, ordered from most common to least.
@@ -72,23 +79,26 @@ def _lang_from_state(state: dict | None) -> str:
     return dialog.get("last_lang") or "ru"
 
 
-async def _find_offices_impl(office_type: str, query: str, lang: str) -> str:
+async def _find_offices_impl(office_type: str, query: str, lang: str) -> tuple[str, list]:
+    """Returns (display_text, offices) — offices is the raw ORM object list
+    (possibly empty) so the tool wrapper can build the office_list artifact
+    without a second DB round-trip."""
     from app.agent.branches import format_branches_list, search_offices
 
     offices = await search_offices(query=query, office_types=[office_type], limit=5)
     if not offices:
-        return at("branch_none_found", lang, query=query or "—")
+        return at("branch_none_found", lang, query=query or "—"), []
 
     header = at("branch_found_header", lang, count=len(offices))
-    return f"{header}\n\n{format_branches_list(offices, lang)}"
+    return f"{header}\n\n{format_branches_list(offices, lang)}", offices
 
 
-@lc_tool
+@lc_tool(response_format="content_and_artifact")
 async def find_office(
     office_type: Literal["filial", "sales_office", "sales_point"],
     query: str = "",
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Find a bank office by type and optional location/name query.
 
     OFFICE TYPES:
@@ -124,7 +134,19 @@ async def find_office(
       query: free-form city / region / office-name / car-dealer as the user wrote it.
              Empty string = list first 5.
     """
-    return await _find_offices_impl(office_type, query, _lang_from_state(state))
+    text, offices = await _find_offices_impl(office_type, query, _lang_from_state(state))
+    if not offices:
+        return text, None
+    from app.agent.branches import office_public_dict
+    artifact = {
+        "type": "office_list",
+        "data": {
+            "office_type": office_type,
+            "query": query,
+            "offices": [office_public_dict(o) for o in offices],
+        },
+    }
+    return text, artifact
 
 
 @lc_tool
@@ -144,10 +166,23 @@ async def get_office_types_info(
     return at("office_types_info", _lang_from_state(state))
 
 
-@lc_tool
+def _currency_numeric(value) -> Optional[float]:
+    """Best-effort float parse of a CBU JSON field ("12 690.15" style
+    strings, or already-numeric values) for the rate_table artifact. Returns
+    None rather than raising — a display-string field that doesn't parse
+    just means the ui_block carries a null instead of blocking the tool."""
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(" ", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+@lc_tool(response_format="content_and_artifact")
 async def get_currency_info(
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Get the latest currency exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
 
     HARD RULE: call ONLY if the message contains at least ONE explicit currency token
@@ -168,7 +203,7 @@ async def get_currency_info(
     lang = _lang_from_state(state)
     rates = await fetch_cbu_rates(("USD", "EUR", "RUB", "GBP", "KZT", "CNY"))
     if not rates:
-        return at("currency_info", lang)
+        return at("currency_info", lang), None
     lines = []
     for r in rates:
         nominal = r["nominal"]
@@ -178,7 +213,27 @@ async def get_currency_info(
         lines.append(f"{r['icon']} {nom_str}{r['code']} = {r['rate']} UZS {arrow}")
     header = {"ru": "Курс ЦБ Узбекистана", "en": "CBU exchange rates", "uz": "O'zbekiston MB kursi"}[lang]
     date_str = rates[0].get("date", "")
-    return f"{header} ({date_str}):\n" + "\n".join(lines)
+    text = f"{header} ({date_str}):\n" + "\n".join(lines)
+    artifact = {
+        "type": "rate_table",
+        "data": {
+            "date": date_str,
+            "rates": [
+                {
+                    "code": r["code"],
+                    "name_ru": r["name_ru"],
+                    "name_en": r["name_en"],
+                    "name_uz": r["name_uz"],
+                    "nominal": _currency_numeric(r["nominal"]) or 1,
+                    "rate": _currency_numeric(r["rate"]),
+                    "diff": _currency_numeric(r["diff"]),
+                    "icon": r["icon"],
+                }
+                for r in rates
+            ],
+        },
+    }
+    return text, artifact
 
 
 @lc_tool
@@ -206,11 +261,14 @@ async def show_credit_menu(
     return at("credit_menu_prompt", _lang_from_state(state))
 
 
-@lc_tool
+@lc_tool(response_format="content_and_artifact")
 async def get_products(
-    category: str,
+    category: Literal[
+        "mortgage", "autoloan", "microloan", "education_credit",
+        "deposit", "debit_card", "fx_card",
+    ],
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Get list of bank products for a specific category.
     Returns pre-formatted text — pass to the user AS-IS.
 
@@ -262,15 +320,134 @@ async def get_products(
     products = await _get_products_by_category(category)
     if not products:
         label = category_label(category, lang)
-        return at("product_unavailable", lang, label=label)
-    return _format_product_list_text(products, category, lang)
+        return at("product_unavailable", lang, label=label), None
+    text = _format_product_list_text(products, category, lang)
+    from app.agent.products import _product_public_dict
+    artifact = {
+        "type": "product_list",
+        "data": {
+            "category": category,
+            "products": [_product_public_dict(p) for p in products],
+        },
+    }
+    return text, artifact
 
 
-@lc_tool
+_RECOMMEND_REASON_KEYS = {
+    "best_rate": "recommend_reason_best_rate",
+    "age_fit": "recommend_reason_age_fit",
+}
+
+
+def _format_recommend_line(product: dict, lang: str) -> str:
+    name = _localized_name(product, lang)
+    rate = product.get("rate") or ""
+    reasons = product.get("_recommend_reasons") or []
+    phrases = [at(_RECOMMEND_REASON_KEYS[r], lang) for r in reasons if r in _RECOMMEND_REASON_KEYS]
+    line = f"• {name}"
+    if rate:
+        line += f" — {rate}"
+    if phrases:
+        line += f" ({', '.join(phrases)})"
+    return line
+
+
+@lc_tool(response_format="content_and_artifact")
+async def recommend_product(
+    goal: str = "",
+    state: Annotated[dict, InjectedState] = None,
+) -> tuple[str, Optional[dict]]:
+    """Recommend a bank product based on a life/financial GOAL the customer
+    described, when they have NOT named a specific product or category.
+
+    EXAMPLES (call when the customer describes what they want to achieve or
+    worry about, without naming a product type — "ипотека"/"автокредит"/"вклад"/etc):
+    - "хочу накопить на старость" / "думаю о пенсии" → recommend_product(goal="накопить на старость")
+    - "мечтаю о своей квартире, но не знаю с чего начать" → recommend_product(goal="своя квартира")
+    - "хочу создать финансовую подушку на всякий случай" → recommend_product(goal="финансовая подушка")
+    - "думаю, как накопить дочке на учёбу" → recommend_product(goal="накопить на учёбу ребёнку")
+    - "I want to build up retirement savings" → recommend_product(goal="retirement savings")
+    - "farzandimni xorijda o'qitishni orzu qilaman" → recommend_product(goal="bolani xorijda o'qitish")
+
+    DO NOT call when the customer already named a specific product/category —
+    call `get_products(category=...)` instead:
+    - "хочу ипотеку" / "покажи вклады" / "какие у вас автокредиты" → get_products(...)
+    DO NOT call for a generic "хочу кредит" with no goal at all — that's
+    `show_credit_menu()`.
+
+    Ranking is deterministic (rate, and — if the client's age is known from
+    their profile — how well it fits the product's age-dependent rate tiers).
+    Returns a short pitch for the best match plus one alternative — pass the
+    tool output to the customer AS-IS, do not reformat.
+
+    Parameters:
+        goal: the customer's goal in their own words (used to pick a product
+              category). Empty string falls back to the category already in
+              state, if any.
+    """
+    lang = _lang_from_state(state)
+    dialog = (state or {}).get("dialog") or {}
+    profile = (state or {}).get("user_profile") or None
+
+    category = _detect_product_category(goal or "")
+    if not category or category == "credit_menu":
+        category = dialog.get("category") or None
+    if not category:
+        return at("recommend_no_goal", lang), None
+
+    products = await _get_products_by_category(category)
+    label = category_label(category, lang)
+    if not products:
+        return at("product_unavailable", lang, label=label), None
+
+    ranked = rank_products(products, profile, category, top_n=2)
+    if not ranked:
+        return at("product_unavailable", lang, label=label), None
+
+    lines = [at("recommend_top_header", lang, category=label), _format_recommend_line(ranked[0], lang)]
+    if len(ranked) > 1:
+        lines += ["", at("recommend_alt_header", lang), _format_recommend_line(ranked[1], lang)]
+    lines += ["", at("recommend_footer", lang)]
+    text = "\n".join(lines)
+
+    from app.agent.products import _product_public_dict
+    artifact = {
+        "type": "product_list",
+        "data": {
+            "category": category,
+            "kind": "recommend",
+            "products": [_product_public_dict(p) for p in ranked],
+        },
+    }
+    return text, artifact
+
+
+def _product_card_result(matched: dict, category: str, lang: str, profile: Optional[dict]) -> tuple[str, dict]:
+    """Shared (text, artifact) builder for a matched product — used by every
+    tier of select_product's search below so the product_card artifact is
+    built identically regardless of which tier found the match."""
+    from app.agent.products import _personal_rate_pct, _product_public_dict
+
+    text = _format_product_card(matched, category, lang, profile)
+    personal_rate = None
+    if category in ("mortgage", "autoloan", "microloan", "education_credit"):
+        personal_rate = _personal_rate_pct(matched, profile)
+    artifact = {
+        "type": "product_card",
+        "data": {
+            "category": category,
+            "product": _product_public_dict(matched),
+            "personal_rate_pct": personal_rate,
+        },
+    }
+    return text, artifact
+
+
+@lc_tool(response_format="content_and_artifact")
 async def select_product(
     product_name: str,
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Show details of a specific product the user selected.
     Returns pre-formatted HTML text — pass AS-IS, do not reformat.
 
@@ -284,18 +461,19 @@ async def select_product(
     dialog = (state or {}).get("dialog") or {}
     dialog_products = list(dialog.get("products") or [])
     dialog_category = dialog.get("category", "")
+    profile = (state or {}).get("user_profile")
 
     # Tier 1: search within the products already loaded in dialog state
     matched = _find_product_by_name(product_name, dialog_products)
     if matched:
-        return _format_product_card(matched, dialog_category, lang)
+        return _product_card_result(matched, dialog_category, lang, profile)
 
     # Tier 2: search in DB by dialog category
     if dialog_category:
         db_products = await _get_products_by_category(dialog_category)
         matched = _find_product_by_name(product_name, db_products)
         if matched:
-            return _format_product_card(matched, dialog_category, lang)
+            return _product_card_result(matched, dialog_category, lang, profile)
 
     # Tier 3: search across all known categories
     for cat in _ALL_CATEGORIES:
@@ -304,13 +482,113 @@ async def select_product(
         cat_products = await _get_products_by_category(cat)
         matched = _find_product_by_name(product_name, cat_products)
         if matched:
-            return _format_product_card(matched, cat, lang)
+            return _product_card_result(matched, cat, lang, profile)
 
     # No match found anywhere
     if dialog_products:
         names = ", ".join(p["name"] for p in dialog_products[:5])
-        return at("product_not_found_suggest", lang, names=names)
-    return at("product_not_found", lang)
+        return at("product_not_found_suggest", lang, names=names), None
+    return at("product_not_found", lang), None
+
+
+_COMPARE_COLUMN_LABEL_KEYS = {
+    "rate": "cmp_rate",
+    "term": "cmp_term",
+    "amount": "cmp_amount",
+    "downpayment": "cmp_downpayment",
+    "cashback": "cmp_cashback",
+    "annual_fee": "cmp_annual_fee",
+    "min_amount": "label_min_amount",
+    "currency": "label_currency",
+    "network": "label_network",
+}
+
+
+def _compare_column_label(col: str, lang: str) -> str:
+    key = _COMPARE_COLUMN_LABEL_KEYS.get(col)
+    return at(key, lang) if key else col
+
+
+def _format_comparison_text(products: list[dict], category: str, lang: str) -> str:
+    """Compact per-product breakdown for Telegram (no fixed-width table —
+    values vary too much in length across categories/products for that to
+    stay readable in a monospace-less chat client)."""
+    from app.agent.products import _comparison_columns
+
+    columns = _comparison_columns(category)
+    lines = [at("compare_title", lang), ""]
+    for i, p in enumerate(products, 1):
+        name = _localized_name(p, lang) or p.get("name") or f"#{i}"
+        lines.append(f"<b>{i}. {_html.escape(name)}</b>")
+        for col in columns:
+            val = p.get(col)
+            if val in (None, "", []):
+                continue
+            lines.append(f"   {_compare_column_label(col, lang)}: {val}")
+        lines.append("")
+    lines.append(at("compare_footer", lang))
+    return "\n".join(lines).strip()
+
+
+@lc_tool(response_format="content_and_artifact")
+async def compare_products(
+    product_names: list[str],
+    state: Annotated[dict, InjectedState] = None,
+) -> tuple[str, Optional[dict]]:
+    """Compare 2-4 bank products side by side (same category — the ones
+    already shown to the customer, or looked up by the dialog's current
+    category).
+
+    EXAMPLES (assuming state.products = [1. "Ипотека Стандарт", 2. "Ипотека Лайт"]):
+    - "чем отличаются стандарт и лайт" → compare_products(product_names=["Ипотека Стандарт", "Ипотека Лайт"])
+    - "какой лучше — первый или второй" → compare_products(product_names=["1", "2"])  ← map numbers to positions, like select_product
+    - "сравни ипотеку стандарт, лайт и семейную" → compare_products(product_names=["Ипотека Стандарт", "Ипотека Лайт", "Семейная ипотека"])
+    - "what's the difference between standard and light" → compare_products(product_names=["Standard", "Light"])
+    - "solishtir birinchi va ikkinchisini" → compare_products(product_names=["1", "2"])
+
+    DO NOT call when:
+    - only ONE product is named — use select_product instead.
+    - the customer hasn't seen or named any specific products yet — show a
+      list first (get_products), then compare once they mention 2+ of them.
+
+    Parameters:
+        product_names: 2-4 product names/numbers/positions, as the customer
+            wrote them (or as shown in the last product list) — resolved
+            the same way select_product resolves a single name.
+    """
+    lang = _lang_from_state(state)
+    dialog = (state or {}).get("dialog") or {}
+    category = dialog.get("category", "")
+
+    candidates = list(dialog.get("products") or [])
+    if not candidates and category:
+        candidates = await _get_products_by_category(category)
+    if not candidates:
+        return at("compare_no_products", lang), None
+
+    resolved: list[dict] = []
+    seen_names: set[str] = set()
+    for name in (product_names or [])[:4]:
+        matched = _find_product_by_name(name, candidates)
+        if matched and matched.get("name") not in seen_names:
+            resolved.append(matched)
+            seen_names.add(matched.get("name"))
+
+    if len(resolved) < 2:
+        names = ", ".join(p["name"] for p in candidates[:5])
+        return at("compare_not_enough_products", lang, names=names), None
+
+    text = _format_comparison_text(resolved, category, lang)
+    from app.agent.products import _comparison_columns, _product_public_dict
+    artifact = {
+        "type": "comparison_table",
+        "data": {
+            "category": category,
+            "columns": _comparison_columns(category),
+            "products": [_product_public_dict(p) for p in resolved],
+        },
+    }
+    return text, artifact
 
 
 @lc_tool
@@ -340,13 +618,13 @@ async def start_calculator(
     return at("calc_intro", lang, category=cat_label) + "\n\n" + first_q
 
 
-@lc_tool
+@lc_tool(response_format="content_and_artifact")
 async def custom_loan_calculator(
     amount: float,
     term_months: int,
     downpayment: float = 0.0,
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Calculate a generic annuity loan payment using the customer's OWN numbers.
     NOT tied to a specific bank product.
 
@@ -387,25 +665,30 @@ async def custom_loan_calculator(
             "en": "Please provide valid amounts: the loan amount must exceed the down payment.",
             "uz": "Iltimos, to'g'ri summalarni kiriting: kredit summasi boshlang'ich to'lovdan katta bo'lishi kerak.",
         }
-        return _err.get(lang) or _err["ru"]
+        return (_err.get(lang) or _err["ru"]), None
     if amount > _MAX_CUSTOM_LOAN_AMOUNT:
-        return at("custom_calc_amount_too_large", lang, max_amount=fmt(_MAX_CUSTOM_LOAN_AMOUNT))
+        return at("custom_calc_amount_too_large", lang, max_amount=fmt(_MAX_CUSTOM_LOAN_AMOUNT)), None
     if term_months <= 0:
         _err = {
             "ru": "Укажите корректный срок (в месяцах, больше нуля).",
             "en": "Please provide a valid term (in months, greater than zero).",
             "uz": "Iltimos, to'g'ri muddatni kiriting (oyda, noldan katta).",
         }
-        return _err.get(lang) or _err["ru"]
+        return (_err.get(lang) or _err["ru"]), None
     if term_months > _MAX_CUSTOM_LOAN_TERM_MONTHS:
-        return at("custom_calc_term_too_large", lang, max_term=_MAX_CUSTOM_LOAN_TERM_MONTHS)
+        return at("custom_calc_term_too_large", lang, max_term=_MAX_CUSTOM_LOAN_TERM_MONTHS), None
 
-    r = rate_pct / 100 / 12
-    monthly = principal * r * (1 + r) ** term_months / ((1 + r) ** term_months - 1)
-    total = monthly * term_months
-    overpayment = total - principal
+    # Shared annuity math (app/utils/amortization.py) — the single source of
+    # truth also used by the PDF schedule and the Mini App calculator, so all
+    # three surfaces round/compute identically. `amortize()` gives us the full
+    # schedule too (monthly/total/overpayment match the plain annuity_payment
+    # math used before Phase 3 — see ui_blocks.py module docstring).
+    amort = amortize(principal, rate_pct, term_months)
+    monthly = amort.monthly_payment
+    total = amort.total_payment
+    overpayment = amort.overpayment
 
-    return at(
+    text = at(
         "custom_calc_result",
         lang,
         amount=fmt(amount),
@@ -417,6 +700,239 @@ async def custom_loan_calculator(
         total=fmt(total),
         overpayment=fmt(overpayment),
     )
+    artifact = credit_calc_result_block(
+        amort, product_name=None, amount=amount, downpayment=downpayment,
+    )
+    return text, artifact
+
+
+def _fmt_money(v: float) -> str:
+    return f"{v:,.0f}".replace(",", " ")
+
+
+_WHAT_IF_PRODUCT_SUFFIX = {
+    "ru": lambda name: f" по «{name}»",
+    "en": lambda name: f' for "{name}"',
+    "uz": lambda name: f" — «{name}» bo'yicha",
+}
+
+
+async def _resolve_calc_product(
+    product_name: str, dialog: dict,
+) -> Optional[dict]:
+    """Shared product resolution for what_if_scenario/affordability_check:
+    an explicit *product_name* (matched the same way select_product does)
+    wins, otherwise fall back to the product already selected in dialog."""
+    category = dialog.get("category", "")
+    if product_name:
+        candidates = list(dialog.get("products") or [])
+        matched = _find_product_by_name(product_name, candidates)
+        if not matched and category:
+            db_products = await _get_products_by_category(category)
+            matched = _find_product_by_name(product_name, db_products)
+        if matched:
+            return matched
+    return dialog.get("selected_product") or None
+
+
+@lc_tool(response_format="content_and_artifact")
+async def what_if_scenario(
+    amount: Optional[float] = None,
+    term_months: Optional[int] = None,
+    downpayment_pct: Optional[float] = None,
+    product_name: str = "",
+    state: Annotated[dict, InjectedState] = None,
+) -> tuple[str, Optional[dict]]:
+    """Recalculate a HYPOTHETICAL "what if" variant of a credit product —
+    e.g. "what if the term were longer" or "what if I put down more" —
+    WITHOUT touching the customer's actual in-progress calculator answers.
+
+    IMPORTANT: this is a side-hypothesis, not a flow step. It never mutates
+    `dialog.calc_slots` — call it as many times as the customer wants to
+    play with numbers, their real calculator progress (if any) is untouched.
+    When they're ready to actually proceed, they still go through the normal
+    product button → calculator flow (start_calculator / the calc_flow node).
+
+    EXAMPLES (a product is selected or was just shown):
+    - "а если на 5 лет вместо 3?" → what_if_scenario(term_months=60)
+    - "что если внести не 20%, а 30%?" → what_if_scenario(downpayment_pct=30)
+    - "а если взять 80 миллионов по Ипотеке Лайт?" → what_if_scenario(amount=80000000, product_name="Ипотека Лайт")
+    - "what if I take it for 7 years instead" → what_if_scenario(term_months=84)
+
+    DO NOT call when:
+    - no product is selected AND none is named — ask which product, or use
+      custom_loan_calculator for a product-free free-form estimate instead.
+    - the customer wants to actually commit to new numbers for their real
+      application — that goes through start_calculator/the calculator flow,
+      not this tool.
+
+    Parameters (all optional — unset ones fall back to the customer's
+    current calc_slots, i.e. "everything the same EXCEPT what changed"):
+        amount: hypothetical loan amount in UZS.
+        term_months: hypothetical term in months.
+        downpayment_pct: hypothetical down payment, in percent (0-100).
+        product_name: product to use for this scenario if different from
+            the one currently selected — resolved like select_product.
+    """
+    lang = _lang_from_state(state)
+    dialog = (state or {}).get("dialog") or {}
+    calc_slots = dialog.get("calc_slots") or {}
+
+    if dialog.get("category") == "deposit":
+        return at("what_if_not_for_deposit", lang), None
+
+    product = await _resolve_calc_product(product_name, dialog)
+    if not product:
+        return at("what_if_no_product", lang), None
+
+    eff_amount = amount if amount is not None else calc_slots.get("amount")
+    eff_term = term_months if term_months is not None else calc_slots.get("term_months")
+    eff_dp_pct = downpayment_pct if downpayment_pct is not None else calc_slots.get("downpayment")
+
+    if eff_amount is None or eff_term is None:
+        return at("what_if_missing_params", lang), None
+    if eff_amount > _MAX_CUSTOM_LOAN_AMOUNT:
+        return at("custom_calc_amount_too_large", lang, max_amount=_fmt_money(_MAX_CUSTOM_LOAN_AMOUNT)), None
+    if eff_term <= 0 or eff_term > _MAX_CUSTOM_LOAN_TERM_MONTHS:
+        return at("custom_calc_term_too_large", lang, max_term=_MAX_CUSTOM_LOAN_TERM_MONTHS), None
+
+    dp_pct = float(eff_dp_pct or 0)
+    dp_abs = int(float(eff_amount) * dp_pct / 100)
+    principal = float(eff_amount) - dp_abs
+    if principal <= 0:
+        return at("what_if_invalid_amounts", lang), None
+
+    rate_pct = resolve_effective_rate(
+        product,
+        age=calc_slots.get("age"),
+        amount=eff_amount,
+        term_months=eff_term,
+        downpayment_pct=dp_pct,
+        income_type=income_type_from_dialog(dialog),
+    )
+    amort = amortize(principal, rate_pct, int(eff_term))
+
+    product_display_name = _localized_name(product, lang) or product.get("name")
+    suffix = ""
+    if product_display_name:
+        suffix_fn = _WHAT_IF_PRODUCT_SUFFIX.get(lang, _WHAT_IF_PRODUCT_SUFFIX["ru"])
+        suffix = suffix_fn(product_display_name)
+
+    text = at(
+        "what_if_result", lang,
+        product_suffix=suffix,
+        amount=_fmt_money(eff_amount),
+        downpayment=_fmt_money(dp_abs),
+        dp_pct=f"{dp_pct:.0f}",
+        term=int(eff_term),
+        rate=f"{rate_pct:.1f}",
+        monthly=_fmt_money(amort.monthly_payment),
+        total=_fmt_money(amort.total_payment),
+        overpayment=_fmt_money(amort.overpayment),
+    )
+    artifact = credit_calc_result_block(
+        amort, product_name=product_display_name, amount=float(eff_amount), downpayment=dp_abs,
+    )
+    # Ephemeral marker (Phase 4, see docs/MINIAPP.md "UI blocks"): this is a
+    # side-hypothesis, not the customer's active calc_result — the Mini App
+    # should render it distinctly (e.g. not replace the last real result).
+    artifact["data"]["is_hypothetical"] = True
+    return text, artifact
+
+
+@lc_tool(response_format="content_and_artifact")
+async def affordability_check(
+    monthly_payment: Optional[float] = None,
+    loan_amount: Optional[float] = None,
+    term_months: Optional[int] = None,
+    state: Annotated[dict, InjectedState] = None,
+) -> tuple[str, Optional[dict]]:
+    """Check whether a monthly payment (given directly, or derived from a
+    loan amount + term) is comfortable relative to the customer's income.
+
+    Resolution order: an explicit `monthly_payment` wins; otherwise it is
+    derived from `loan_amount`/`term_months` (falling back to the
+    customer's current `dialog.calc_slots` for whichever of those two is
+    missing) using the same rate lookup as the calculator. Income comes
+    ONLY from the client's stored profile (`state.user_profile.facts.income_monthly`,
+    learned from earlier conversation, never asked for here) — if unknown,
+    give the general 40-50%-of-income rule and softly invite the customer
+    to share their income, WITHOUT pressing for it (same tone as the PII
+    policy: optional, never a requirement to proceed).
+
+    EXAMPLES:
+    - "потяну ли я платёж в 3 миллиона?" → affordability_check(monthly_payment=3000000)
+    - "хватит ли моего дохода на этот кредит?" (product/amount/term already in context) → affordability_check()
+    - "потяну ли 50 млн на 3 года?" → affordability_check(loan_amount=50000000, term_months=36)
+    - "can I afford a 2.5M payment?" → affordability_check(monthly_payment=2500000)
+
+    DO NOT call when the customer hasn't given a number and there is no
+    calculator context at all (dialog.calc_slots empty, no product) — ask
+    them for a payment or an amount+term first instead of guessing.
+
+    Parameters (all optional):
+        monthly_payment: a specific monthly payment to check, in UZS.
+        loan_amount: loan amount to derive a payment from, in UZS.
+        term_months: term to derive a payment from, in months.
+    """
+    lang = _lang_from_state(state)
+    dialog = (state or {}).get("dialog") or {}
+    calc_slots = dialog.get("calc_slots") or {}
+    profile = (state or {}).get("user_profile") or {}
+    income = (profile.get("facts") or {}).get("income_monthly")
+
+    eff_payment = monthly_payment
+    eff_amount = loan_amount if loan_amount is not None else calc_slots.get("amount")
+    eff_term = term_months if term_months is not None else calc_slots.get("term_months")
+
+    if eff_payment is None:
+        if not eff_amount or not eff_term:
+            return at("affordability_need_more_info", lang), None
+        selected_product = dialog.get("selected_product") or {}
+        rate_pct = resolve_effective_rate(
+            selected_product,
+            age=calc_slots.get("age"),
+            amount=eff_amount,
+            term_months=eff_term,
+            downpayment_pct=calc_slots.get("downpayment"),
+            income_type=income_type_from_dialog(dialog),
+        )
+        dp_pct = float(calc_slots.get("downpayment") or 0)
+        principal = float(eff_amount) * (1 - dp_pct / 100)
+        eff_payment = amortize(principal, rate_pct, int(eff_term)).monthly_payment
+
+    if not eff_payment or eff_payment <= 0:
+        return at("affordability_need_more_info", lang), None
+
+    ratio = dti_ratio(eff_payment, income)
+    warn_ratio = get_settings().dti_warn_ratio
+    if ratio is None:
+        text = at("affordability_general_rule", lang, payment=_fmt_money(eff_payment))
+    else:
+        verdict = at(
+            "affordability_verdict_high" if ratio > warn_ratio else "affordability_verdict_ok",
+            lang,
+        )
+        text = at(
+            "affordability_result_known", lang,
+            payment=_fmt_money(eff_payment),
+            pct=f"{ratio * 100:.0f}",
+            verdict=verdict,
+        )
+
+    artifact = {
+        "type": "calc_result",
+        "data": {
+            "kind": "affordability",
+            "monthly_payment": round(float(eff_payment), 2),
+            "loan_amount": eff_amount,
+            "term_months": eff_term,
+            "income_monthly": income,
+            "dti_ratio": round(ratio, 4) if ratio is not None else None,
+            "dti_warn_ratio": warn_ratio,
+        },
+    }
+    return text, artifact
 
 
 @lc_tool
@@ -444,12 +960,17 @@ async def faq_lookup(
     - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
 
     RETURNS one of these values:
-    - Answer text if the match is confident — pass it to the user.
-    - "FAQ_LOW_CONFIDENCE" followed by a numbered list of the closest FAQ
-      questions. If ONE of them clearly asks the same thing as the user, call
-      faq_lookup again with that exact question text to fetch its answer. If
-      none of them matches, treat this as NO_MATCH_IN_FAQ (below).
-    - "NO_MATCH_IN_FAQ" if nothing relevant was found. In that case:
+    - Answer text if the match is confident. Rephrase it naturally, in your
+      own words, in the customer's language — but keep every fact, number,
+      rate, term, condition and link EXACTLY as given in the source. Never
+      add anything that isn't in it.
+    - "FAQ_LOW_CONFIDENCE" followed by the closest FAQ entries, each with its
+      question AND answer text. If ONE of them clearly answers the user's
+      question, answer from it directly in THIS SAME turn (same rephrasing
+      rule as above) — do NOT call faq_lookup again for it. If none of them
+      fits, treat this as NO_MATCH_IN_FAQ (below).
+    - "NO_MATCH_IN_FAQ" if nothing relevant was found (this also covers a
+      FAQ_LOW_CONFIDENCE reply where none of the candidates fit). In that case:
       * If the question is GENERAL banking knowledge (what is annuity, a
         downpayment, how escrow works, what is APR, the typical flow of taking
         a loan, common banking terms / definitions) — answer it yourself,
@@ -468,15 +989,27 @@ async def faq_lookup(
     if result.tier == "strict":
         return result.answer or NO_MATCH_IN_FAQ
     if result.tier == "low" and result.candidates:
+        # Candidates carry their answer text too (not just the question) —
+        # a bare question list required a SECOND faq_lookup round-trip to
+        # fetch the answer, and the model frequently skipped that step and
+        # fell back to general knowledge instead of the DB (see the escrow
+        # incident this was fixed for). Shipping the answer text up front
+        # lets the model pick and answer within the same round.
         lines = [
             FAQ_LOW_CONFIDENCE,
-            "No confident match. Closest FAQ questions:",
+            "No confident match. Closest FAQ entries (question + answer):",
         ]
-        lines += [f"{i}. {c.question}" for i, c in enumerate(result.candidates, 1) if c.question]
+        for i, c in enumerate(result.candidates, 1):
+            if not c.question:
+                continue
+            lines.append(f"{i}. Q: {c.question}")
+            if c.answer:
+                lines.append(f"   A: {c.answer}")
         lines.append(
-            "If one of these clearly asks the same thing as the user, call "
-            "faq_lookup again with that exact question text. Otherwise treat "
-            "this as NO_MATCH_IN_FAQ."
+            "If one of these clearly answers the user's question, answer "
+            "from it directly now (rephrase naturally, keep every fact/"
+            "number/rate/term exactly as given) — do not call faq_lookup "
+            "again for it. Otherwise treat this as NO_MATCH_IN_FAQ."
         )
         return "\n".join(lines)
     if result.tier == "low":
@@ -484,11 +1017,11 @@ async def faq_lookup(
     return NO_MATCH_IN_FAQ
 
 
-@lc_tool
+@lc_tool(response_format="content_and_artifact")
 async def select_office(
     office_name: str,
     state: Annotated[dict, InjectedState] = None,
-) -> str:
+) -> tuple[str, Optional[dict]]:
     """Show full details of an office the user selected from the previously-shown list.
     Returns pre-formatted HTML — pass AS-IS, do NOT rephrase, do NOT promise to fetch later.
 
@@ -504,9 +1037,9 @@ async def select_office(
     dialog = (state or {}).get("dialog") or {}
     offices_state = list(dialog.get("offices") or [])
     if not offices_state:
-        return at("office_not_found", lang)
+        return at("office_not_found", lang), None
 
-    from app.agent.branches import format_branch_card, format_branches_list
+    from app.agent.branches import format_branch_card, format_branches_list, office_public_dict
     from app.db.models import Filial, SalesOffice, SalesPoint
     from app.db.session import get_session
     from sqlalchemy import select as sql_select
@@ -527,16 +1060,33 @@ async def select_office(
                     out.append(obj)
         return out
 
+    def _list_result(objs: list) -> tuple[str, Optional[dict]]:
+        if not objs:
+            return at("office_not_found", lang), None
+        text = format_branches_list(objs, lang)
+        artifact = {
+            "type": "office_list",
+            "data": {"office_type": None, "query": "", "offices": [office_public_dict(o) for o in objs]},
+        }
+        return text, artifact
+
+    def _detail_result(objs: list) -> tuple[str, Optional[dict]]:
+        if not objs:
+            return at("office_not_found", lang), None
+        text = format_branch_card(objs[0], lang)
+        artifact = {"type": "office_detail", "data": {"office": office_public_dict(objs[0])}}
+        return text, artifact
+
     norm = (office_name or "").strip().lower()
     if norm in ("all", "все", "всё", "хаммаси", "barchasi", "hammasini", "hammasi"):
         objs = await _fetch(offices_state)
-        return format_branches_list(objs, lang) if objs else at("office_not_found", lang)
+        return _list_result(objs)
 
     if norm.isdigit():
         idx = int(norm) - 1
         if 0 <= idx < len(offices_state):
             objs = await _fetch([offices_state[idx]])
-            return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+            return _detail_result(objs)
 
     _ORDINALS = {
         "первый": 0, "первое": 0, "первая": 0, "first": 0, "birinchisi": 0, "birinchi": 0,
@@ -547,14 +1097,14 @@ async def select_office(
     }
     if norm in _ORDINALS and _ORDINALS[norm] < len(offices_state):
         objs = await _fetch([offices_state[_ORDINALS[norm]]])
-        return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+        return _detail_result(objs)
 
     matched_items = [it for it in offices_state if norm in (it.get("name") or "").lower()]
     if matched_items:
         objs = await _fetch([matched_items[0]])
-        return format_branch_card(objs[0], lang) if objs else at("office_not_found", lang)
+        return _detail_result(objs)
 
-    return at("office_not_found_in_list", lang)
+    return at("office_not_found_in_list", lang), None
 
 
 @lc_tool
@@ -593,36 +1143,71 @@ async def request_operator(
 
 
 # ---------------------------------------------------------------------------
-# clarify — TEMPORARILY DISABLED (2026-06-11)
+# clarify — RE-ENABLED (Phase 4 "Экспертиза", 2026-08-07)
 #
-# The clarify tool caused tight loops: the LLM asked "which card — Uzcard/Humo?",
-# the user answered "uzcard", and the model re-asked the same question instead
-# of using the answer. We removed it from `_FAQ_TOOLS` so the LLM can no longer
-# call it. The simpler flow is now: answer from faq_lookup, and if nothing is
-# found, fall through to the generic fallback (which surfaces the operator
-# button after a couple of unhelpful turns — see helpers._finalize_turn).
+# Originally disabled 2026-06-11: it caused tight loops — the LLM asked
+# "which card — Uzcard/Humo?", the user answered "uzcard" in free text, and
+# the model re-asked the same question instead of using the answer.
 #
-# Kept here commented out so it can be restored quickly if we decide structured
-# disambiguation is worth re-adding. If you re-enable it, also re-add it to
-# `_FAQ_TOOLS` below and restore the policy/docstring references.
-#
-# @lc_tool
-# async def clarify(
-#     missing_info: str,
-#     options: list[str] = None,
-#     state: Annotated[dict, InjectedState] = None,
-# ) -> str:
-#     """Ask the user a structured clarifying question when their message is ambiguous
-#     or incomplete, instead of a flat 'I don't understand'.
-#     """
-#     from app.agent.i18n import at as _at
-#     lang = _lang_from_state(state)
-#     prompt = _at("clarify_prompt", lang, info=missing_info)
-#     if options:
-#         header = _at("clarify_options_header", lang)
-#         bullet_list = "\n".join(f"• {opt}" for opt in options)
-#         return f"{prompt}\n\n{header}\n{bullet_list}"
-#     return prompt
+# Two fixes together close that loop for good:
+#  1. `options` are now REQUIRED reply buttons (Telegram keyboard / Mini App
+#     chips — see nodes/faq.py::_update_dialog_from_tools), not free text to
+#     parse. A tap returns the option's exact text, so there is nothing left
+#     to mis-parse on the happy path.
+#  2. A programmatic anti-loop guard in nodes/faq.py's tool-call round loop:
+#     if the PREVIOUS finalized turn was itself a clarify prompt (tracked via
+#     `dialog["clarify_last_turn"]`) and the model tries to call `clarify`
+#     again this turn, the guard drops that tool result and strips `clarify`
+#     from the tools bound for the rest of this turn's rounds — the model
+#     physically cannot call it a second time in a row, so it falls through
+#     to faq_lookup / a direct answer instead. See nodes/faq.py for the
+#     mechanics and tests/test_phase4_tools.py for the regression test.
+# ---------------------------------------------------------------------------
+
+
+@lc_tool
+async def clarify(
+    question: str,
+    options: list[str],
+    state: Annotated[dict, InjectedState] = None,
+) -> str:
+    """Ask the customer a short, structured clarifying question when their
+    message is genuinely ambiguous between 2-4 SPECIFIC, DIFFERENT next
+    steps and nothing else (state, history, defaults) can resolve it.
+
+    The `options` become reply buttons (Telegram) / tap-chips (Mini App) —
+    the customer taps one and you get back that EXACT text next turn, never
+    free-form guessing. Ends the turn (question + buttons), same as any
+    other tool whose output is shown to the user as-is.
+
+    CALL ONLY when the request could reasonably branch into 2-4 concrete,
+    materially different answers and you have no other signal to pick one.
+
+    EXAMPLES:
+    - "как заблокировать карту" when the customer has both an Uzcard and a
+      Humo card and the procedure differs → clarify(question="Уточните, пожалуйста, какая у вас карта — Uzcard или Humo?", options=["Uzcard", "Humo"])
+    - "хочу закрыть вклад досрочно" when both currency AND term change the
+      answer and neither is known → clarify(question="По какому вкладу вопрос — в сумах или в валюте?", options=["В сумах", "В валюте"])
+    - "I want to close my deposit early" (currency unknown, changes the
+      answer) → clarify(question="Which deposit is this about — UZS or foreign currency?", options=["UZS", "Foreign currency"])
+
+    DO NOT call when:
+    - you can just answer and note an assumption at the end ("Предполагаю,
+      вы про X — если не так, уточните.") — cheaper than a whole extra turn.
+    - there's a sensible default — pick the most common case and say so.
+    - the customer's PREVIOUS message was already a clarify question from
+      you (check <state>/history) and they replied with free text instead
+      of tapping a button — do NOT call clarify again on the same ambiguity.
+      Take their free-text reply at face value and answer it directly
+      (faq_lookup or your best answer) instead of re-asking. A programmatic
+      guard also enforces this, but do not rely on it — get it right first.
+
+    Parameters:
+        question: the clarifying question, in the customer's language.
+        options: 2-4 short, DISTINCT reply options (button labels, a few
+                 words each) — not full sentences.
+    """
+    return question
 
 
 _FAQ_TOOLS = [
@@ -633,9 +1218,13 @@ _FAQ_TOOLS = [
     show_credit_menu,
     get_products,
     select_product,
+    compare_products,
     start_calculator,
     custom_loan_calculator,
+    what_if_scenario,
+    affordability_check,
     faq_lookup,
     request_operator,
-    # clarify,  # TEMPORARILY DISABLED — see comment above
+    clarify,
+    recommend_product,
 ]

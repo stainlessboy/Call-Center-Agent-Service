@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging as _logging
 import os
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
@@ -24,6 +25,7 @@ def _finalize_turn(
     is_fallback: bool = False,
     mask_user_text: Optional[str] = None,
     wrap_ai_generated: bool = False,
+    ui_blocks: Optional[list] = None,
 ) -> dict:
     user_text = (state.get("last_user_text") or "").strip()
     # Existing checkpoints from older code may have a SystemMessage at index 0.
@@ -47,7 +49,7 @@ def _finalize_turn(
     # "💡 Ассистент / Yordamchi" wrapper. The wrapper is applied to the
     # display answer only (returned in the "answer" field below).
     msgs.append(AIMessage(content=answer))
-    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "3000"))
+    _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "16000"))
     tail_source = msgs[len(legacy_system_head):]
     tail = trim_messages(
         tail_source,
@@ -68,7 +70,14 @@ def _finalize_turn(
         or _is_operator_request(user_text)
         or dialog.get("operator_requested", False)
     )
-    dialog = {**dialog, "fallback_streak": streak, "operator_requested": False}
+    dialog = {
+        **dialog,
+        "fallback_streak": streak,
+        "operator_requested": False,
+        # Recap-gap detector (node_router / nodes/recap.py) needs a
+        # per-turn timestamp regardless of which flow finalized the turn.
+        "last_turn_at": datetime.now(timezone.utc).isoformat(),
+    }
     # Sticky session flags must survive dialog resets regardless of which node
     # rebuilt the dialog (qualify/calc helpers construct it from scratch).
     prior_dialog = state.get("dialog") or {}
@@ -90,6 +99,9 @@ def _finalize_turn(
         "dialog": dialog,
         "keyboard_options": keyboard_options,
         "show_operator_button": show_operator,
+        # Mini App structured blocks (see BotState.ui_blocks docstring). The
+        # Telegram path never reads this key — always safe to populate.
+        "ui_blocks": list(ui_blocks) if ui_blocks else None,
     }
 
 

@@ -6,6 +6,7 @@ way — the bot as text, the PDF as a table, the Mini App as JSON.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 def annuity_payment(principal: float, monthly_rate: float, n: int) -> float:
@@ -86,6 +87,25 @@ def amortize(principal: float, annual_rate_pct: float, term_months: int) -> Amor
         term_months=int(term_months),
         rows=rows,
     )
+
+
+def dti_ratio(monthly_payment: float, income_monthly: Optional[float]) -> Optional[float]:
+    """Debt-to-income ratio (monthly_payment / income_monthly).
+
+    Returns None when income is unknown, non-numeric, or non-positive —
+    callers (tools.affordability_check, nodes/calc_flow.py's deterministic
+    DTI check) must treat None as "cannot assess this", never as a numeric
+    0 (which would read as "no burden at all").
+    """
+    if income_monthly is None:
+        return None
+    try:
+        income = float(income_monthly)
+    except (TypeError, ValueError):
+        return None
+    if income <= 0:
+        return None
+    return float(monthly_payment) / income
 
 
 def deposit_income(principal: float, annual_rate_pct: float, term_months: int) -> dict:

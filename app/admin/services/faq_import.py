@@ -384,45 +384,57 @@ def _extract_multilingual_items_any(path: Path, limit: Optional[int] = None) -> 
     return _extract_multilingual_items(path, None, None, limit)
 
 
-async def _attach_embeddings(items: List[dict[str, Optional[str]]]) -> None:
-    """Batch-embed all questions across languages and attach vectors to *items*.
+async def _index_items(items: List[dict[str, Optional[str]]]) -> None:
+    """Push the freshly-imported FAQ rows into the Weaviate index.
 
-    Three batched OpenAI calls (one per language). On failure any individual
-    embedding stays None — the row is still inserted, the SQLAlchemy event
-    listener will not retry (its before_insert path skips columns that already
-    exist or are explicitly None for missing questions). Backfill via the
-    admin UI handles those rows later.
+    Called AFTER the Postgres commit: Postgres is the source of truth, and a
+    failed index write must not roll back a successful import. Weaviate does
+    the vectorization itself (``text2vec-openai``), so nothing is computed
+    here — we only ship the text.
+
+    A full rebuild is used rather than per-row upserts because ``replace``
+    mode wipes the table, and rows deleted there must not linger in the index.
+    Failures are logged, not raised: the "Переиндексировать FAQ" button
+    repairs the index from Postgres.
     """
     import logging
 
-    from app.utils.embeddings import embed_texts
+    from sqlalchemy import select as sql_select
+
+    from app.utils import vector_store
 
     logger = logging.getLogger(__name__)
-
-    for lang in ("ru", "en", "uz"):
-        q_field = f"question_{lang}"
-        emb_field = f"embedding_{lang}"
-        # Pair (index, text) so we can write back after the batch.
-        pairs = [(i, item.get(q_field)) for i, item in enumerate(items)]
-        texts = [t or "" for _, t in pairs]
-        if not any(texts):
-            continue
-        try:
-            vectors = await embed_texts(texts)
-        except Exception as exc:
-            logger.warning("seed embed batch failed for %s: %s", lang, exc)
-            continue
-        for (idx, q_text), vec in zip(pairs, vectors):
-            if q_text and vec is not None:
-                items[idx][emb_field] = vec
+    try:
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    sql_select(
+                        FaqItem.id,
+                        FaqItem.question_ru, FaqItem.answer_ru,
+                        FaqItem.question_en, FaqItem.answer_en,
+                        FaqItem.question_uz, FaqItem.answer_uz,
+                    )
+                )
+            ).all()
+        payload = [
+            (i, {"ru": (q_ru, a_ru), "en": (q_en, a_en), "uz": (q_uz, a_uz)})
+            for i, q_ru, a_ru, q_en, a_en, q_uz, a_uz in rows
+        ]
+        counts = await vector_store.reindex(payload)
+        logger.info("faq indexed into weaviate: %s", counts)
+    except Exception:
+        logger.warning(
+            "faq weaviate indexing failed after import — press "
+            "'Переиндексировать FAQ' in /admin/seed to repair", exc_info=True,
+        )
 
 
 async def _import_items(items: List[dict[str, Optional[str]]], replace: bool, dry_run: bool) -> None:
     if dry_run:
         return
-    await _attach_embeddings(items)
     async with get_session() as session:
         if replace:
             await session.execute(delete(FaqItem))
         session.add_all([FaqItem(**item) for item in items])
         await session.commit()
+    await _index_items(items)

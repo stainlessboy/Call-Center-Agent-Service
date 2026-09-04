@@ -1,6 +1,6 @@
 services:
   db:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bankbot}
@@ -14,12 +14,43 @@ services:
       timeout: 3s
       retries: 5
 
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.39.2
+    restart: unless-stopped
+    environment:
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      # Порты наружу не публикуются — доступ только из compose-сети.
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY is required}
+      AUTHENTICATION_APIKEY_USERS: bankbot
+      ENABLE_MODULES: "text2vec-openai"
+      DEFAULT_VECTORIZER_MODULE: none
+      OPENAI_APIKEY: ${OPENAI_API_KEY:-}
+      CLUSTER_HOSTNAME: node1
+    volumes:
+      - wvdata:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   api:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bankbot}:${POSTGRES_PASSWORD:-bankbot}@db:5432/${POSTGRES_DB:-bankbot}
+      # Reach Weaviate by its compose service name. Both the host AND the
+      # ports must be pinned here: env_file pulls in .env, where
+      # WEAVIATE_HTTP_PORT/WEAVIATE_GRPC_PORT are the *host* ports a developer
+      # remapped to dodge a local collision — inside the network Weaviate
+      # always listens on 8080/50051.
+      WEAVIATE_HTTP_HOST: weaviate
+      WEAVIATE_GRPC_HOST: weaviate
+      WEAVIATE_HTTP_PORT: "8080"
+      WEAVIATE_GRPC_PORT: "50051"
       # Trust X-Forwarded-* from docker-network peers (the nginx container).
       # api is not published on the host, so only compose-network containers
       # can reach it. Without this uvicorn ignores X-Forwarded-Proto and
@@ -30,6 +61,8 @@ services:
       FORWARDED_ALLOW_IPS: 172.16.0.0/12,192.168.0.0/16
     depends_on:
       db:
+        condition: service_healthy
+      weaviate:
         condition: service_healthy
     expose:
       - "8001"
@@ -54,4 +87,5 @@ services:
       - ./nginx/certbot/www:/var/www/certbot
 
 volumes:
+  wvdata:
   pgdata:
