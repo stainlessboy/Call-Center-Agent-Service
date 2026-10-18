@@ -609,8 +609,9 @@ class TestGraphStructure:
         from app.agent import build_graph
         g = build_graph()
         nodes = set(g.get_graph().nodes) - {"__start__", "__end__"}
-        # router + faq + calc_flow + qualify_flow + human_mode + recap
-        assert len(nodes) == 6
+        # prepare_turn + router + faq + calc_flow + qualify_flow + human_mode + recap
+        assert len(nodes) == 7
+        assert "prepare_turn" in nodes
         assert "router" in nodes
         assert "faq" in nodes
         assert "calc_flow" in nodes

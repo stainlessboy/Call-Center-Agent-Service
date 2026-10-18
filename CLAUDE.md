@@ -57,8 +57,14 @@ Telegram → POST /telegram/webhook → FastAPI → aiogram Dispatcher
 app/
 ├── agent/                    # LangGraph agent (modular)
 │   ├── agent.py              # Agent class — entry point, send_message()
-│   ├── graph.py              # StateGraph definition (router → faq|calc_flow|qualify_flow|human_mode|recap → END)
-│   ├── state.py              # BotState TypedDict + AgentTurnResult + _default_dialog()/_reset_dialog()
+│   ├── graph.py              # StateGraph definition (prepare_turn → router → faq|calc_flow|qualify_flow|human_mode|recap → END)
+│   ├── state.py              # BotState TypedDict (messages carries the add_messages reducer) + AgentTurnResult + _default_dialog()/_reset_dialog()
+│   ├── tracing.py            # LangSmith tracing with PII masking + per-run metadata/tags
+│   ├── consultant.py         # create_agent consultant (CONSULTANT_AGENT_V2) + approval gate
+│   ├── middleware/           # Consultant middleware (prompt, tool scope, model resolver, FAQ rephrase)
+│   ├── state_xml.py          # <state> XML shared by node_faq and the consultant
+│   ├── store.py              # Long-term memory store (PROFILE_BACKEND=store)
+│   ├── mcp_tools.py          # External bank services as MCP tools (see docs/MCP.md)
 │   ├── llm.py                # ChatOpenAI factory + token usage/cost tracking
 │   ├── tools.py              # 16 LLM tools (@lc_tool) + _FAQ_TOOLS list
 │   ├── constants.py          # CREDIT_SECTION_MAP, contextvars, flow/step names
@@ -81,8 +87,10 @@ app/
 │   ├── streaming.py          # Mini App token-streaming contextvar (node_faq only)
 │   ├── checkpointer.py       # Checkpoint backend setup (memory/postgres)
 │   └── nodes/
+│       ├── prepare.py        # node_prepare_turn — entry node: resolves language, loads user profile
 │       ├── router.py         # node_router — routes to faq/calc_flow/qualify_flow/human_mode/recap
-│       ├── faq.py            # node_faq — LLM with tool-calling (max 5 rounds)
+│       ├── faq.py            # node_faq — LLM with tool-calling (max 5 rounds), legacy path
+│       ├── consultant_node.py # faq_pre/faq_post around the create_agent consultant
 │       ├── calc_flow.py      # node_calc_flow — deterministic calculator + lead capture
 │       ├── qualify_flow.py   # node_qualify_flow — deterministic qualification questionnaire
 │       ├── human_mode.py     # node_human_mode_turn — interrupt() for operator handoff
@@ -160,9 +168,13 @@ and call it from both. Full contract, endpoint list and known gaps:
 
 ### LangGraph Agent (`app/agent/`)
 
-**Graph: `router → faq | calc_flow | qualify_flow | human_mode | recap → END`**
+**Graph: `prepare_turn → router → faq | calc_flow | qualify_flow | human_mode | recap → END`**
 
-6 nodes. The LLM decides intent via tool selection (no separate intent classifier).
+7 nodes. The LLM decides intent via tool selection (no separate intent classifier).
+
+#### node_prepare_turn (`nodes/prepare.py`) — entry node
+
+Resolves the turn's language (explicit `User.language` → LLM detector → regex heuristic that *suggests* a switch, never applies one) and loads the `UserProfile` memory, then `Command(goto="router")`. Both steps live here rather than in `Agent._ainvoke_locked` so they can read `dialog` straight from the checkpoint: the agent no longer does its own `aget_state` before invoking, so a turn is one checkpoint load instead of two. Both are best-effort — a detector or DB failure degrades to "previous language" / "no profile" instead of failing the turn. When the incoming state already carries a valid `lang`, detection is skipped entirely.
 
 #### Router (`nodes/router.py`)
 
@@ -252,13 +264,15 @@ Uses `interrupt()` to pause the graph. Operator replies arrive via the Asaka cha
 
 ```python
 class BotState(TypedDict):
-    messages: List[Any]           # LangChain message history
+    messages: Annotated[List[Any], add_messages]  # history — nodes return only the DELTA they add
     last_user_text: str           # current user input
     answer: str                   # bot response
     human_mode: bool              # operator mode flag
     keyboard_options: List[str]   # Telegram reply keyboard buttons
     dialog: dict                  # flow state (see _default_dialog())
-    lang: str                     # "ru" | "en" | "uz" — set by the language detector in agent._ainvoke
+    lang: str                     # "ru" | "en" | "uz" — resolved by node_prepare_turn
+    requested_lang: str | None    # input only: the language the caller already knows (User.language)
+    suggested_lang: str | None    # set by node_prepare_turn when the message looks like another language
     _route: str                   # internal routing target
     session_id: str
     user_id: int
@@ -268,12 +282,14 @@ class BotState(TypedDict):
     ui_blocks: list[dict] | None  # Mini App structured cards for this turn — see docs/MINIAPP.md "UI blocks"; Telegram never reads it
 ```
 
+`messages` carries the `add_messages` reducer: a node returns ONLY the messages it adds this turn (`_finalize_turn` returns `[HumanMessage, AIMessage]`), and LangGraph merges them into the checkpointed history. Two rules follow. `Agent._ainvoke_locked` must not pass the prior history back in as input (that would duplicate it), and trimming can no longer be done by returning a shorter list — `_finalize_turn` switches to the full-replacement form `[RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]` when `MAX_DIALOG_TOKENS` bites, always keeping the current exchange. The reducer also back-fills ids onto messages that lack them, which is what silently migrates pre-reducer checkpoints.
+
 The `dialog` dict tracks: `flow`, `category`, `products`, `selected_product`, `calc_step`, `calc_slots`, `lead_step`, `lead_slots`, `qualify_category`, `qualify_node`, `qualify_answers`, `fallback_streak`, `last_lang`, `offices`, `selected_office`, `office_type`, `last_turn_at` (ISO timestamp set by `_finalize_turn()` every turn — drives `node_recap`'s staleness check), `last_recommendation` (last `recommend_product` pitch — informational). Sticky session flags (e.g. `lang_switch_offered`) survive dialog resets — use `_reset_dialog()` instead of bare `_default_dialog()` when resetting mid-session; `_finalize_turn()` also carries them over.
 
 ### "Personal consultant" memory (`app/agent/profile.py`, `memory_extract.py`, `recommend.py`)
 
 - **`UserProfile`** (`app/db/models.py`) — one row per user (`user_id` FK → `users.id` UNIQUE), `facts` (JSONB, loose schema — `income_monthly`, `age`, `income_type` ∈ {`payroll`,`official`,`no_official`}, `currency`, `family_status`, `goals`, `preferences`) + `notes` (Text — a standing 2-4 sentence relationship recap, replaced wholesale, not appended).
-- **Load**: `app/agent/profile.py::load_user_profile(telegram_user_id)` — called once per turn by `Agent._ainvoke_locked` (agent.py), BEFORE `graph.ainvoke`, and placed on `state_in["user_profile"]`. A DB failure is logged and treated as `None` ("no profile") — it must never break the turn. Note the function takes the **Telegram** user id (same as everywhere else in the agent layer) and resolves the internal `users.id` PK itself.
+- **Load**: `app/agent/profile.py::load_user_profile(telegram_user_id)` — called once per turn by `node_prepare_turn` (`nodes/prepare.py`), the graph's entry node, which puts it on `state["user_profile"]`. A DB failure is logged and treated as `None` ("no profile") — it must never break the turn. Note the function takes the **Telegram** user id (same as everywhere else in the agent layer) and resolves the internal `users.id` PK itself.
 - **Write**: `app/agent/profile.py::upsert_user_profile(telegram_user_id, facts_delta, notes)` — a single atomic `INSERT ... ON CONFLICT (user_id) DO UPDATE` using Postgres's JSONB `||` operator to merge `facts_delta` in (only the given keys are touched); `notes=None` leaves stored notes untouched, any string (including `""`) replaces them wholesale. `facts_delta={}` + `notes=None` is a no-op (no DB read/write at all).
 - **Background extraction**: `app/agent/memory_extract.py::extract_and_store(user_id, user_text, answer, current_profile)` — fired from `Agent._ainvoke_locked` via `asyncio.create_task` AFTER `graph.ainvoke` (NOT awaited), skipped for `human_mode` turns and empty answers, gated by `MEMORY_EXTRACT_ENABLED`. Uses the `"extractor"` LLM role with a single Russian-only internal prompt (never shown to the customer) that returns strict JSON `{"facts": {...}|{}, "notes": "..."|null}`; an empty result is a normal, frequent outcome. `Agent._background_tasks: set[asyncio.Task]` holds a strong reference until each task's done-callback removes it (otherwise the event loop could GC an in-flight task) and logs any unhandled exception.
 - **Qualify prefill**: `app/agent/qualify.py` trees mark select nodes with `profile_key` (+ a per-node `profile_answer_text` map) — e.g. `autoloan`/`mortgage`/`microloan`'s `salary`/`salary_card`/`self_employed` nodes all key off `facts.income_type`. `prefill_from_profile()` walks the tree from entry exactly like the existing text-based `prefill()`, converting a known fact into representative text and resolving it through the SAME `match_answer()` — so it never duplicates the acceptance logic. `qualify_flow.py::start_qualify()` runs the profile-based walk first, then continues the text-based `prefill()` from wherever it stopped (the two compose), and prefixes the reply with an acknowledgement ("Исходя из того, что...") when anything was skipped. A node with no `profile_key` is a hard stop by design — only entry-adjacent income-type questions are marked; branch-specific questions (auto brand, mortgage market, microloan channel) are deliberately left for the customer to answer.
@@ -353,6 +369,28 @@ LLM:
 - `MEMORY_EXTRACT_ENABLED` — background "personal consultant" memory extractor after each turn (default `true`)
 - `RECAP_GAP_MINUTES` — minutes of inactivity within an in-progress calc_flow/qualify_flow before `node_recap` offers to resume instead of silently treating the next message as an answer (default `30`)
 
+Observability (LangSmith tracing — `app/agent/tracing.py`):
+- `AGENT_TRACING_ENABLED` — traces every agent turn with PII masked before upload (default `false`). Use this, **not** the stock `LANGSMITH_TRACING`: that switch attaches LangChain's own global tracer, which uploads node inputs verbatim, including `state.last_user_text` and `dialog.lead_slots` (the customer's real phone/name — they cannot be masked in the state itself because lead capture parses the real phone out of exactly those fields). Setting both is detected and refused with a warning.
+- `LANGSMITH_API_KEY` — required when tracing is on; without it tracing stays off with a warning
+- `LANGSMITH_PROJECT` (default `asaka-bot`), `LANGSMITH_ENDPOINT` (EU region only)
+- Every run carries metadata `{session_id, user_id, lang, channel, flow}` and tags `[channel, lang, flow]` even when tracing is off (`Agent._build_config` → `tracing.build_run_config`), so a trace is findable by session. `channel` is `telegram` | `miniapp`, passed down from `ChatService.handle_user_message`; it is observability-only and never changes how a turn is processed.
+
+Consultant agent (roadmap П.1/П.2 — `app/agent/consultant.py`):
+- `CONSULTANT_AGENT_V2` — routes the `faq` node through a `create_agent` subgraph (`faq_pre → consultant → faq_post`) instead of the hand-rolled tool loop in `node_faq` (default `false` during the rollout window). Behaviour is preserved: display tools ship verbatim via `return_direct`, the clarify anti-loop guard becomes tool scoping, `max_rounds=5` becomes `ModelCallLimitMiddleware`. Roll back by unsetting it — the legacy node stays wired and tested.
+- `CONSULTANT_MAX_MODEL_CALLS` (default `5`) — model calls per turn before the agent ends with what it has
+- `CONSULTANT_FALLBACK_MODEL` — second model tried when the main one errors (`ModelFallbackMiddleware`); unset means no fallback
+- `CONSULTANT_SUMMARIZATION` / `CONSULTANT_SUMMARY_MODEL` — summarize long history instead of trimming it (default off, `gpt-4o-mini`)
+- `TOOL_SCOPING_ENABLED` (default `true`) — hide tools that cannot apply in the current dialog state (no offices shown → no `select_office`). Roughly 9k tokens of tool schemas ship on every request, so this is the cheapest lever on cost; set `false` to offer all 16 unconditionally.
+
+Long-term memory (roadmap П.4 — `app/agent/store.py`):
+- `PROFILE_BACKEND` — `table` (default, the `user_profiles` rows) or `store` (LangGraph `BaseStore`). Migrate with `python3 scripts/migrate_profiles_to_store.py --apply` BEFORE switching; the table is left intact so the switch is reversible.
+- `STORE_SEMANTIC_SEARCH` (default `false`) / `STORE_EMBEDDING_DIMS` (default `1536`) — index episodic memories for `store.asearch`. Every write then calls the embeddings API, so it is only worth enabling once those memories are actually searched.
+
+MCP — external bank services as tools (roadmap П.8, see [docs/MCP.md](docs/MCP.md)):
+- `MCP_ENABLED` (default `false`), `MCP_SERVERS` (JSON map), `MCP_CRM_URL` / `MCP_CRM_TOKEN` (single-server shorthand), `MCP_LOAD_TIMEOUT_SECONDS` (default `15`)
+- Tools are discovered once in the FastAPI lifespan and registered in `app/agent/mcp_tools.py`; `consultant._display_tools()` picks them up. A server that does not answer means the bot runs without those tools, never a failed startup.
+- Write tools (`create_application`, `block_card`, `transfer`, …) are gated by `HumanInTheLoopMiddleware`: the graph pauses before the call and waits for `approve` / `edit` / `reject`. Read `Agent.get_pending_interrupt(session_id)` to see what a session is paused on, resume with `Agent.resume_pending_interrupt(session_id, decision)`.
+
 LangGraph persistence:
 - `LANGGRAPH_CHECKPOINT_BACKEND` — `memory|postgres|auto`
 - `LANGGRAPH_CHECKPOINT_URL` — separate URL for the checkpoint DB (defaults to `DATABASE_URL`)
@@ -409,6 +447,10 @@ Telegram Mini App:
 3. If the tool changes dialog state, add a handler in `nodes/faq.py` (`_update_dialog_from_tools()`)
 4. The LLM will discover the tool via its docstring — write a clear description
 5. If the tool's output should render as a Mini App card, add `response_format="content_and_artifact"` and return `(text, {"type": ..., "data": ...} | None)` — see docs/MINIAPP.md "UI blocks" for the block-type contract; otherwise leave it returning plain text (`node_faq` accumulates whatever artifacts show up automatically, no other change needed)
+
+## Evaluation (docs/EVALS.md)
+
+`python3 scripts/eval_agent.py` runs the golden dataset (`evals/`) through the real graph and scores it: which tool was chosen, whether the answer reached real data, PII leaks, answer language, latency, errors. Offline by default (stub model + stub data, no keys); `--live` is the actual measurement. `--baseline docs/evals/<file>.json` fails when `tool_match` drops more than 2 points. Run it before and after any prompt, model or middleware change — that is the only way a routing regression shows up as a number instead of a surprise in production.
 
 ## Workflow Rules
 

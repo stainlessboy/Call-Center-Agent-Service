@@ -70,6 +70,24 @@ PRESETS = {
         "model": "gemma-4-31b",  # RedHatAI/gemma-4-31B-it-FP8-dynamic (dense)
         "url": "https://runai.gpu.uz/asaka-b200-test-23-07-2026-56/gemma-serve/url-1/v1",
     },
+    # ── Тестовый vast.ai с картой как в банке: RTX 4080 16 GB, llama-server ──
+    # Доступен только через SSH-туннель на localhost:18000 (gemma-test-server.md),
+    # API-ключ не проверяется. ~5 tok/s — отсюда большой таймаут.
+    # ⚠️ Сторонний сервер: только синтетические данные.
+    "vast31b": {
+        "model": "gemma-4-31b-it-qat",  # Gemma 4 31B dense, QAT Q4_0, контекст 16k
+        "url": "http://localhost:18000/v1",
+        "token": "not-needed",
+        "timeout": 300.0,
+    },
+    # Второй vast.ai, та же RTX 4080 16 GB — туннель на localhost:18001
+    # (gemma-26b-test-server.md). MoE, целиком в видеопамяти, ~130 tok/s.
+    "vast26b": {
+        "model": "gemma-4-26b-a4b-it-qat",  # Gemma 4 26B-A4B MoE, QAT Q4_0, контекст 16k
+        "url": "http://localhost:18001/v1",
+        "token": "not-needed",
+        "timeout": 120.0,
+    },
 }
 
 # ── Вопросы: (текст, ожидание) ───────────────────────────────────────────────
@@ -126,6 +144,8 @@ async def main() -> int:
     parser.add_argument("--temp", type=float, default=0.3, help="температура (агент использует 0.3)")
     parser.add_argument("--max-tokens", type=int, default=3000)
     parser.add_argument("--runs", type=int, default=1, help="прогонов на вопрос")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="таймаут запроса, с (по умолчанию из пресета, иначе 60)")
     parser.add_argument("--lang", choices=["ru", "uz", "both"], default="both")
     args = parser.parse_args()
 
@@ -171,6 +191,7 @@ async def main() -> int:
             args.token
             or os.getenv(f"DIAG_TOKEN_{preset_name.upper()}")
             or os.getenv("DIAG_MODEL_TOKEN")
+            or preset.get("token")
         )
         if not token:
             parser.error(
@@ -180,7 +201,7 @@ async def main() -> int:
         chat = ChatOpenAI(
             model=model, base_url=url, api_key=token,
             temperature=args.temp, max_tokens=args.max_tokens,
-            timeout=60.0, max_retries=1,
+            timeout=args.timeout or preset.get("timeout", 60.0), max_retries=1,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 

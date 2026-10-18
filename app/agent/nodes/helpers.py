@@ -3,9 +3,12 @@ from __future__ import annotations
 import logging as _logging
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import (
+    AIMessage, HumanMessage, RemoveMessage, SystemMessage, trim_messages,
+)
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from app.agent.constants import FALLBACK_STREAK_THRESHOLD
 from app.agent.i18n import at
@@ -44,11 +47,13 @@ def _finalize_turn(
         history_text = mask_user_text
     else:
         history_text = mask_pii(user_text)
-    msgs.append(HumanMessage(content=history_text))
+    user_msg = HumanMessage(content=history_text)
     # Store the RAW answer in history so subsequent turns never see the
     # "💡 Ассистент / Yordamchi" wrapper. The wrapper is applied to the
     # display answer only (returned in the "answer" field below).
-    msgs.append(AIMessage(content=answer))
+    answer_msg = AIMessage(content=answer)
+    msgs.append(user_msg)
+    msgs.append(answer_msg)
     _max_tokens = int(os.getenv("MAX_DIALOG_TOKENS", "16000"))
     tail_source = msgs[len(legacy_system_head):]
     tail = trim_messages(
@@ -60,6 +65,30 @@ def _finalize_turn(
         allow_partial=False,
     )
     msgs = legacy_system_head + tail
+    # `trim_messages` drops whole messages from the FRONT until the budget
+    # fits, and with a small enough budget (or a single huge message) that
+    # includes the exchange we just added — it can even return nothing at all.
+    # A bot that answers and then has no record of having answered is worse
+    # than one slightly over budget, so the current turn is always kept.
+    if not msgs or msgs[-1] is not answer_msg:
+        msgs = legacy_system_head + [user_msg, answer_msg]
+
+    # `BotState.messages` carries the `add_messages` reducer, so what we return
+    # is a DELTA, not the new full history.
+    #
+    # Common case — nothing was trimmed: return just this turn's two messages
+    # and let the reducer append them. Returning the full list here instead
+    # would duplicate the entire history on every single turn.
+    #
+    # Trimmed case: the reducer only ever adds, so dropping old messages needs
+    # the documented full-replacement form — a `RemoveMessage(REMOVE_ALL_MESSAGES)`
+    # sentinel followed by exactly the messages we want to keep. It is used
+    # only when the budget actually bit, which is rare, and it is also what
+    # normalises any legacy checkpoint whose messages predate this reducer.
+    if len(msgs) == len(prior) + 2:
+        messages_update: List[Any] = [user_msg, answer_msg]
+    else:
+        messages_update = [RemoveMessage(id=REMOVE_ALL_MESSAGES), *msgs]
 
     # Track consecutive fallback answers
     streak = dialog.get("fallback_streak", 0)
@@ -94,7 +123,7 @@ def _finalize_turn(
         display_answer = at("ai_answer_wrapped", lang, body=answer)
 
     return {
-        "messages": msgs,
+        "messages": messages_update,
         "answer": display_answer,
         "dialog": dialog,
         "keyboard_options": keyboard_options,

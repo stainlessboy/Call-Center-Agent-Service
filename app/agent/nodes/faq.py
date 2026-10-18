@@ -42,6 +42,7 @@ from app.agent.products import (
 )
 from app.agent.recommend import rank_products
 from app.agent.state import BotState, _default_dialog, _reset_dialog
+from app.agent.state_xml import format_state_xml as _format_state_xml
 from app.agent.streaming import get_on_token_callback
 from app.agent.tools import _FAQ_TOOLS, is_faq_sentinel
 from app.utils.faq_tools import _faq_lookup, faq_precheck_answer, get_faq_fallback
@@ -53,44 +54,21 @@ _agent_logger = _logging.getLogger(__name__)
 _FAQ_TOOL_NODE = ToolNode(_FAQ_TOOLS)
 
 
-async def _run_llm_round(llm_with_tools, loop_msgs: list, on_token) -> AIMessage:
+async def _run_llm_round(llm_with_tools, loop_msgs: list, on_token=None) -> AIMessage:
     """Run one round of the tool-calling loop.
 
-    Mini App streaming (Phase 3, see app/agent/streaming.py): when `on_token`
-    is set, stream the round via `.astream()` and forward text chunks to the
-    callback live, as they arrive. The moment a `tool_call_chunks` delta
-    appears we know this round turned out to be a tool call, not prose for
-    the user — stop forwarding further chunks for the rest of the round
-    (nothing already sent can be un-sent, but OpenAI tool-calling rounds do
-    not interleave prose with a tool call in practice, so this only ever
-    silently drops an all-empty round). Telegram — and any Mini App turn
-    where streaming wasn't armed — never sets `on_token`, so this always
-    takes the plain `.ainvoke()` branch: behavior there is byte-for-byte
-    unchanged from before Phase 3.
+    Token streaming used to live here: when a Mini App callback was armed this
+    function switched to `.astream()` and forwarded chunks itself. It no longer
+    does, and the `on_token` parameter is ignored (kept only so existing call
+    sites and tests keep working).
 
-    Either branch returns a fully-accumulated AIMessage(-chunk) exposing the
-    same `.content` / `.tool_calls` / usage shape the caller's round-handling
-    logic already expects from `.ainvoke()`.
+    Tokens now come from `graph.astream(stream_mode="messages")` in
+    `Agent._astream_turn` (roadmap П.5). Two reasons that is the right place:
+    the model call moved into the `create_agent` subgraph under
+    CONSULTANT_AGENT_V2, where a node-local branch cannot see it; and while
+    both existed the customer received every token twice.
     """
-    if on_token is None:
-        return await llm_with_tools.ainvoke(loop_msgs)
-
-    acc: Optional[AIMessage] = None
-    is_tool_round = False
-    async for chunk in llm_with_tools.astream(loop_msgs):
-        acc = chunk if acc is None else acc + chunk
-        if chunk.tool_call_chunks:
-            is_tool_round = True
-            continue
-        if is_tool_round:
-            continue
-        text = extract_text_content(chunk)
-        if text:
-            try:
-                await on_token(text)
-            except Exception:
-                _agent_logger.debug("on_token callback failed", exc_info=True)
-    return acc if acc is not None else AIMessage(content="")
+    return await llm_with_tools.ainvoke(loop_msgs)
 
 
 def _normalize_user_text(text: str) -> str:
@@ -116,96 +94,6 @@ def _normalize_user_text(text: str) -> str:
     if len(s) > 2000:
         s = s[:2000]
     return s
-
-
-def _xml_escape(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def _format_state_xml(dialog: dict, profile: Optional[dict] = None) -> str:
-    """Serialize dialog state (+ optional client profile) as XML for the LLM
-    system prompt.
-
-    GPT-4o-mini parses XML tags more reliably than free-form 'Current state:' text.
-    Returns empty string when there's nothing to report.
-
-    `profile` is the "personal consultant" memory loaded once per turn by
-    Agent._ainvoke_locked (app/agent/profile.py) — `{"facts": dict, "notes":
-    str, "updated_at": ...}` or None. Only rendered when it actually carries
-    something (non-empty facts or a non-empty notes string); a `UserProfile`
-    row that exists but is still all-empty (freshly created, nothing learned
-    yet) must not add a hollow `<client_profile>` block that wastes tokens
-    and gives the LLM nothing to act on.
-    """
-    flow = dialog.get("flow")
-    category = dialog.get("category", "")
-    products = list(dialog.get("products") or [])
-    selected = dialog.get("selected_product") or {}
-
-    lines: list[str] = []
-    if flow:
-        lines.append(f"  <flow>{_xml_escape(str(flow))}</flow>")
-    if category:
-        lines.append(f"  <category>{_xml_escape(str(category))}</category>")
-    if products:
-        lines.append("  <products>")
-        for i, p in enumerate(products[:10], start=1):
-            name = _xml_escape(str(p.get("name", "")))
-            lines.append(f'    <product index="{i}">{name}</product>')
-        lines.append("  </products>")
-        lines.append(
-            "  <hint>If the user sends only a number (e.g. '2'), "
-            "call select_product with the product at that index.</hint>"
-        )
-    if selected.get("name"):
-        lines.append(f"  <selected_product>{_xml_escape(str(selected['name']))}</selected_product>")
-
-    offices = list(dialog.get("offices") or [])
-    selected_office = dialog.get("selected_office") or {}
-    if offices:
-        lines.append("  <offices>")
-        for i, o in enumerate(offices[:10], start=1):
-            name = _xml_escape(str(o.get("name", "")))
-            lines.append(f'    <office index="{i}">{name}</office>')
-        lines.append("  </offices>")
-        lines.append(
-            "  <hint>If the user sends only a number (e.g. '1') OR a word like "
-            "'all'/'все'/'хаммаси'/'barchasi'/'hammasini' after offices were shown, call "
-            "select_office. NEVER promise 'wait a few seconds' — fetch details NOW.</hint>"
-        )
-    if selected_office.get("name"):
-        lines.append(
-            f"  <selected_office>{_xml_escape(str(selected_office['name']))}</selected_office>"
-        )
-
-    if profile:
-        facts = profile.get("facts") or {}
-        notes = str(profile.get("notes") or "").strip()
-        if facts or notes:
-            lines.append("  <client_profile>")
-            for key in sorted(facts.keys()):
-                val = facts[key]
-                val_str = ", ".join(str(v) for v in val) if isinstance(val, (list, tuple)) else str(val)
-                val_str = val_str.strip()
-                if val_str:
-                    lines.append(f'    <fact key="{_xml_escape(str(key))}">{_xml_escape(val_str)}</fact>')
-            if notes:
-                lines.append(f"    <notes>{_xml_escape(notes)}</notes>")
-            lines.append("  </client_profile>")
-            lines.append(
-                "  <hint>client_profile is background context about this returning "
-                "customer — use it to personalize tone and avoid re-asking things "
-                "they already told us, but never read it out loud or mention that "
-                "you 'have a file' on them.</hint>"
-            )
-
-    if not lines:
-        return ""
-    return "<state>\n" + "\n".join(lines) + "\n</state>"
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +455,12 @@ async def node_faq(state: BotState) -> dict:
     fallback_reply = get_faq_fallback(lang)
     answer = fallback_reply
     is_fallback = True
+    # Initialised here, NOT inside the try below: the classification block that
+    # normally assigns it sits after the tool loop, so an APIError raised by
+    # the very first model call skipped it and `_finalize_turn` then read an
+    # unbound local — an OpenAI outage crashed the turn instead of degrading
+    # to the FAQ answer the except branch had just fetched.
+    is_ai_generated = False
     tool_calls_made: list[dict] = []
     turn_usage: dict = {}
 
@@ -626,7 +520,22 @@ async def node_faq(state: BotState) -> dict:
                 break
 
             tool_calls_made.extend(tool_calls)
-            tool_results = await _FAQ_TOOL_NODE.ainvoke({"messages": loop_msgs, "dialog": dialog})
+            # Pass the WHOLE turn state, not just messages+dialog. Tools
+            # declaring `state: Annotated[dict, InjectedState]` receive
+            # exactly this dict, and several of them read keys beyond
+            # `dialog`: `affordability_check` needs
+            # `user_profile.facts.income_monthly`, `recommend_product` and
+            # `select_product` need `user_profile` for the age/income-aware
+            # ranking and the "✨ Для вас: X%" rate line, and every tool
+            # resolves the reply language from `lang` (falling back to
+            # `dialog.last_lang` only when it is absent). Shipping a trimmed
+            # dict here silently degraded all of those to their
+            # "no profile known" branch in production while the unit tests,
+            # which build the injected state by hand, kept passing.
+            # `messages`/`dialog` are overridden with this round's values.
+            tool_results = await _FAQ_TOOL_NODE.ainvoke(
+                {**state, "messages": loop_msgs, "dialog": dialog}
+            )
             new_tool_msgs = tool_results.get("messages", [])
             loop_msgs.extend(new_tool_msgs)
 

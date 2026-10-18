@@ -20,3 +20,4 @@ aiohttp>=3.9.0
 aiofiles>=24.1.0
 weaviate-client>=4.23,<5
 numpy>=1.26.0,<2.0  # 2.x требует CPU x86-64-v2; на старых VPS падает RuntimeError при импорте
+langchain-mcp-adapters>=0.3.2,<0.4  # MCP-инструменты внешних сервисов банка (docs/MCP.md)

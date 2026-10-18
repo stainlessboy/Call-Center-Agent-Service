@@ -64,6 +64,32 @@ MODELS = {
         },
         "needs_token": True,
     },
+    # Тестовый vast.ai (RTX 4080 16 GB, как в банке) — только через SSH-туннель
+    # на localhost:18000, см. gemma-test-server.md. ~5 tok/s → таймауты по 300с.
+    "vast31b": {
+        "label": "gemma-4-31b QAT (vast RTX 4080)",
+        "env": {
+            "USE_GPT": "false",
+            "QWEN_MODEL": "gemma-4-31b-it-qat",
+            "QWEN_BASE_URL": "http://localhost:18000/v1",
+            "QWEN_API_KEY": "not-needed",
+            "OPENAI_REQUEST_TIMEOUT": "300",
+            "LANG_DETECTOR_TIMEOUT": "300",
+        },
+    },
+    # Второй vast.ai (та же RTX 4080) — туннель на localhost:18001,
+    # см. gemma-26b-test-server.md. MoE целиком в видеопамяти, ~130 tok/s.
+    "vast26b": {
+        "label": "gemma-4-26b-a4b QAT (vast RTX 4080)",
+        "env": {
+            "USE_GPT": "false",
+            "QWEN_MODEL": "gemma-4-26b-a4b-it-qat",
+            "QWEN_BASE_URL": "http://localhost:18001/v1",
+            "QWEN_API_KEY": "not-needed",
+            "OPENAI_REQUEST_TIMEOUT": "120",
+            "LANG_DETECTOR_TIMEOUT": "120",
+        },
+    },
 }
 
 # ── Вопросы ──────────────────────────────────────────────────────────────────

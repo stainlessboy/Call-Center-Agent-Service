@@ -842,3 +842,89 @@ class TestSessionArchiveUiBlocks:
         )
         assert payload["messages"][0]["ui_blocks"] == []
         assert payload["messages"][1]["ui_blocks"] == [block]
+
+
+# ---------------------------------------------------------------------------
+# Regression: node_faq must inject the FULL turn state into ToolNode.
+#
+# node_faq used to call `_FAQ_TOOL_NODE.ainvoke({"messages": ..., "dialog": ...})`,
+# a trimmed dict. Tools declaring `state: Annotated[dict, InjectedState]`
+# receive exactly that dict, so every tool reading a key outside `dialog` —
+# `affordability_check` (user_profile.facts.income_monthly),
+# `recommend_product` / `select_product` (profile-aware ranking and the
+# "✨ Для вас: X%" rate line) — silently took its "nothing known about this
+# client" branch in production. The unit tests above never caught it because
+# they build the injected state by hand and pass it straight to the tool.
+# These tests drive the whole node instead, which is the only place the
+# injection actually happens.
+# ---------------------------------------------------------------------------
+
+def _affordability_tool_call(monthly_payment: float):
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "affordability_check",
+            "args": {"monthly_payment": monthly_payment},
+            "id": "aff-1", "type": "tool_call",
+        }],
+    )
+
+
+class TestToolNodeReceivesFullState:
+    @pytest.mark.asyncio
+    async def test_affordability_check_sees_profile_income(self, monkeypatch):
+        """With a stored income the tool must return a real DTI verdict.
+
+        On the trimmed-state code path `user_profile` never reached the tool,
+        so it fell back to `affordability_general_rule` with `dti_ratio=None`.
+        """
+        from app.agent.nodes import faq as faq_module
+
+        monkeypatch.setattr(
+            faq_module, "_get_chat_openai",
+            lambda role=None: _ScriptedLLM([_affordability_tool_call(3_000_000)]),
+        )
+        monkeypatch.setattr(faq_module, "faq_precheck_answer", AsyncMock(return_value=None))
+
+        state = {
+            "last_user_text": "потяну ли я такой платёж",
+            "messages": [],
+            "dialog": _default_dialog(),
+            "lang": "ru",
+            "session_id": "test-aff-profile",
+            "user_id": 1,
+            "user_profile": {"facts": {"income_monthly": 5_000_000}},
+        }
+        result = await _run_node_faq_via_graph(state)
+
+        assert at("affordability_verdict_high", "ru") in result["answer"]
+        blocks = result["ui_blocks"] or []
+        assert blocks and blocks[-1]["data"]["dti_ratio"] == 0.6
+        assert blocks[-1]["data"]["income_monthly"] == 5_000_000
+
+    @pytest.mark.asyncio
+    async def test_affordability_check_without_profile_still_general(self, monkeypatch):
+        """No profile → the general rule, exactly as before. Guards against
+        the fix accidentally inventing an income."""
+        from app.agent.nodes import faq as faq_module
+
+        monkeypatch.setattr(
+            faq_module, "_get_chat_openai",
+            lambda role=None: _ScriptedLLM([_affordability_tool_call(3_000_000)]),
+        )
+        monkeypatch.setattr(faq_module, "faq_precheck_answer", AsyncMock(return_value=None))
+
+        state = {
+            "last_user_text": "потяну ли я такой платёж",
+            "messages": [],
+            "dialog": _default_dialog(),
+            "lang": "ru",
+            "session_id": "test-aff-no-profile",
+            "user_id": 1,
+            "user_profile": None,
+        }
+        result = await _run_node_faq_via_graph(state)
+
+        assert result["answer"] == at("affordability_general_rule", "ru", payment="3 000 000")
+        blocks = result["ui_blocks"] or []
+        assert blocks and blocks[-1]["data"]["dti_ratio"] is None

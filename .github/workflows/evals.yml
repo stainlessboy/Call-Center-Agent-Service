@@ -1,0 +1,85 @@
+# Agent evaluation gate (roadmap П.7б).
+#
+# Two jobs on purpose. The offline one runs on every pull request: it costs
+# nothing, needs no secrets, and catches the failure mode that actually
+# happens — someone edits a tool docstring or a prompt and the harness itself
+# stops working. The live one costs money and needs keys, so it runs only when
+# a human asks for it (a `run-evals` label, or a manual dispatch).
+name: evals
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Run only the first N cases (blank = all)"
+        required: false
+        default: ""
+
+jobs:
+  offline:
+    name: Harness self-test (no keys)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Evaluator and dataset tests
+        run: python -m pytest tests/test_evals.py -v
+      - name: Offline dataset run
+        run: python scripts/eval_agent.py --limit 10
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evals-offline-report
+          path: docs/evals/
+
+  live:
+    name: Live evaluation (billed)
+    # Only on an explicit ask: a full live run calls the model once per case.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-evals')
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bankbot
+          POSTGRES_PASSWORD: bankbot
+          POSTGRES_DB: bankbot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_PROJECT: asaka-bot-evals
+      DATABASE_URL: postgresql+asyncpg://bankbot:bankbot@localhost:5432/bankbot
+      # Weaviate is not available in CI; FAQ retrieval degrades to no
+      # candidates, which the dataset's FAQ cases account for.
+      WEAVIATE_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply migrations
+        run: alembic upgrade head
+      - name: Run evaluation
+        run: |
+          python scripts/eval_agent.py --live --langsmith \
+            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evals-live-report
+          path: docs/evals/

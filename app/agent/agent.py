@@ -8,15 +8,16 @@ from typing import Any, Dict, Optional, Sequence
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.checkpointer import _create_async_checkpointer
-from app.agent.constants import VALID_LANGS, resolve_language
 from app.agent.i18n import at
 from app.agent.graph import build_graph
-from app.agent.lang_detect import detect_language
-from app.agent.lang_heuristic import check_lang_mismatch, looks_worth_llm_recheck
 from app.agent.memory_extract import extract_and_store
+from app.agent.llm import extract_text_content
 from app.agent.pii_masker import mask_pii
 from app.agent.profile import load_user_profile
-from app.agent.state import AgentTurnResult, BotState, _default_dialog
+from app.agent.state import AgentTurnResult
+from app.agent.streaming import get_on_token_callback
+from app.agent.store import create_store
+from app.agent.tracing import build_run_config
 from app.utils.faq_tools import reset_faq_turn_cache
 
 _agent_logger = _logging.getLogger(__name__)
@@ -33,6 +34,13 @@ def _memory_extract_enabled() -> bool:
 # "no prior session" — see that method's docstring.
 _STATE_READ_RETRY_BACKOFFS: tuple[float, ...] = (0.2, 0.5)
 
+# Graph nodes whose model output is the customer's answer, and may therefore
+# be streamed token by token. "faq" is the legacy node; "model" is the model
+# step inside the `create_agent` consultant subgraph. Everything else that
+# calls an LLM in this graph is internal (language detection, FAQ reranking,
+# answer rephrasing) and must never trickle into the chat window.
+_STREAMED_NODES = frozenset({"faq", "model"})
+
 
 class Agent:
     """Banking FAQ + product selection agent with LangGraph state persistence."""
@@ -41,6 +49,9 @@ class Agent:
         self._graph = build_graph()
         self._checkpointer: Any = None
         self._checkpointer_cm: Any = None
+        # Long-term (cross-thread) memory — see app/agent/store.py.
+        self._store: Any = None
+        self._store_cm: Any = None
         # Per-session_id (== checkpointer thread_id) lock serializing the
         # read-process-write cycle in _ainvoke / resume_human_mode. Without
         # this, two concurrent turns for the same session (double-tap,
@@ -105,14 +116,27 @@ class Agent:
             del self._session_locks[session_id]
 
     async def setup(self, backend: str = "auto", url: Optional[str] = None) -> None:
-        """Initialize async checkpointer. Call once at startup."""
+        """Initialize the async checkpointer and the long-term store. Call
+        once at startup.
+
+        The checkpointer holds one thread's conversation; the store holds what
+        we know about the PERSON across all their threads (roadmap П.4). A
+        store failure is not fatal — `create_store` degrades to in-memory,
+        because losing long-term memory is a quality regression, not an outage.
+        """
         checkpointer, cm = await _create_async_checkpointer(backend, url)
         self._checkpointer = checkpointer
         self._checkpointer_cm = cm
-        self._graph = build_graph(checkpointer=checkpointer)
+        store, store_cm = await create_store(backend, url)
+        self._store = store
+        self._store_cm = store_cm
+        self._graph = build_graph(checkpointer=checkpointer, store=store)
 
-    def _build_config(self, session_id: str) -> Dict[str, Any]:
-        return {"configurable": {"thread_id": session_id}}
+    def _build_config(self, session_id: str, **kwargs: Any) -> Dict[str, Any]:
+        """Per-run LangGraph config: checkpointer thread_id plus observability
+        metadata/tags and (when enabled) the PII-masking LangSmith tracer.
+        See app/agent/tracing.py."""
+        return build_run_config(session_id, **kwargs)
 
     async def _aload_existing_state(self, config: Dict[str, Any]) -> dict:
         """Load the last checkpointed state for this thread_id.
@@ -161,13 +185,14 @@ class Agent:
         language: Optional[str] = None,
         human_mode: bool = False,
         user_id: Optional[int] = None,
+        channel: Optional[str] = None,
     ) -> AgentTurnResult:
         # Serialize concurrent turns for the same session — see
         # `_session_locks` docstring in __init__ for why this is needed.
         lock = self._get_session_lock(session_id)
         async with lock:
             result = await self._ainvoke_locked(
-                session_id, user_text, language, human_mode, user_id
+                session_id, user_text, language, human_mode, user_id, channel
             )
         self._release_session_lock(session_id, lock)
         return result
@@ -179,99 +204,60 @@ class Agent:
         language: Optional[str],
         human_mode: bool,
         user_id: Optional[int],
+        channel: Optional[str] = None,
     ) -> AgentTurnResult:
-        config = self._build_config(session_id)
-        existing = await self._aload_existing_state(config)
-        dialog = dict(existing.get("dialog") or _default_dialog())
-
-        # Language resolution (hybrid):
-        # 1. User.language (passed via `language` arg) is authoritative — it's
-        #    what the user explicitly chose in /start. Costs zero tokens.
-        # 2. If User.language is unset (first contact), fall back to the
-        #    dedicated LLM detector — one small call, cached.
-        # 3. Run a cheap regex heuristic on top: if the message clearly looks
-        #    like a different language, surface a switch suggestion so the
-        #    bot layer can ask the user to confirm. We never switch silently.
-        # 4. If the regex stayed silent on a "suspicious" message (Uzbek typos,
-        #    short transliterated text), fall back to the LLM detector — same
-        #    one as step 2, with PII masking baked in. This catches cases
-        #    where the regex marker list is too narrow.
-        primary_lang = language if language in VALID_LANGS else None
-        llm_detected: Optional[str] = None
-        if primary_lang is None:
-            llm_detected = await detect_language(
-                user_text, fallback=resolve_language(dialog)
-            )
-            primary_lang = llm_detected
-        suggested_lang: Optional[str] = check_lang_mismatch(user_text, primary_lang)
-        if (
-            suggested_lang is None
-            and primary_lang in VALID_LANGS
-            and looks_worth_llm_recheck(user_text)
-        ):
-            # Reuse the step-2 result if we already paid for it this turn;
-            # otherwise pay for one extra detector call. mask_pii is applied
-            # inside detect_language, so raw PII never reaches the LLM.
-            recheck = llm_detected if llm_detected is not None else await detect_language(
-                user_text, fallback=primary_lang
-            )
-            if recheck in VALID_LANGS and recheck != primary_lang:
-                suggested_lang = recheck
-        # Don't re-prompt every turn — once we've offered a switch for a given
-        # target language and the user answered, we record the answer in
-        # `dialog["lang_switch_offered"]`. While that flag matches the same
-        # target, suppress the offer.
-        if suggested_lang and dialog.get("lang_switch_offered") == suggested_lang:
-            suggested_lang = None
-        dialog["last_lang"] = primary_lang
-        if suggested_lang:
-            # Mark that we've offered a switch toward this target so the next
-            # turn doesn't re-prompt. The flag is cleared whenever a tool call
-            # resets dialog to defaults (greeting, get_products, find_office).
-            dialog["lang_switch_offered"] = suggested_lang
-        detected_lang = primary_lang
-
-        # node_faq builds a fresh SystemMessage(policy[lang]) every turn, so we
-        # don't bake one in here. Any stale SystemMessage left at messages[0]
-        # from older code is silently dropped by node_faq's history-tail logic.
-        prior = list(existing.get("messages") or [])
-
-        # "Personal consultant" memory: load once per turn, before the graph
-        # runs, so node_faq can inject it into the system prompt. A load
-        # failure (DB blip) must not break the turn — log and fall back to
-        # None, same as "no profile yet" for a brand-new user.
-        user_profile: Optional[dict] = None
-        if user_id is not None:
-            try:
-                user_profile = await load_user_profile(user_id)
-            except Exception as exc:
-                _agent_logger.warning(
-                    "Failed to load user profile for user %s: %s", user_id, exc,
-                )
-                user_profile = None
-
-        state_in: BotState = {
+        # Only genuinely NEW input goes in. Everything derived from the
+        # session — `dialog`, `messages`, the resolved language, the client
+        # profile — is read from the checkpoint by the graph itself:
+        #   * `messages` carries the `add_messages` reducer, so passing the
+        #     prior history back in would append a second copy of it.
+        #   * `dialog` is left untouched here so `node_prepare_turn` (the entry
+        #     node) can read it from the checkpoint, which is what removed the
+        #     second Postgres round-trip this method used to make.
+        # `node_faq` rebuilds its SystemMessage(policy[lang]) every turn, so no
+        # system message is baked into the history either.
+        state_in: dict = {
             "last_user_text": user_text,
-            "messages": prior,
             "answer": "",
             "human_mode": human_mode,
             "keyboard_options": None,
-            "dialog": dialog,
-            "lang": detected_lang,
+            "requested_lang": language,
+            "suggested_lang": None,
             "_route": "",
             "session_id": session_id,
             "user_id": user_id,
             "show_operator_button": False,
             "token_usage": None,
-            "user_profile": user_profile,
+            "ui_blocks": None,
         }
         # Fresh per-turn faq_search memoization scope: node_faq's strict
         # pre-check and the faq_lookup tool (invoked later in the same turn's
         # ToolNode loop, same asyncio task) then share one search result
         # instead of paying for the retrieval + LLM rerank twice.
         reset_faq_turn_cache()
-        out = await self._graph.ainvoke(state_in, config=config)
+        # `lang` here is the language the CALLER knew (User.language). The
+        # turn's finally-resolved language lives on node_prepare_turn's output
+        # inside the trace; run metadata is fixed when the run starts, so this
+        # is the best value available at this point and it matches the final
+        # one on every turn where the user has picked a language.
+        run_config = self._build_config(
+            session_id,
+            user_id=user_id,
+            lang=language,
+            channel=channel,
+            run_name="agent_turn",
+            extra_tags=("human_mode",) if human_mode else (),
+        )
+        on_token = get_on_token_callback()
+        if on_token is None:
+            out = await self._graph.ainvoke(state_in, config=run_config)
+        else:
+            out = await self._astream_turn(state_in, run_config, on_token)
         answer_text = str(out.get("answer") or "")
+        # Resolved by node_prepare_turn during the run.
+        detected_lang = out.get("lang") or language or "ru"
+        suggested_lang = out.get("suggested_lang")
+        user_profile = out.get("user_profile")
 
         # Fire-and-forget memory extraction: NOT awaited, must not add to turn
         # latency. Skipped for human_mode turns (nothing useful to extract from
@@ -297,6 +283,74 @@ class Agent:
             ui_blocks=out.get("ui_blocks") or None,
         )
 
+    async def _astream_turn(
+        self, state_in: dict, config: Dict[str, Any], on_token,
+    ) -> dict:
+        """Run the turn with `astream` so live tokens can be forwarded.
+
+        Tokens come from LangGraph's own `messages` stream rather than from a
+        hand-rolled `.astream()` inside a node (roadmap П.5). That matters
+        because the model call moved: under `CONSULTANT_AGENT_V2` it happens
+        inside the `create_agent` subgraph, where a node-local streaming branch
+        could not see it. Sourcing from the graph covers both paths and every
+        future node for free.
+
+        Filtering is deliberately strict — the graph makes several LLM calls
+        per turn that the customer must NOT see trickling in:
+          * the language detector in `node_prepare_turn`,
+          * the FAQ reranker and the answer rephraser,
+          * tool-call rounds, which produce arguments, not prose.
+        So only assistant chunks carrying visible text, from a customer-facing
+        node, with no tool-call delta, are forwarded.
+        """
+        from langchain_core.messages import AIMessageChunk
+
+        final_state: dict = {}
+        async for event in self._graph.astream(
+            state_in, config=config, stream_mode=["messages", "values"], subgraphs=True,
+        ):
+            # `subgraphs=True` prefixes each event with the namespace tuple of
+            # the (sub)graph it came from, so events are 3-tuples here and
+            # 2-tuples at the top level. Both shapes have to be accepted: the
+            # consultant's model call arrives namespaced, the legacy node's
+            # does not.
+            if len(event) == 3:
+                namespace, mode, chunk = event
+            else:
+                namespace, mode, chunk = (), *event
+            if mode == "values":
+                # ONLY the top-level graph's state is the turn's result. With
+                # `subgraphs=True` the consultant subgraph also emits `values`,
+                # and its state has no `answer`/`dialog` of the shape the
+                # caller expects — taking the last event regardless of
+                # namespace would hand back the subgraph's inner state and
+                # silently blank the reply.
+                if not namespace and isinstance(chunk, dict):
+                    final_state = chunk
+                continue
+            if mode != "messages":
+                continue
+            try:
+                message, metadata = chunk
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(message, AIMessageChunk):
+                continue
+            if getattr(message, "tool_call_chunks", None):
+                # This round is producing a tool call, not an answer.
+                continue
+            if (metadata or {}).get("langgraph_node") not in _STREAMED_NODES:
+                continue
+            text = extract_text_content(message)
+            if not text:
+                continue
+            try:
+                await on_token(text)
+            except Exception:
+                _agent_logger.debug("on_token callback failed", exc_info=True)
+
+        return final_state
+
     async def send_message(
         self,
         session_id: str,
@@ -304,8 +358,11 @@ class Agent:
         text: str,
         language: Optional[str] = None,
         human_mode: bool = False,
+        channel: Optional[str] = None,
     ) -> AgentTurnResult:
-        return await self._ainvoke(session_id, text, language, human_mode=human_mode, user_id=user_id)
+        return await self._ainvoke(
+            session_id, text, language, human_mode=human_mode, user_id=user_id, channel=channel,
+        )
 
     async def get_handoff_context(self, session_id: str) -> Dict[str, Any]:
         """Best-effort, read-only snapshot of this session's current dialog,
@@ -317,7 +374,7 @@ class Agent:
         turn. Never raises — a read failure just means a thinner summary.
         """
         try:
-            config = self._build_config(session_id)
+            config = self._build_config(session_id, run_name="handoff_context")
             existing = await self._aload_existing_state(config)
         except Exception as exc:
             _agent_logger.warning(
@@ -338,6 +395,74 @@ class Agent:
                 )
         return {"dialog": dialog, "messages": messages, "user_profile": profile}
 
+    async def get_pending_interrupt(self, session_id: str) -> Optional[dict]:
+        """The interrupt this session is paused on, or None (roadmap П.6).
+
+        Two different things can pause a session, and the caller needs to tell
+        them apart:
+          * `node_human_mode_turn` waiting for an operator's reply;
+          * `HumanInTheLoopMiddleware` waiting for someone to approve a write
+            tool the model wants to call.
+
+        Reading the graph's own `.interrupts` is authoritative — it reflects
+        what the checkpoint actually holds. `ChatSession.human_mode` is a
+        separate DB flag that can drift from it (a crash between the two
+        writes, an operator timeout that flipped the flag back while the graph
+        stayed parked), and acting on the flag alone is what makes a session
+        look responsive while the graph is still waiting.
+
+        Never raises: a read failure means "we don't know", and the caller
+        falls back to the flag it already had.
+        """
+        try:
+            snapshot = await self._graph.aget_state(self._build_config(session_id))
+        except Exception as exc:
+            _agent_logger.warning(
+                "get_pending_interrupt: state read failed for %s: %s", session_id, exc,
+            )
+            return None
+
+        interrupts = list(getattr(snapshot, "interrupts", None) or [])
+        if not interrupts:
+            return None
+
+        first = interrupts[0]
+        value = getattr(first, "value", None)
+        payload = dict(value) if isinstance(value, dict) else {"value": value}
+        payload["interrupt_id"] = getattr(first, "id", None)
+        # `kind` lets the caller route without re-parsing the payload shape.
+        payload["kind"] = (
+            "operator" if payload.get("reason") == "human_mode_active" else "approval"
+        )
+        return payload
+
+    async def resume_pending_interrupt(self, session_id: str, decision: Any) -> Optional[dict]:
+        """Resume a paused graph with `decision` (roadmap П.6).
+
+        `decision` is passed to `Command(resume=...)` verbatim, so it carries
+        whatever the waiting interrupt expects: an operator's reply text for
+        `node_human_mode_turn`, or `HumanInTheLoopMiddleware`'s decision dict
+        (`{"decisions": [{"type": "approve"}]}`, an `edit` with new arguments,
+        or a `reject` with a message) for an approval gate.
+
+        Returns the resulting state, or None when the session was not paused
+        or the resume failed — a failed approval must not take the bot down.
+        """
+        from langgraph.types import Command
+
+        lock = self._get_session_lock(session_id)
+        async with lock:
+            try:
+                config = self._build_config(session_id, run_name="interrupt_resume")
+                out = await self._graph.ainvoke(Command(resume=decision), config=config)
+            except Exception as exc:
+                _agent_logger.warning(
+                    "resume_pending_interrupt failed for %s: %s", session_id, exc,
+                )
+                out = None
+        self._release_session_lock(session_id, lock)
+        return out
+
     async def resume_human_mode(self, session_id: str, operator_reply: str) -> str:
         """Resume a graph interrupted in human_mode node, injecting operator reply."""
         # Same per-session serialization as _ainvoke — a resume is also a
@@ -346,7 +471,7 @@ class Agent:
         async with lock:
             try:
                 from langgraph.types import Command
-                config = self._build_config(session_id)
+                config = self._build_config(session_id, run_name="operator_resume", extra_tags=("human_mode",))
                 out = await self._graph.ainvoke(Command(resume=operator_reply), config=config)
                 result = str(out.get("answer") or operator_reply)
             except Exception as e:
@@ -358,9 +483,13 @@ class Agent:
     async def sync_history(self, session_id: str, events: Sequence[dict[str, str]]) -> None:
         if not events:
             return
-        config = self._build_config(session_id)
-        existing = await self._aload_existing_state(config)
-        msgs = list(existing.get("messages") or [])
+        config = self._build_config(session_id, run_name="sync_history")
+        # Only the NEW events are written: `BotState.messages` carries the
+        # `add_messages` reducer, which merges this delta into the checkpointed
+        # history. (Before the reducer this method had to read the whole
+        # history and write it back, which is also why it no longer needs a
+        # checkpoint read at all.)
+        msgs: list = []
         for event in events:
             role = (event.get("role") or "").strip().lower()
             text = (event.get("text") or "").strip()
@@ -370,12 +499,31 @@ class Agent:
                 msgs.append(HumanMessage(content=mask_pii(text)))
             elif role in {"assistant", "agent", "operator", "bot", "ai"}:
                 msgs.append(AIMessage(content=text))
+        if not msgs:
+            return
         try:
-            await self._graph.aupdate_state(config, {"messages": msgs})
+            # `as_node` is REQUIRED here. Without it LangGraph rejects the write
+            # with "Ambiguous update, specify as_node" on any session that
+            # already has a checkpoint — which silently broke every sync after
+            # the very first one (the failure was caught and logged below, so
+            # operator history simply stopped reaching the graph).
+            #
+            # "human_mode" is the honest choice: this method is only ever called
+            # when a session LEAVES operator mode (see
+            # ChatService.sync_human_mode_history_to_agent's two call sites), so
+            # attributing the operator's messages to that node is accurate, and
+            # it clears the `interrupt()` that node may still be parked on —
+            # exactly what returning to bot mode should do.
+            await self._graph.aupdate_state(config, {"messages": msgs}, as_node="human_mode")
         except Exception as exc:
             _agent_logger.warning("Failed to sync history for session %s: %s", session_id, exc)
 
     async def aclose(self) -> None:
+        if self._store_cm is not None:
+            try:
+                await self._store_cm.__aexit__(None, None, None)
+            except Exception as exc:
+                _agent_logger.warning("Failed to close store: %s", exc)
         if self._checkpointer_cm is not None:
             try:
                 await self._checkpointer_cm.__aexit__(None, None, None)

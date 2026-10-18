@@ -48,7 +48,7 @@ async def _resolve_internal_user_id(session, telegram_user_id: int) -> Optional[
     ).scalar_one_or_none()
 
 
-async def load_user_profile(user_id: int) -> Optional[dict]:
+async def _load_from_table(user_id: int) -> Optional[dict]:
     """Load the profile for the Telegram user *user_id*.
 
     Returns `None` when the user has no `users` row yet, or has a `users` row
@@ -81,7 +81,7 @@ async def load_user_profile(user_id: int) -> Optional[dict]:
         }
 
 
-async def upsert_user_profile(
+async def _upsert_to_table(
     user_id: int,
     facts_delta: Optional[dict[str, Any]] = None,
     notes: Optional[str] = None,
@@ -138,3 +138,115 @@ async def upsert_user_profile(
         )
         await session.execute(stmt)
         await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Store-backed implementation (roadmap П.4)
+#
+# Same two operations against LangGraph's `BaseStore` instead of the
+# `user_profiles` table. Selected by `PROFILE_BACKEND=store`; see
+# `app/agent/store.py` for the namespace layout and why the switch exists.
+#
+# The merge semantics are reproduced deliberately: `facts_delta` updates only
+# the keys it names, and `notes=None` leaves stored notes untouched. The
+# difference is that a store has no atomic JSONB `||`, so this is a
+# read-modify-write. Two background extractors racing on the same customer can
+# therefore lose one side's facts — acceptable because the extractor re-derives
+# facts from every turn anyway, and the alternative (a lock) would cost more
+# than the rare loss.
+# ---------------------------------------------------------------------------
+
+def _get_store() -> Any:
+    """The store bound to the running graph, or None outside a graph run."""
+    try:
+        from langgraph.config import get_store
+
+        return get_store()
+    except Exception:
+        return None
+
+
+async def _load_from_store(user_id: int, store: Any = None) -> Optional[dict]:
+    from app.agent.store import PROFILE_KEY, profile_namespace
+
+    store = store or _get_store()
+    if store is None:
+        _logger.debug("PROFILE_BACKEND=store but no store is bound; treating as no profile")
+        return None
+
+    item = await store.aget(profile_namespace(user_id), PROFILE_KEY)
+    if item is None:
+        return None
+    value = dict(getattr(item, "value", None) or {})
+    updated_at = getattr(item, "updated_at", None)
+    return {
+        "facts": dict(value.get("facts") or {}),
+        "notes": str(value.get("notes") or ""),
+        "updated_at": updated_at.isoformat() if updated_at else None,
+    }
+
+
+async def _upsert_to_store(
+    user_id: int,
+    facts_delta: Optional[dict] = None,
+    notes: Optional[str] = None,
+    store: Any = None,
+) -> None:
+    from app.agent.store import PROFILE_KEY, profile_namespace
+
+    store = store or _get_store()
+    if store is None:
+        _logger.debug("PROFILE_BACKEND=store but no store is bound; profile write skipped")
+        return
+
+    namespace = profile_namespace(user_id)
+    existing = await store.aget(namespace, PROFILE_KEY)
+    current = dict(getattr(existing, "value", None) or {})
+
+    facts = dict(current.get("facts") or {})
+    facts.update(facts_delta or {})
+    value = {"facts": facts, "notes": current.get("notes") or ""}
+    if notes is not None:
+        value["notes"] = notes
+
+    await store.aput(namespace, PROFILE_KEY, value)
+
+
+# ---------------------------------------------------------------------------
+# Public API — dispatches on PROFILE_BACKEND
+# ---------------------------------------------------------------------------
+
+async def load_user_profile(user_id: int, store: Any = None) -> Optional[dict]:
+    """Load the profile for the Telegram user *user_id*.
+
+    Returns `None` when nothing is known about them yet. Errors propagate:
+    the caller (`node_prepare_turn`) is responsible for not letting a profile
+    read break the turn.
+    """
+    from app.agent.store import store_backed_profiles
+
+    if store_backed_profiles():
+        return await _load_from_store(user_id, store)
+    return await _load_from_table(user_id)
+
+
+async def upsert_user_profile(
+    user_id: int,
+    facts_delta: Optional[dict] = None,
+    notes: Optional[str] = None,
+    store: Any = None,
+) -> None:
+    """Merge `facts_delta` into the stored profile and optionally replace notes.
+
+    `facts_delta={}` with `notes=None` is a no-op and costs no I/O — the
+    background extractor produces exactly that on most turns.
+    """
+    if not facts_delta and notes is None:
+        return
+
+    from app.agent.store import store_backed_profiles
+
+    if store_backed_profiles():
+        await _upsert_to_store(user_id, facts_delta, notes, store)
+        return
+    await _upsert_to_table(user_id, facts_delta, notes)

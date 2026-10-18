@@ -188,7 +188,11 @@ class ChatService:
         user: User,
         text: str,
         telegram_message_id: Optional[int] = None,
+        channel: str = "telegram",
     ) -> AgentReply:
+        """`channel` ("telegram" | "miniapp") is observability-only: it is
+        forwarded to the agent for LangSmith metadata/tags and never changes
+        how the turn is handled."""
         chat_session = await self.ensure_active_session(user.id)
         # Set session title from the first user message if it's empty.
         await self.set_session_title_if_empty(chat_session.id, text)
@@ -214,6 +218,7 @@ class ChatService:
                         text=text,
                         language=normalize_lang(user.language),
                         human_mode=True,
+                        channel=channel,
                     )
                 except Exception:
                     logger.exception(
@@ -239,6 +244,7 @@ class ChatService:
                     user_id=user.telegram_user_id,
                     text=text,
                     language=normalize_lang(user.language),
+                    channel=channel,
                 ),
                 timeout=get_settings().agent_timeout_seconds,
             )

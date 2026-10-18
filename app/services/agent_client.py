@@ -30,13 +30,18 @@ class AgentClient:
         text: str,
         language: str | None = None,
         human_mode: bool = False,
+        channel: str | None = None,
     ) -> AgentTurnResult:
+        """`channel` is observability-only ("telegram" | "miniapp"): it lands
+        in the run's LangSmith metadata/tags (app/agent/tracing.py) and never
+        changes how a turn is processed."""
         return await self._agent.send_message(
             session_id=session_id,
             user_id=user_id,
             text=text,
             language=language,
             human_mode=human_mode,
+            channel=channel,
         )
 
     async def get_handoff_context(self, session_id: str) -> dict:
@@ -57,3 +62,15 @@ class AgentClient:
 
     async def aclose(self) -> None:
         await self._agent.aclose()
+
+    async def get_pending_interrupt(self, session_id: str) -> dict | None:
+        """What this session's graph is paused on, if anything — see
+        `Agent.get_pending_interrupt` (roadmap П.6)."""
+        return await self._agent.get_pending_interrupt(session_id=session_id)
+
+    async def resume_pending_interrupt(self, session_id: str, decision) -> dict | None:
+        """Resume a paused graph with an operator reply or an approval
+        decision — see `Agent.resume_pending_interrupt`."""
+        return await self._agent.resume_pending_interrupt(
+            session_id=session_id, decision=decision,
+        )

@@ -1,17 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, TypedDict
+from typing import Annotated, Any, List, Optional, TypedDict
+
+from langgraph.graph.message import add_messages
 
 
 class BotState(TypedDict):
-    messages: List[Any]
+    # `add_messages` reducer: nodes return only the messages they ADD this
+    # turn (see helpers._finalize_turn), and LangGraph merges them into the
+    # checkpointed history itself. Two consequences worth knowing:
+    #   * `Agent._ainvoke_locked` must NOT pass the prior history back in as
+    #     input — that would append a second copy of every message.
+    #   * Trimming can no longer be done by returning a shorter list. A node
+    #     that needs to drop history returns
+    #     `[RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]` instead.
+    # It also back-fills a UUID onto any message lacking one, which is what
+    # silently migrates pre-reducer checkpoints on their first merge.
+    messages: Annotated[List[Any], add_messages]
     last_user_text: str
     answer: str
     human_mode: bool
     keyboard_options: Optional[List[str]]
     dialog: dict          # see _default_dialog()
-    lang: str             # "ru" | "en" | "uz" — set by the language detector in agent._ainvoke
+    lang: str             # "ru" | "en" | "uz" — resolved by node_prepare_turn
+    # The language the CALLER already knows (User.language, chosen in /start).
+    # Input-only: node_prepare_turn treats it as authoritative and skips the
+    # LLM detector when it is set. Not to be confused with `lang`, the
+    # language actually used for this turn.
+    requested_lang: Optional[str]
+    # Set by node_prepare_turn when the message looks like a different
+    # language than the one in use. The bot layer offers a switch; we never
+    # switch silently. None when there is nothing to suggest.
+    suggested_lang: Optional[str]
     _route: str
     session_id: Optional[str]
     user_id: Optional[int]

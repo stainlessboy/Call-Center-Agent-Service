@@ -313,7 +313,9 @@ class TestAgentSessionLockSerialization:
         max_concurrent = 0
         call_count = 0
 
-        async def fake_locked(session_id, user_text, language, human_mode, user_id):
+        # *args/**kwargs: this stub only cares that _ainvoke serializes calls,
+        # not about the argument list, which grows over time (e.g. `channel`).
+        async def fake_locked(session_id, user_text, *args, **kwargs):
             nonlocal concurrent_entries, max_concurrent, call_count
             call_count += 1
             concurrent_entries += 1
@@ -353,7 +355,9 @@ class TestAgentSessionLockSerialization:
         concurrent_entries = 0
         max_concurrent = 0
 
-        async def fake_locked(session_id, user_text, language, human_mode, user_id):
+        # *args/**kwargs: this stub only cares that _ainvoke serializes calls,
+        # not about the argument list, which grows over time (e.g. `channel`).
+        async def fake_locked(session_id, user_text, *args, **kwargs):
             nonlocal concurrent_entries, max_concurrent
             concurrent_entries += 1
             max_concurrent = max(max_concurrent, concurrent_entries)
@@ -626,3 +630,49 @@ class TestCustomLoanCalculatorSanityCaps:
         assert artifact["type"] == "calc_result"
         assert artifact["data"]["schedule"]
         assert len(artifact["data"]["schedule"]) == 60
+
+
+# ---------------------------------------------------------------------------
+# node_faq: an OpenAI outage must degrade, not crash
+# ---------------------------------------------------------------------------
+
+class TestApiErrorDoesNotCrashTheTurn:
+    """`is_ai_generated` used to be assigned only in the classification block
+    AFTER the tool loop. An APIError from the first model call jumped straight
+    past it to `_finalize_turn(wrap_ai_generated=is_ai_generated)`, raising
+    UnboundLocalError — so every turn during an OpenAI outage failed instead of
+    falling back to the FAQ answer the except branch had just looked up.
+    """
+
+    @pytest.mark.asyncio
+    async def test_api_error_falls_back_to_faq_answer(self, monkeypatch):
+        from openai import APIError
+
+        from app.agent.nodes import faq as faq_module
+        from app.agent.state import _default_dialog
+
+        class _Bound:
+            async def ainvoke(self, msgs, **kwargs):
+                raise APIError("boom", request=None, body=None)
+
+        class _LLM:
+            def bind_tools(self, tools, **kwargs):
+                return _Bound()
+
+        monkeypatch.setattr(faq_module, "_get_chat_openai", lambda role=None: _LLM())
+        monkeypatch.setattr(faq_module, "faq_precheck_answer", AsyncMock(return_value=None))
+        monkeypatch.setattr(faq_module, "_faq_lookup", AsyncMock(return_value="Ответ из FAQ"))
+
+        state = {
+            "last_user_text": "как открыть вклад",
+            "messages": [],
+            "dialog": _default_dialog(),
+            "lang": "ru",
+            "session_id": "s-api-error",
+            "user_id": 1,
+            "user_profile": None,
+        }
+        result = await faq_module.node_faq(state)
+
+        assert result["answer"] == "Ответ из FAQ"
+        assert result["dialog"]["fallback_streak"] == 0

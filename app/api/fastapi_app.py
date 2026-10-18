@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import logging
 import os
+from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
 from typing import Optional
 
@@ -91,6 +92,21 @@ async def lifespan(app: FastAPI):
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
+
+    # MCP tools (roadmap П.8) are discovered once, BEFORE the agent is built:
+    # `consultant._display_tools()` reads them out of the registry when it
+    # compiles the agent. Discovery never raises and returns [] when MCP is
+    # off or a server is unreachable — the bot then simply runs without those
+    # tools instead of failing to start.
+    from app.agent import mcp_tools as mcp_tools_module
+
+    discovered_mcp_tools = await mcp_tools_module.load_mcp_tools()
+    mcp_tools_module.set_mcp_tools(discovered_mcp_tools)
+    if discovered_mcp_tools:
+        logger.info(
+            "MCP tools available to the agent: %s",
+            ", ".join(getattr(t, "name", "?") for t in discovered_mcp_tools),
+        )
 
     agent_client = AgentClient()
     await agent_client.setup(settings)
@@ -286,6 +302,10 @@ async def lifespan(app: FastAPI):
         with suppress(Exception):
             await agent_client.aclose()
         with suppress(Exception):
+            from app.agent import mcp_tools as _mcp_tools
+
+            await _mcp_tools.aclose()
+        with suppress(Exception):
             await bot.session.close()
 
 
@@ -345,6 +365,36 @@ async def healthcheck() -> JSONResponse:
     return JSONResponse(status_code=http_status, content=status)
 
 
+# ---------------------------------------------------------------------------
+# Webhook idempotency (roadmap П.10)
+#
+# An in-process ring of recently seen `update_id`s. Deliberately NOT a
+# database table: the check must add no latency to the hot path, and losing
+# the ring on restart is harmless (Telegram stops redelivering long before
+# that matters). The cap keeps it bounded — 2048 updates is far more than the
+# few seconds of redelivery window it needs to cover.
+#
+# CONSTRAINT, same as `Agent._session_locks`: this is per-process. With more
+# than one uvicorn worker each has its own ring, so a duplicate could still
+# slip through on a different worker. Moving to Redis is the fix, and is the
+# same change that the distributed session lock needs.
+# ---------------------------------------------------------------------------
+_SEEN_UPDATE_IDS: "OrderedDict[int, None]" = OrderedDict()
+_SEEN_UPDATE_LIMIT = 2048
+
+
+def _is_duplicate_update(update_id: Optional[int]) -> bool:
+    """True when this update_id was already accepted. Marks it as seen."""
+    if update_id is None:
+        return False
+    if update_id in _SEEN_UPDATE_IDS:
+        return True
+    _SEEN_UPDATE_IDS[update_id] = None
+    while len(_SEEN_UPDATE_IDS) > _SEEN_UPDATE_LIMIT:
+        _SEEN_UPDATE_IDS.popitem(last=False)
+    return False
+
+
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(
     request: Request,
@@ -367,6 +417,17 @@ async def telegram_webhook(
     except Exception as exc:
         logger.warning("Invalid webhook update payload: %s", exc)
         raise HTTPException(status_code=400, detail="Invalid update payload") from exc
+
+    # Telegram redelivers an update when it does not see a timely 200 — a slow
+    # LLM turn is enough to trigger that. Without this check the same customer
+    # message is processed twice: two answers, two lead rows, and two
+    # concurrent turns racing on the same checkpoint (roadmap П.10). The
+    # per-session lock in `Agent` serialises them but cannot tell they are
+    # duplicates, so the dedup has to happen here, at the edge.
+    if _is_duplicate_update(getattr(update, "update_id", None)):
+        logger.info("Skipping duplicate Telegram update_id=%s", update.update_id)
+        return {"ok": True}
+
     try:
         await dp.feed_update(bot, update)
     except Exception as exc:

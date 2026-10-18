@@ -1,0 +1,371 @@
+{
+  "generated_at": "2026-09-04T11:32:50.720514+00:00",
+  "mode": "offline",
+  "latency_budget_ms": 8000.0,
+  "dataset_size": 58,
+  "cases_run": 5,
+  "coverage_by_language": {
+    "ru": 30,
+    "en": 12,
+    "uz": 16
+  },
+  "summary": {
+    "no_error": {
+      "passed": 5,
+      "applicable": 5,
+      "skipped": 0,
+      "rate": 100.0
+    },
+    "tool_match": {
+      "passed": 5,
+      "applicable": 5,
+      "skipped": 0,
+      "rate": 100.0
+    },
+    "category_match": {
+      "passed": 4,
+      "applicable": 4,
+      "skipped": 1,
+      "rate": 100.0
+    },
+    "reached_db": {
+      "passed": 4,
+      "applicable": 4,
+      "skipped": 1,
+      "rate": 100.0
+    },
+    "no_pii_leak": {
+      "passed": 5,
+      "applicable": 5,
+      "skipped": 0,
+      "rate": 100.0
+    },
+    "language_match": {
+      "passed": 4,
+      "applicable": 4,
+      "skipped": 1,
+      "rate": 100.0
+    },
+    "latency_under_8000ms": {
+      "passed": 5,
+      "applicable": 5,
+      "skipped": 0,
+      "rate": 100.0
+    }
+  },
+  "totals": {
+    "cases": 5,
+    "errors": 0,
+    "total_cost_usd": 0.0,
+    "total_tokens": 0,
+    "latency_ms_avg": 17.1,
+    "latency_ms_p95": 44.1
+  },
+  "cases": [
+    {
+      "id": "ru-mortgage-list",
+      "lang": "ru",
+      "text": "Хочу оформить ипотеку",
+      "expected_tool": "get_products",
+      "expected_category": "mortgage",
+      "must_reach_db": true,
+      "tools": [
+        "get_products"
+      ],
+      "answer": "Спасибо за информацию. Мы можем предложить вам следующие варианты:\n\nВот наши ипотечные программы:\n\n1. Ипотека Асака — 17.0–19.0%\n2. Ипотека Молодая семья — 15.0%\n\nВыберите программу для подробной информации.",
+      "latency_ms": 44.1,
+      "steps": 4,
+      "token_usage": {},
+      "cost": 0.0,
+      "error": null,
+      "verdicts": [
+        {
+          "key": "no_error",
+          "score": 1.0,
+          "comment": "ok",
+          "applicable": true
+        },
+        {
+          "key": "tool_match",
+          "score": 1.0,
+          "comment": "called ['get_products'] (matched get_products)",
+          "applicable": true
+        },
+        {
+          "key": "category_match",
+          "score": 1.0,
+          "comment": "expected mortgage, got ['mortgage']",
+          "applicable": true
+        },
+        {
+          "key": "reached_db",
+          "score": 1.0,
+          "comment": "product from DB: 'Ипотека Асака'",
+          "applicable": true
+        },
+        {
+          "key": "no_pii_leak",
+          "score": 1.0,
+          "comment": "no raw PII",
+          "applicable": true
+        },
+        {
+          "key": "language_match",
+          "score": 1.0,
+          "comment": "expected ru, detected ru",
+          "applicable": true
+        },
+        {
+          "key": "latency_under_8000ms",
+          "score": 1.0,
+          "comment": "44 ms (budget 8000 ms)",
+          "applicable": true
+        }
+      ]
+    },
+    {
+      "id": "ru-autoloan-list",
+      "lang": "ru",
+      "text": "Покажите ваши автокредиты",
+      "expected_tool": "get_products",
+      "expected_category": "autoloan",
+      "must_reach_db": true,
+      "tools": [
+        "get_products"
+      ],
+      "answer": "Спасибо за информацию. Мы можем предложить вам следующие варианты:\n\nВот наши программы автокредита:\n\n1. Автокредит GM — 21.0%\n\nВыберите программу для подробной информации.",
+      "latency_ms": 15.4,
+      "steps": 4,
+      "token_usage": {},
+      "cost": 0.0,
+      "error": null,
+      "verdicts": [
+        {
+          "key": "no_error",
+          "score": 1.0,
+          "comment": "ok",
+          "applicable": true
+        },
+        {
+          "key": "tool_match",
+          "score": 1.0,
+          "comment": "called ['get_products'] (matched get_products)",
+          "applicable": true
+        },
+        {
+          "key": "category_match",
+          "score": 1.0,
+          "comment": "expected autoloan, got ['autoloan']",
+          "applicable": true
+        },
+        {
+          "key": "reached_db",
+          "score": 1.0,
+          "comment": "product from DB: 'Автокредит GM'",
+          "applicable": true
+        },
+        {
+          "key": "no_pii_leak",
+          "score": 1.0,
+          "comment": "no raw PII",
+          "applicable": true
+        },
+        {
+          "key": "language_match",
+          "score": 1.0,
+          "comment": "expected ru, detected ru",
+          "applicable": true
+        },
+        {
+          "key": "latency_under_8000ms",
+          "score": 1.0,
+          "comment": "15 ms (budget 8000 ms)",
+          "applicable": true
+        }
+      ]
+    },
+    {
+      "id": "ru-microloan-list",
+      "lang": "ru",
+      "text": "Нужен микрозайм",
+      "expected_tool": "get_products",
+      "expected_category": "microloan",
+      "must_reach_db": true,
+      "tools": [
+        "get_products"
+      ],
+      "answer": "Спасибо за информацию. Мы можем предложить вам следующие варианты:\n\nВот наши программы микрозайма:\n\n1. Микрозайм Онлайн — 26.0%\n\nВыберите программу для подробной информации.",
+      "latency_ms": 12.1,
+      "steps": 4,
+      "token_usage": {},
+      "cost": 0.0,
+      "error": null,
+      "verdicts": [
+        {
+          "key": "no_error",
+          "score": 1.0,
+          "comment": "ok",
+          "applicable": true
+        },
+        {
+          "key": "tool_match",
+          "score": 1.0,
+          "comment": "called ['get_products'] (matched get_products)",
+          "applicable": true
+        },
+        {
+          "key": "category_match",
+          "score": 1.0,
+          "comment": "expected microloan, got ['microloan']",
+          "applicable": true
+        },
+        {
+          "key": "reached_db",
+          "score": 1.0,
+          "comment": "product from DB: 'Микрозайм Онлайн'",
+          "applicable": true
+        },
+        {
+          "key": "no_pii_leak",
+          "score": 1.0,
+          "comment": "no raw PII",
+          "applicable": true
+        },
+        {
+          "key": "language_match",
+          "score": 1.0,
+          "comment": "expected ru, detected ru",
+          "applicable": true
+        },
+        {
+          "key": "latency_under_8000ms",
+          "score": 1.0,
+          "comment": "12 ms (budget 8000 ms)",
+          "applicable": true
+        }
+      ]
+    },
+    {
+      "id": "ru-education-list",
+      "lang": "ru",
+      "text": "Образовательный кредит есть?",
+      "expected_tool": "get_products",
+      "expected_category": "education_credit",
+      "must_reach_db": true,
+      "tools": [
+        "get_products"
+      ],
+      "answer": "Спасибо за информацию. Мы можем предложить вам следующие варианты:\n\nВот наши образовательные кредиты:\n\n1. Образовательный кредит — 18.0%\n\nВыберите программу для подробной информации.",
+      "latency_ms": 10.4,
+      "steps": 2,
+      "token_usage": {},
+      "cost": 0.0,
+      "error": null,
+      "verdicts": [
+        {
+          "key": "no_error",
+          "score": 1.0,
+          "comment": "ok",
+          "applicable": true
+        },
+        {
+          "key": "tool_match",
+          "score": 1.0,
+          "comment": "called ['get_products'] (matched get_products)",
+          "applicable": true
+        },
+        {
+          "key": "category_match",
+          "score": 1.0,
+          "comment": "expected education_credit, got ['education_credit']",
+          "applicable": true
+        },
+        {
+          "key": "reached_db",
+          "score": 1.0,
+          "comment": "product from DB: 'Образовательный кредит'",
+          "applicable": true
+        },
+        {
+          "key": "no_pii_leak",
+          "score": 1.0,
+          "comment": "no raw PII",
+          "applicable": true
+        },
+        {
+          "key": "language_match",
+          "score": 1.0,
+          "comment": "expected ru, detected ru",
+          "applicable": true
+        },
+        {
+          "key": "latency_under_8000ms",
+          "score": 1.0,
+          "comment": "10 ms (budget 8000 ms)",
+          "applicable": true
+        }
+      ]
+    },
+    {
+      "id": "ru-credit-menu",
+      "lang": "ru",
+      "text": "Мне нужен кредит",
+      "expected_tool": "show_credit_menu",
+      "expected_category": null,
+      "must_reach_db": false,
+      "tools": [
+        "show_credit_menu"
+      ],
+      "answer": "Выберите вид кредита: Ипотека, Автокредит, Микрозайм, Образовательный кредит",
+      "latency_ms": 3.7,
+      "steps": 1,
+      "token_usage": {},
+      "cost": 0.0,
+      "error": null,
+      "verdicts": [
+        {
+          "key": "no_error",
+          "score": 1.0,
+          "comment": "ok",
+          "applicable": true
+        },
+        {
+          "key": "tool_match",
+          "score": 1.0,
+          "comment": "called ['show_credit_menu'] (matched show_credit_menu)",
+          "applicable": true
+        },
+        {
+          "key": "category_match",
+          "score": 1.0,
+          "comment": "no category expected",
+          "applicable": false
+        },
+        {
+          "key": "reached_db",
+          "score": 1.0,
+          "comment": "case does not require DB data",
+          "applicable": false
+        },
+        {
+          "key": "no_pii_leak",
+          "score": 1.0,
+          "comment": "no raw PII",
+          "applicable": true
+        },
+        {
+          "key": "language_match",
+          "score": 1.0,
+          "comment": "no clear language signal in the answer",
+          "applicable": false
+        },
+        {
+          "key": "latency_under_8000ms",
+          "score": 1.0,
+          "comment": "4 ms (budget 8000 ms)",
+          "applicable": true
+        }
+      ]
+    }
+  ]
+}

@@ -712,88 +712,64 @@ class TestCalcFlowUiBlocks:
 
 
 # ---------------------------------------------------------------------------
-# node_faq._run_llm_round — Mini App streaming buffering
+# node_faq._run_llm_round — no longer streams (roadmap П.5)
+#
+# This function used to switch to `.astream()` whenever a Mini App callback was
+# armed, and forward chunks itself. It does not any more: tokens now come from
+# `graph.astream(stream_mode="messages")` in `Agent._astream_turn`, which is
+# the only place that can see the model call after it moved into the
+# `create_agent` consultant subgraph. While both existed the customer received
+# every token twice.
+#
+# What is pinned here is that this function is now a plain, single-path call.
+# The streaming behaviour itself is covered by tests/test_streaming_graph.py.
 # ---------------------------------------------------------------------------
 
-class _FakeStreamingLLM:
-    def __init__(self, chunks):
-        self._chunks = chunks
-
-    async def astream(self, msgs, **kwargs):
-        for c in self._chunks:
-            yield c
-
-
-class TestRunLlmRoundStreaming:
+class TestRunLlmRoundNoLongerStreams:
     @pytest.mark.asyncio
-    async def test_on_token_none_takes_plain_ainvoke_path(self):
+    async def test_always_takes_the_plain_ainvoke_path(self):
         from app.agent.nodes.faq import _run_llm_round
 
         expected = AIMessage(content="plain answer")
 
         class _Plain:
+            def __init__(self):
+                self.ainvoke_calls = 0
+
+            async def ainvoke(self, msgs):
+                self.ainvoke_calls += 1
+                return expected
+
+        llm = _Plain()
+        result = await _run_llm_round(llm, [], None)
+
+        assert result is expected
+        assert llm.ainvoke_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_on_token_is_accepted_but_ignored(self):
+        """The parameter is kept so existing call sites keep working; a model
+        that only implements `astream` would now fail, which is the point —
+        nothing here streams any more."""
+        from app.agent.nodes.faq import _run_llm_round
+
+        expected = AIMessage(content="ответ")
+        forwarded: list[str] = []
+
+        class _Plain:
             async def ainvoke(self, msgs):
                 return expected
 
-        result = await _run_llm_round(_Plain(), [], None)
+            async def astream(self, msgs, **kwargs):  # pragma: no cover
+                raise AssertionError("_run_llm_round must not stream")
+
+        async def on_token(text: str) -> None:
+            forwarded.append(text)
+
+        result = await _run_llm_round(_Plain(), [], on_token)
+
         assert result is expected
-
-    @pytest.mark.asyncio
-    async def test_text_round_forwards_every_chunk(self):
-        from app.agent.nodes.faq import _run_llm_round
-
-        chunks = [AIMessageChunk(content="Здрав"), AIMessageChunk(content="ствуйте"), AIMessageChunk(content="!")]
-        llm = _FakeStreamingLLM(chunks)
-        forwarded: list[str] = []
-
-        async def on_token(text: str) -> None:
-            forwarded.append(text)
-
-        result = await _run_llm_round(llm, [], on_token)
-        assert forwarded == ["Здрав", "ствуйте", "!"]
-        assert result.content == "Здравствуйте!"
-        assert not (getattr(result, "tool_calls", None) or [])
-
-    @pytest.mark.asyncio
-    async def test_tool_call_round_forwards_nothing(self):
-        from app.agent.nodes.faq import _run_llm_round
-
-        chunks = [
-            AIMessageChunk(
-                content="",
-                tool_call_chunks=[{"name": "get_products", "args": '{"category":', "id": "call_1", "index": 0}],
-            ),
-            AIMessageChunk(
-                content="",
-                tool_call_chunks=[{"name": None, "args": '"mortgage"}', "id": None, "index": 0}],
-            ),
-        ]
-        llm = _FakeStreamingLLM(chunks)
-        forwarded: list[str] = []
-
-        async def on_token(text: str) -> None:
-            forwarded.append(text)
-
-        result = await _run_llm_round(llm, [], on_token)
-        assert forwarded == []
-        assert result.tool_calls
-        assert result.tool_calls[0]["name"] == "get_products"
-
-    @pytest.mark.asyncio
-    async def test_on_token_exception_does_not_break_the_round(self):
-        """A publish failure inside the callback (dead socket, etc.) must not
-        crash the turn — see app/miniapp/routes/chat.py's own try/except
-        around hub.publish, mirrored defensively here too."""
-        from app.agent.nodes.faq import _run_llm_round
-
-        chunks = [AIMessageChunk(content="ok")]
-        llm = _FakeStreamingLLM(chunks)
-
-        async def failing_on_token(text: str) -> None:
-            raise RuntimeError("socket gone")
-
-        result = await _run_llm_round(llm, [], failing_on_token)
-        assert result.content == "ok"
+        assert forwarded == [], "tokens come from the graph, not from this function"
 
 
 # ---------------------------------------------------------------------------

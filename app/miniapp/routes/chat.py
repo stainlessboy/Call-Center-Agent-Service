@@ -125,7 +125,7 @@ async def send_message(
     if stream_session_id:
         stream_token = set_on_token_callback(_make_on_token(stream_session_id))
     try:
-        reply = await chat_service.handle_user_message(user=user, text=text)
+        reply = await chat_service.handle_user_message(user=user, text=text, channel="miniapp")
     finally:
         if stream_token is not None:
             reset_on_token_callback(stream_token)
