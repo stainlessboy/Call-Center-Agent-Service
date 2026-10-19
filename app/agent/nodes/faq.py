@@ -4,6 +4,7 @@ import json
 import logging as _logging
 import os
 from typing import List, Optional
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
 from langgraph.prebuilt import ToolNode
@@ -43,6 +44,7 @@ from app.agent.products import (
 from app.agent.recommend import rank_products
 from app.agent.state import BotState, _default_dialog, _reset_dialog
 from app.agent.streaming import get_on_token_callback
+from app.agent.tool_salvage import looks_like_thought_leak, rescue_tool_call
 from app.agent.tools import _FAQ_TOOLS, is_faq_sentinel
 from app.utils.faq_tools import _faq_lookup, faq_precheck_answer, get_faq_fallback
 
@@ -51,6 +53,44 @@ _agent_logger = _logging.getLogger(__name__)
 # Instantiated once at module load — ToolNode is stateless and safe to reuse
 # across turns, avoiding repeated construction inside the per-turn tool loop.
 _FAQ_TOOL_NODE = ToolNode(_FAQ_TOOLS)
+
+
+def _tool_salvage_enabled() -> bool:
+    """`TOOL_SALVAGE_ENABLED=false` turns off recovering tool calls from a
+    text-only reply (see app/agent/tool_salvage.py)."""
+    return (os.getenv("TOOL_SALVAGE_ENABLED") or "true").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _rescued_ai_message(
+    ai_msg: AIMessage, user_text: str, tool_names: list[str], *, first_decision: bool,
+) -> Optional[AIMessage]:
+    """Replace a text-only reply with the tool call it should have been.
+
+    The model replied without `tool_calls`. If it spelled a call out as text,
+    or (on the turn's first decision) the user plainly asked for a product
+    catalog or an operator, return an AIMessage carrying that call so the loop
+    below runs the tool exactly as if the model had called it. None keeps the
+    reply.
+    """
+    rescued = rescue_tool_call(
+        extract_text_content(ai_msg), user_text, tool_names, allow_intent=first_decision,
+    )
+    if rescued is None:
+        return None
+    name, args, reason = rescued
+    _agent_logger.info("node_faq: tool call rescued (%s): %s %s", reason, name, args)
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": name,
+            "args": args,
+            "id": f"rescued_{uuid4().hex[:12]}",
+            "type": "tool_call",
+        }],
+        response_metadata=getattr(ai_msg, "response_metadata", None) or {},
+    )
 
 
 async def _run_llm_round(llm_with_tools, loop_msgs: list, on_token) -> AIMessage:
@@ -609,6 +649,7 @@ async def node_faq(state: BotState) -> dict:
     # the NEXT turn's guard check.
     clarify_guard_active = bool(dialog.get("clarify_last_turn"))
     clarify_displayed = False
+    bound_tool_names = [t.name for t in _FAQ_TOOLS]
     try:
         loop_msgs = list(chat_msgs)
         hit_limit_with_pending_tools = False
@@ -618,9 +659,37 @@ async def node_faq(state: BotState) -> dict:
             accumulate_usage(turn_usage, extract_token_usage(ai_msg))
 
             tool_calls = getattr(ai_msg, "tool_calls", None) or []
+            if not tool_calls and _tool_salvage_enabled():
+                # A product/operator request answered with text, or a call
+                # written out as text, becomes the real call. The intent
+                # fallback only applies to the turn's first decision outside a
+                # list the customer is choosing from — after a tool ran, a text
+                # answer is the model's legitimate summary.
+                rescued = _rescued_ai_message(
+                    ai_msg,
+                    normalized_text or user_text,
+                    bound_tool_names,
+                    first_decision=(
+                        not tool_calls_made
+                        and not dialog.get("products")
+                        and not dialog.get("offices")
+                    ),
+                )
+                if rescued is not None:
+                    ai_msg = rescued
+                    loop_msgs[-1] = ai_msg
+                    tool_calls = ai_msg.tool_calls
             if not tool_calls:
                 # No more tool calls → final answer
                 content = extract_text_content(ai_msg).strip()
+                if content and looks_like_thought_leak(content):
+                    # Leaked reasoning ("<thought ... Thinking Process") is
+                    # never a customer answer; fall back instead.
+                    _agent_logger.warning(
+                        "node_faq: reasoning leaked into the reply, dropped, session=%s",
+                        state.get("session_id"),
+                    )
+                    content = ""
                 if content:
                     answer = content
                 break
@@ -665,6 +734,7 @@ async def node_faq(state: BotState) -> dict:
                     new_tool_msgs[-1].content = ""
                 clarify_guard_active = False  # only strip once
                 _remaining_tools = [t for t in _FAQ_TOOLS if getattr(t, "name", None) != "clarify"]
+                bound_tool_names = [t.name for t in _remaining_tools]
                 try:
                     llm_with_tools = llm.bind_tools(_remaining_tools, parallel_tool_calls=False)
                 except TypeError:

@@ -189,6 +189,7 @@ def _detect_product_category(text: str) -> Optional[str]:
         "ипотек", "квартир", "жиль", "недвижим", "новострой",
         "mortgage", "housing", "apartment", "real estate",
         "ipoteka", "kvartira", "uy-joy", "uy joy", "ko'chmas mulk",
+        "уй-жой", "уй жой", "кўчмас мулк", "кучмас мулк",
     )):
         return "mortgage"
     if any(t in lower for t in (
@@ -201,23 +202,28 @@ def _detect_product_category(text: str) -> Optional[str]:
         "образовательн", "учеб", "обучени", "контракт", "университет",
         "education", "student", "tuition", "university",
         "talim", "ta'lim", "kontrakt", "universitet", "o'qish",
+        "таълим", "талим", "ўқиш", "укиш",
     )):
         return "education_credit"
     if any(t in lower for t in (
         "микрозайм", "микро займ", "микрокредит",
         "microloan", "micro loan",
         "mikroqarz", "mikro qarz",
+        "микроқарз", "микрокарз",
     )):
         return "microloan"
     if any(t in lower for t in (
         "вклад", "депозит", "накоп", "сбережени",
         "deposit", "savings",
         "omonat", "jamg'arma", "depozit",
+        "омонат", "жамғарма", "жамгарма",
     )):
         return "deposit"
     if any(t in lower for t in (
         "валютн", "за границ", "visa", "mastercard", "поездк", "forex",
         "travel card", "valyuta karta", "chet el karta",
+        # "dollarga karta kerak" — a card named by its currency
+        "доллар", "долар", "евро", "dollar", "doller", "euro", "yevro", "valyuta", "валюта",
     )):
         if any(t in lower for t in ("карт", "карточ", "card", "karta")):
             return "fx_card"
@@ -227,6 +233,92 @@ def _detect_product_category(text: str) -> Optional[str]:
     )):
         return "debit_card"
     # generic credit intent → show category selection menu
-    if any(t in lower for t in ("кредит", "займ", "заём", "credit", "loan", "kredit", "qarz")):
+    if any(t in lower for t in (
+        "кредит", "займ", "заём", "credit", "loan", "kredit", "qarz", "қарз",
+    )):
         return "credit_menu"
     return None
+
+
+# Words that turn a product mention into a request to see the catalog:
+# "Хочу оформить ипотеку", "Avtokreditlaringizni ko'rsating", "Menga kredit
+# kerak", "Qanday omonatlaringiz bor?". Latin and Cyrillic Uzbek, plus the
+# spellings customers actually type ("kere", "olmokchiman").
+_PRODUCT_REQUEST_MARKERS: tuple[str, ...] = (
+    # ru
+    "хочу", "хотел", "хотим", "нужен", "нужна", "нужно", "нужны",
+    "покаж", "показ", "какие", "есть ли", "есть у вас", "у вас есть",
+    "оформ", "открыть", "взять", "подбер", "подобра", "интересу", "список",
+    # uz, latin
+    "olmoqchi", "olmokchi", "ochmoqchi", "ochmokchi", "kerak", "kere",
+    "ko'rsat", "korsat", "qanday", "qanaqa", "bormi", "bor?", "bor ekan",
+    "olsam", "olish", "ochish", "rasmiylashtir", "istayman", "xohlayman", "qiziq", "ro'yxat",
+    # uz, cyrillic
+    "олмоқчи", "олмокчи", "очмоқчи", "очмокчи", "керак", "кере", "кўрсат", "курсат",
+    "қандай", "кандай", "қанақа", "канака", "борми", "олиш", "очиш",
+    # en
+    "want", "need", "show", "which", "do you have", "open", "apply", "looking for",
+)
+
+# Words that make it a how-to / problem / definition question instead —
+# "Kartani qanday bloklash mumkin?" names a card but must reach the FAQ.
+_HOWTO_MARKERS: tuple[str, ...] = (
+    # ru
+    "как ", "как?", "почему", "зачем", "что такое", "что значит", "документ",
+    "заблок", "блокир", "разблок", "потерял", "украл", "пин-код", "пин код", "смс", "sms",
+    "не работает", "не приходит", "не могу", "вернуть", "закрыть", "погасить", "досрочн",
+    "оплатить", "перевести", "перевод", "статус", "комисси", "продлить", "просроч",
+    # uz, latin
+    "qanday qilib", "nima uchun", "nega", "nima degani", "hujjat", "blok", "yo'qot", "yoqot",
+    "o'g'irla", "ishlamay", "kelmayap", "qaytar", "yopish", "so'ndir", "o'tkaz", "holat",
+    "komissiya", "muddatidan oldin", "qanday ochiladi", "qanday olinadi", "rasmiylashtiriladi",
+    # uz, cyrillic
+    "қандай қилиб", "кандай килиб", "нима учун", "нега", "ҳужжат", "хужжат", "блок", "йўқот", "йукот",
+    # en
+    "how ", "how?", "why", "what is", "what's a", "document", "block", "lost", "stolen",
+    "not working", "repay", "pay off", "transfer", "status",
+)
+
+# A catalog request is short; a long message mixes several asks and is left
+# to the model.
+_PRODUCT_REQUEST_MAX_WORDS = 12
+
+_APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʻ": "'", "ʼ": "'", "`": "'"})
+
+
+def _product_request_tool(text: str) -> Optional[tuple[str, dict]]:
+    """The tool call a clear product-catalog request maps to, or None.
+
+    ``("get_products", {"category": ...})`` for a concrete category,
+    ``("show_credit_menu", {})`` for a generic "I need a loan". Used by
+    ``app/agent/tool_salvage.py`` only after the model failed to call a tool
+    itself, so a None here never blocks the model from routing on its own.
+    """
+    norm = (text or "").translate(_APOSTROPHES).lower().strip()
+    if not norm or len(norm.split()) > _PRODUCT_REQUEST_MAX_WORDS:
+        return None
+    category = _detect_product_category(norm)
+    if category is None:
+        return None
+    if _contains_any(norm, _HOWTO_MARKERS):
+        return None
+    if not _contains_any(norm, _PRODUCT_REQUEST_MARKERS):
+        return None
+    if category == "credit_menu":
+        return "show_credit_menu", {}
+    return "get_products", {"category": category}
+
+
+def _intent_tool_call(text: str) -> Optional[tuple[str, dict]]:
+    """The tool a plain request maps to when the model answered with text.
+
+    An explicit request for a live operator wins (the model was measured
+    replying "Hozir sizni operatorga ulayman" without calling the tool, so the
+    customer was promised a handoff that never happened), then a product
+    catalog request. Currency is deliberately absent: `get_currency_info`'s own
+    rule asks the model to clarify when no currency is named, and with one
+    named the model already calls it reliably.
+    """
+    if _is_operator_request(text or ""):
+        return "request_operator", {"reason": "user_request"}
+    return _product_request_tool(text)
