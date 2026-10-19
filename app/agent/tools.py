@@ -99,41 +99,22 @@ async def find_office(
     query: str = "",
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Find a bank office by type and optional location/name query.
+    """Find bank offices by type and optional location/name. Vague "all branches / nearest branch" requests DO call it with query="" (returns up to 5) — do not ask to clarify.
 
     OFFICE TYPES:
-    - "filial" — full-service branch (Центр банковских услуг / ЦБУ / БХМ). Has ALL services
-      including legal-entity accounts, business loans, IP/yakka tadbirkor services.
-      Default choice for vague "ближайшее отделение" queries.
-    - "sales_office" — mini-office (офис продаж / savdo ofisi). Individuals only:
-      consumer/auto/micro/education loans, cards, cashier, currency exchange.
-      NO legal-entity services.
-    - "sales_point" — car-dealership point (точка продаж / savdo nuqtasi).
-      ONLY auto loans, consultations, ATM. Nothing else.
+    - "filial" — full-service branch (ЦБУ / БХМ), incl. legal entities and business. Default for vague requests.
+    - "sales_office" — mini-office (офис продаж / savdo ofisi): individuals only — loans, cards, cashier, exchange.
+    - "sales_point" — point at a car dealership (точка продаж / savdo nuqtasi): auto loans only.
 
     EXAMPLES:
-    - "где ближайший филиал?" → find_office(office_type="filial", query="")
-    - "покажи все филиалы" / "дай информацию по филиалам" / "список филиалов" /
-      "филиалы банка" → find_office(office_type="filial", query="")
+    - "где ближайший филиал?" / "список филиалов" → find_office(office_type="filial", query="")
     - "филиал в Андижане" → find_office(office_type="filial", query="Андижан")
-    - "мне нужен счёт для юрлица в Ташкенте" → find_office(office_type="filial", query="Ташкент")
     - "где мини-офис в Самарканде" → find_office(office_type="sales_office", query="Самарканд")
     - "авто кредит в KIA Андижан" → find_office(office_type="sales_point", query="KIA Andijon")
-    - "BYD Tashkent" → find_office(office_type="sales_point", query="BYD Tashkent")
-    - "where is the nearest branch" / "show me all branches" / "list of branches"
-      → find_office(office_type="filial", query="")
-    - "Toshkentdagi filial" / "barcha filiallar" / "filiallar ro'yxati"
-      → find_office(office_type="filial", query="")
+    - "where is the nearest branch" → find_office(office_type="filial", query="")
+    - "Toshkentdagi filial" / "filiallar ro'yxati" → find_office(office_type="filial", query="")
 
-    IMPORTANT: vague "all branches / показать филиалы" messages DO call this tool
-    with `query=""` — do NOT ask the user to clarify. The tool returns up to 5
-    offices by default; the user can then narrow down by city.
-
-    PARAMETERS:
-      office_type: one of "filial" / "sales_office" / "sales_point".
-      query: free-form city / region / office-name / car-dealer as the user wrote it.
-             Empty string = list first 5.
-    """
+    query: city / region / office name / car dealer as the user wrote it; "" lists the first 5."""
     text, offices = await _find_offices_impl(office_type, query, _lang_from_state(state))
     if not offices:
         return text, None
@@ -183,21 +164,14 @@ def _currency_numeric(value) -> Optional[float]:
 async def get_currency_info(
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Get the latest currency exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
+    """Get the latest exchange rates (USD, EUR, RUB, GBP, KZT, CNY vs UZS).
 
-    HARD RULE: call ONLY if the message contains at least ONE explicit currency token
-    (USD, EUR, RUB, GBP, KZT, CNY, UZS, доллар, евро, рубль, фунт, тенге, юань,
-    сум/so'm, валюта, обмен, currency, exchange, valyuta, ayirboshlash). If none of
-    these tokens are present — route via `faq_lookup` or `find_office` instead.
+    HARD RULE: call ONLY if the message names a currency or exchange explicitly (USD, EUR, RUB, доллар, евро, рубль, валюта, обмен, dollar, yevro, valyuta, ayirboshlash, currency, exchange…). Otherwise route via faq_lookup or find_office. "kurs / курс" alone may be the verb ko'rsatmoq — see the system policy.
 
     EXAMPLES:
-    - "курс доллара" / "сколько сейчас евро" / "обменный курс" → get_currency_info()
-    - "какой сегодня курс валют" → get_currency_info()
-    - "USD rate today" / "exchange rate" → get_currency_info()
-    - "dollar narxi" / "valyuta kursi qancha" → get_currency_info()
-
-    Edge cases for the 'курс/kursat...' homonym are described in the system policy — follow that guidance.
-    """
+    - "курс доллара" / "обменный курс" → get_currency_info()
+    - "USD rate today" → get_currency_info()
+    - "dollar narxi" / "valyuta kursi qancha" → get_currency_info()"""
     from app.utils.cbu_rates import fetch_cbu_rates
 
     lang = _lang_from_state(state)
@@ -240,24 +214,13 @@ async def get_currency_info(
 async def show_credit_menu(
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Show the credit-type selection menu. Use ONLY when user wants credit but has NOT specified which type.
+    """Show the credit-type selection menu. ONLY when the user wants a loan but has NOT said which kind. If the request or goal implies a category (flat, car, tuition, microloan) call get_products instead.
 
-    EXAMPLES (correct use — type is genuinely unknown):
+    EXAMPLES:
     - "хочу кредит" / "мне нужен кредит" / "какие есть кредиты" → show_credit_menu()
     - "I need a loan" / "what loans do you offer" → show_credit_menu()
     - "kredit olmoqchiman" / "kredit turlari" → show_credit_menu()
-
-    DO NOT call when the user names a goal that uniquely implies a category — call get_products instead:
-    - "хочу купить квартиру" / "квартира в кредит" / "хочу квартиру" / "жильё" → get_products(category="mortgage")
-    - "хочу машину" / "куплю авто" / "нужен автомобиль" → get_products(category="autoloan")
-    - "оплатить учёбу" / "контракт" / "оплата обучения" → get_products(category="education_credit")
-    - "buy a house" / "buy an apartment" / "home loan" → get_products(category="mortgage")
-    - "buy a car" / "car loan" → get_products(category="autoloan")
-    - "pay tuition" / "student loan" → get_products(category="education_credit")
-    - "kvartira olmoqchiman" / "uy-joy olish" → get_products(category="mortgage")
-    - "mashina olmoqchiman" / "avtomobil sotib olmoqchiman" → get_products(category="autoloan")
-    - "o'qish puli" / "kontrakt to'lovi" → get_products(category="education_credit")
-    """
+    - "хочу купить квартиру" / "mashina olmoqchiman" → NOT this tool: get_products(category="mortgage" / "autoloan")"""
     return at("credit_menu_prompt", _lang_from_state(state))
 
 
@@ -269,53 +232,26 @@ async def get_products(
     ],
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Get list of bank products for a specific category.
-    Returns pre-formatted text — pass to the user AS-IS.
+    """Show the list of bank products in one category. Returns pre-formatted text — pass it to the user AS-IS.
 
     CATEGORIES: mortgage, autoloan, microloan, education_credit, deposit, debit_card, fx_card.
 
-    EXAMPLES — direct product/category names:
-    - "хочу ипотеку" → get_products(category="mortgage")
-    - "покажи автокредиты" → get_products(category="autoloan")
-    - "какие у вас вклады" → get_products(category="deposit")
+    Call it when the user names a category, asks which products of a category exist ("what X do you have" / "qanday X bor" is a catalogue request, NOT faq_lookup), or names a goal that clearly implies one category (buy a flat → mortgage, buy a car → autoloan, pay tuition → education_credit, save money → deposit). Also when the user presses a "back to products" button while state has a category — use state.category.
+
+    EXAMPLES:
+    - "хочу ипотеку" / "какие у вас ипотеки есть?" / "хочу купить квартиру" → get_products(category="mortgage")
+    - "покажи автокредиты" / "хочу купить машину" → get_products(category="autoloan")
+    - "какие вклады у вас есть?" / "хочу накопить" → get_products(category="deposit")
     - "микрозайм" → get_products(category="microloan")
-    - "дебетовые карты" → get_products(category="debit_card")
+    - "оплатить учёбу" / "контракт в университете" → get_products(category="education_credit")
+    - "дебетовые карты" / "какие карты у вас есть?" / "qanday karta bor?" → get_products(category="debit_card")
     - "валютные карты" → get_products(category="fx_card")
-    - "all products" / "◀ Все продукты" when state has category → get_products(category=<state.category>)
-    - "deposit products" → get_products(category="deposit")
-    - "ipoteka" → get_products(category="mortgage")
-
-    EXAMPLES — "what X do you have" / "qanday X bor" — list-show questions go HERE,
-    not to faq_lookup. The user wants to see the catalogue, not read a help article:
-    - "какие у вас ипотеки есть?" / "какие ипотеки бывают?" → get_products(category="mortgage")
-    - "какие у вас автокредиты?" → get_products(category="autoloan")
-    - "какие вклады у вас есть?" → get_products(category="deposit")
-    - "какие карты у вас есть?" → get_products(category="debit_card")
-    - "what mortgages do you have?" → get_products(category="mortgage")
-    - "what deposits are available?" → get_products(category="deposit")
-    - "qanday ipoteka bor?" / "qanday ipoteka turlari bor?" → get_products(category="mortgage")
-    - "qanday avtokredit bor?" → get_products(category="autoloan")
-    - "qanday omonat bor?" / "qanday omonatlar mavjud?" → get_products(category="deposit")
-    - "qanday karta bor?" / "qanday kartalar mavjud?" → get_products(category="debit_card")
-    - "qanday mikrokredit bor?" → get_products(category="microloan")
-
-    EXAMPLES — goal-based phrasings that imply a specific category (prefer this over show_credit_menu):
-    - "хочу купить квартиру" / "хочу квартиру" / "куплю жильё" / "квартира в кредит" / "недвижимость" → get_products(category="mortgage")
-    - "I want to buy an apartment" / "buy a home" / "home loan" → get_products(category="mortgage")
-    - "kvartira olmoqchiman" / "uy-joy olish" / "ipoteka kerak" → get_products(category="mortgage")
-    - "хочу купить машину" / "куплю авто" / "нужен автомобиль" → get_products(category="autoloan")
-    - "I want to buy a car" / "car financing" → get_products(category="autoloan")
-    - "mashina olmoqchiman" / "avtomobil sotib olmoqchiman" → get_products(category="autoloan")
-    - "оплатить учёбу" / "контракт в университете" / "оплата обучения" → get_products(category="education_credit")
-    - "pay tuition" / "student loan for university" → get_products(category="education_credit")
-    - "o'qish puli" / "kontrakt to'lovi" → get_products(category="education_credit")
-    - "хочу копить" / "хочу накопить" / "куда положить деньги под процент" → get_products(category="deposit")
-    - "I want to save money" / "where to invest" → get_products(category="deposit")
-    - "pul yig'moqchiman" / "jamg'arish" → get_products(category="deposit")
-
-    Also use when the user clicks a "back to products" button while a category is in state —
-    call with the state's current category to re-render the list.
-    """
+    - "what mortgages do you have?" / "home loan" → get_products(category="mortgage")
+    - "I want to buy a car" → get_products(category="autoloan")
+    - "qanday ipoteka bor?" / "kvartira olmoqchiman" / "ipoteka kerak" → get_products(category="mortgage")
+    - "mashina olmoqchiman" → get_products(category="autoloan")
+    - "qanday omonat bor?" / "pul yig'moqchiman" → get_products(category="deposit")
+    - "o'qish puli" / "kontrakt to'lovi" → get_products(category="education_credit")"""
     lang = _lang_from_state(state)
     products = await _get_products_by_category(category)
     if not products:
@@ -357,34 +293,15 @@ async def recommend_product(
     goal: str = "",
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Recommend a bank product based on a life/financial GOAL the customer
-    described, when they have NOT named a specific product or category.
+    """Recommend a product for a life/financial GOAL when the user has NOT named a product or category. Returns a pitch for the best match plus one alternative — pass it AS-IS. If a product/category is named → get_products; a bare "хочу кредит" with no goal → show_credit_menu.
 
-    EXAMPLES (call when the customer describes what they want to achieve or
-    worry about, without naming a product type — "ипотека"/"автокредит"/"вклад"/etc):
-    - "хочу накопить на старость" / "думаю о пенсии" → recommend_product(goal="накопить на старость")
+    EXAMPLES:
+    - "хочу накопить на старость" → recommend_product(goal="накопить на старость")
     - "мечтаю о своей квартире, но не знаю с чего начать" → recommend_product(goal="своя квартира")
-    - "хочу создать финансовую подушку на всякий случай" → recommend_product(goal="финансовая подушка")
-    - "думаю, как накопить дочке на учёбу" → recommend_product(goal="накопить на учёбу ребёнку")
     - "I want to build up retirement savings" → recommend_product(goal="retirement savings")
     - "farzandimni xorijda o'qitishni orzu qilaman" → recommend_product(goal="bolani xorijda o'qitish")
 
-    DO NOT call when the customer already named a specific product/category —
-    call `get_products(category=...)` instead:
-    - "хочу ипотеку" / "покажи вклады" / "какие у вас автокредиты" → get_products(...)
-    DO NOT call for a generic "хочу кредит" with no goal at all — that's
-    `show_credit_menu()`.
-
-    Ranking is deterministic (rate, and — if the client's age is known from
-    their profile — how well it fits the product's age-dependent rate tiers).
-    Returns a short pitch for the best match plus one alternative — pass the
-    tool output to the customer AS-IS, do not reformat.
-
-    Parameters:
-        goal: the customer's goal in their own words (used to pick a product
-              category). Empty string falls back to the category already in
-              state, if any.
-    """
+    goal: the customer's goal in their own words; "" falls back to the category in state."""
     lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     profile = (state or {}).get("user_profile") or None
@@ -535,27 +452,15 @@ async def compare_products(
     product_names: list[str],
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Compare 2-4 bank products side by side (same category — the ones
-    already shown to the customer, or looked up by the dialog's current
-    category).
+    """Compare 2-4 products of the same category side by side (the ones already shown, or looked up by the current category).
 
-    EXAMPLES (assuming state.products = [1. "Ипотека Стандарт", 2. "Ипотека Лайт"]):
+    EXAMPLES (state.products = [1. "Ипотека Стандарт", 2. "Ипотека Лайт"]):
     - "чем отличаются стандарт и лайт" → compare_products(product_names=["Ипотека Стандарт", "Ипотека Лайт"])
-    - "какой лучше — первый или второй" → compare_products(product_names=["1", "2"])  ← map numbers to positions, like select_product
-    - "сравни ипотеку стандарт, лайт и семейную" → compare_products(product_names=["Ипотека Стандарт", "Ипотека Лайт", "Семейная ипотека"])
+    - "какой лучше — первый или второй" → compare_products(product_names=["1", "2"])
     - "what's the difference between standard and light" → compare_products(product_names=["Standard", "Light"])
     - "solishtir birinchi va ikkinchisini" → compare_products(product_names=["1", "2"])
 
-    DO NOT call when:
-    - only ONE product is named — use select_product instead.
-    - the customer hasn't seen or named any specific products yet — show a
-      list first (get_products), then compare once they mention 2+ of them.
-
-    Parameters:
-        product_names: 2-4 product names/numbers/positions, as the customer
-            wrote them (or as shown in the last product list) — resolved
-            the same way select_product resolves a single name.
-    """
+    DO NOT call for a single product (select_product) or before any products were shown or named (get_products first). product_names: names or list positions as the customer wrote them."""
     lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     category = dialog.get("category", "")
@@ -625,33 +530,14 @@ async def custom_loan_calculator(
     downpayment: float = 0.0,
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Calculate a generic annuity loan payment using the customer's OWN numbers.
-    NOT tied to a specific bank product.
-
-    A conservative default interest rate (see DEFAULT_CUSTOM_LOAN_RATE_PCT env,
-    default 20% p.a.) is applied, and the output clearly discloses this.
-    The LLM MUST NOT invent a rate — that's why the tool does not accept one.
+    """Annuity payment for the customer's OWN numbers, not tied to a bank product. Uses a fixed conservative rate and discloses it in the output — the tool takes no rate, never invent one. For a specific bank product use get_products + start_calculator instead.
 
     EXAMPLES:
     - "если я возьму 50 млн на 5 лет" → custom_loan_calculator(amount=50000000, term_months=60, downpayment=0)
     - "посчитай 100 млн на 3 года с первоначальным 20 млн" → custom_loan_calculator(amount=100000000, term_months=36, downpayment=20000000)
     - "calculate 30m over 24 months" → custom_loan_calculator(amount=30000000, term_months=24, downpayment=0)
 
-    PARSING HINTS:
-    - "3 года"→36, "полтора года"→18, "5 лет"→60, "24 месяца"→24, "10 йил"→120
-    - "без первоначального"/"0"/not mentioned → downpayment=0.0
-
-    DO NOT call when the user wants a specific bank product — use get_products + start_calculator instead.
-
-    Sanity limits: amount up to 10 billion UZS, term_months up to 600 (50
-    years) — the tool returns a message with the allowed range instead of
-    computing when either is exceeded.
-
-    Parameters:
-        amount: Total loan amount in UZS BEFORE deducting downpayment (e.g. 50_000_000).
-        term_months: Integer number of months (e.g. 36 for 3 years).
-        downpayment: Absolute downpayment in UZS (0.0 if none).
-    """
+    amount: total loan in UZS before the downpayment (up to 10 billion). term_months: months ("3 года"→36, "полтора года"→18, "10 йил"→120; up to 600). downpayment: absolute UZS, 0 if none."""
     lang = _lang_from_state(state)
     rate_pct = get_settings().default_custom_loan_rate_pct
 
@@ -743,15 +629,7 @@ async def what_if_scenario(
     product_name: str = "",
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Recalculate a HYPOTHETICAL "what if" variant of a credit product —
-    e.g. "what if the term were longer" or "what if I put down more" —
-    WITHOUT touching the customer's actual in-progress calculator answers.
-
-    IMPORTANT: this is a side-hypothesis, not a flow step. It never mutates
-    `dialog.calc_slots` — call it as many times as the customer wants to
-    play with numbers, their real calculator progress (if any) is untouched.
-    When they're ready to actually proceed, they still go through the normal
-    product button → calculator flow (start_calculator / the calc_flow node).
+    """Recalculate a HYPOTHETICAL variant of a credit product ("what if the term were longer / I put down more"). Never changes the customer's real calculator answers; call it as often as they like. To actually proceed they use the product button / start_calculator.
 
     EXAMPLES (a product is selected or was just shown):
     - "а если на 5 лет вместо 3?" → what_if_scenario(term_months=60)
@@ -759,21 +637,9 @@ async def what_if_scenario(
     - "а если взять 80 миллионов по Ипотеке Лайт?" → what_if_scenario(amount=80000000, product_name="Ипотека Лайт")
     - "what if I take it for 7 years instead" → what_if_scenario(term_months=84)
 
-    DO NOT call when:
-    - no product is selected AND none is named — ask which product, or use
-      custom_loan_calculator for a product-free free-form estimate instead.
-    - the customer wants to actually commit to new numbers for their real
-      application — that goes through start_calculator/the calculator flow,
-      not this tool.
+    DO NOT call with no product selected or named (use custom_loan_calculator), or to commit new numbers for the real application.
 
-    Parameters (all optional — unset ones fall back to the customer's
-    current calc_slots, i.e. "everything the same EXCEPT what changed"):
-        amount: hypothetical loan amount in UZS.
-        term_months: hypothetical term in months.
-        downpayment_pct: hypothetical down payment, in percent (0-100).
-        product_name: product to use for this scenario if different from
-            the one currently selected — resolved like select_product.
-    """
+    All parameters optional — unset ones keep the current calculator values. amount: UZS. term_months: months. downpayment_pct: 0-100. product_name: resolved like select_product."""
     lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     calc_slots = dialog.get("calc_slots") or {}
@@ -847,34 +713,15 @@ async def affordability_check(
     term_months: Optional[int] = None,
     state: Annotated[dict, InjectedState] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Check whether a monthly payment (given directly, or derived from a
-    loan amount + term) is comfortable relative to the customer's income.
-
-    Resolution order: an explicit `monthly_payment` wins; otherwise it is
-    derived from `loan_amount`/`term_months` (falling back to the
-    customer's current `dialog.calc_slots` for whichever of those two is
-    missing) using the same rate lookup as the calculator. Income comes
-    ONLY from the client's stored profile (`state.user_profile.facts.income_monthly`,
-    learned from earlier conversation, never asked for here) — if unknown,
-    give the general 40-50%-of-income rule and softly invite the customer
-    to share their income, WITHOUT pressing for it (same tone as the PII
-    policy: optional, never a requirement to proceed).
+    """Check whether a monthly payment is comfortable for the customer's income. Payment: explicit monthly_payment, else derived from loan_amount/term_months (missing ones from the current calculator). Income comes ONLY from the stored client profile — never ask for it here; if unknown, give the 40-50%-of-income rule and softly invite them to share it, without pressing.
 
     EXAMPLES:
     - "потяну ли я платёж в 3 миллиона?" → affordability_check(monthly_payment=3000000)
-    - "хватит ли моего дохода на этот кредит?" (product/amount/term already in context) → affordability_check()
+    - "хватит ли моего дохода на этот кредит?" (amount/term in context) → affordability_check()
     - "потяну ли 50 млн на 3 года?" → affordability_check(loan_amount=50000000, term_months=36)
     - "can I afford a 2.5M payment?" → affordability_check(monthly_payment=2500000)
 
-    DO NOT call when the customer hasn't given a number and there is no
-    calculator context at all (dialog.calc_slots empty, no product) — ask
-    them for a payment or an amount+term first instead of guessing.
-
-    Parameters (all optional):
-        monthly_payment: a specific monthly payment to check, in UZS.
-        loan_amount: loan amount to derive a payment from, in UZS.
-        term_months: term to derive a payment from, in months.
-    """
+    DO NOT call when there is no number and no calculator context — ask for a payment or amount + term first. All parameters optional, in UZS / months."""
     lang = _lang_from_state(state)
     dialog = (state or {}).get("dialog") or {}
     calc_slots = dialog.get("calc_slots") or {}
@@ -940,50 +787,19 @@ async def faq_lookup(
     query: str,
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Look up the FAQ knowledge base for banking questions about services, products or procedures.
-
-    Call this for ANY "how do I X with the bank" question — including ones that
-    sound like generic financial advice. The bank-specific FAQ is the source of
-    truth; do not reply from general knowledge before checking it.
+    """Search the bank FAQ knowledge base. Call it FIRST for any "how do I / can I / what conditions, fees, limits, documents" question about the bank — the FAQ is the source of truth; do not answer from general knowledge before checking it. NOT for catalogue requests (get_products), exchange rates (get_currency_info) or office search (find_office).
 
     EXAMPLES:
-    - "как обновить паспорт в приложении" → faq_lookup(query="обновить паспорт в приложении")
-    - "можно ли досрочно погасить кредит" → faq_lookup(query="досрочное погашение кредита")
-    - "как кредит быстрее погасить" → faq_lookup(query="досрочное погашение кредита")
-    - "как закрыть кредит" → faq_lookup(query="закрытие кредита")
     - "как заблокировать карту" → faq_lookup(query="блокировка карты")
+    - "можно ли досрочно погасить кредит" → faq_lookup(query="досрочное погашение кредита")
     - "какие комиссии за перевод" → faq_lookup(query="комиссии переводы")
-    - "сколько процентов при досрочном закрытии вклада" → faq_lookup(query="досрочное закрытие вклада проценты")
-    - "есть ли обслуживание без очереди в филиалах" → faq_lookup(query="обслуживание без очереди")
-    - "Филиалларингда навбатсиз хизмат курсатолисизме" → faq_lookup(query="навбатсиз хизмат")
     - "how to change phone number" → faq_lookup(query="change phone number")
     - "parolni qanday tiklayman" → faq_lookup(query="parolni tiklash")
 
-    RETURNS one of these values:
-    - Answer text if the match is confident. Rephrase it naturally, in your
-      own words, in the customer's language — but keep every fact, number,
-      rate, term, condition and link EXACTLY as given in the source. Never
-      add anything that isn't in it.
-    - "FAQ_LOW_CONFIDENCE" followed by the closest FAQ entries, each with its
-      question AND answer text. If ONE of them clearly answers the user's
-      question, answer from it directly in THIS SAME turn (same rephrasing
-      rule as above) — do NOT call faq_lookup again for it. If none of them
-      fits, treat this as NO_MATCH_IN_FAQ (below).
-    - "NO_MATCH_IN_FAQ" if nothing relevant was found (this also covers a
-      FAQ_LOW_CONFIDENCE reply where none of the candidates fit). In that case:
-      * If the question is GENERAL banking knowledge (what is annuity, a
-        downpayment, how escrow works, what is APR, the typical flow of taking
-        a loan, common banking terms / definitions) — answer it yourself,
-        briefly, in the user's language. DO NOT add a disclaimer or note that
-        "this is general info" — the system automatically wraps your answer
-        with an "Assistant" header and an operator disclaimer. NEVER invent
-        concrete Asaka Bank facts: no made-up rates, fees, terms, product
-        names, branch addresses, or document lists.
-      * If the question is bank-specific and you cannot answer it — say plainly
-        that you don't have that info yet; the system surfaces an operator
-        button automatically after a couple of unhelpful turns. Escalate with
-        request_operator only if the user explicitly asks for a human.
-    """
+    RETURNS:
+    - answer text → rephrase it in the customer's language, keeping every fact, number, rate, term, condition and link exactly; add nothing.
+    - "FAQ_LOW_CONFIDENCE" + candidates with answers → if one clearly answers the question, answer from it in this same turn (same rule) and do not call faq_lookup again; otherwise treat as NO_MATCH_IN_FAQ.
+    - "NO_MATCH_IN_FAQ" → general banking knowledge (definitions, how escrow works, typical loan steps): answer briefly yourself, with no disclaimer (the system adds one); never invent Asaka Bank facts (rates, fees, terms, product names, addresses, document lists). Bank-specific and unknown: say you don't have that information yet; call request_operator only if the user asks for a human."""
     lang = _lang_from_state(state)
     result = await faq_search(query, lang)
     if result.tier == "strict":
@@ -1112,27 +928,14 @@ async def request_operator(
     reason: str = "",
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Transfer the user to a live operator. LAST RESORT.
-
-    GENERAL RULE: for ANY customer question, call `faq_lookup` FIRST. Only call
-    `request_operator` in these three cases:
-    1. The user EXPLICITLY asks for a live operator/human
-       ("позови оператора", "оператор", "operatorga ulang", "live agent").
-    2. The user asks you to PERFORM an action on their account that needs
-       identity verification — "do it for me NOW" (block my card, transfer
-       money, change my password). The signal is "do it for me", not "how do I".
-    3. `faq_lookup` returned `NO_MATCH_IN_FAQ`, the question is bank-specific,
-       and you cannot answer it from general knowledge.
-
-    A "how do I X / what to do if Y" question is NEVER an operator case by
-    itself — it goes to `faq_lookup`.
+    """Hand the conversation to a live operator. LAST RESORT — for "how do I / what to do if" questions call faq_lookup first. Call it only when:
+    1. the user explicitly asks for a human / operator → reason="user_request";
+    2. the user asks you to DO an account action that needs identity checks now (block my card, transfer money, change password) → reason="identity_required";
+    3. faq_lookup returned NO_MATCH_IN_FAQ, the question is bank-specific and you cannot answer it.
 
     EXAMPLES:
-    - "позови оператора" → request_operator(reason="user_request")
-    - "заблокируйте мою карту прямо сейчас" → request_operator(reason="identity_required")
-
-    reason: short tag — "identity_required" / "unclear_message" / "user_request".
-    """
+    - "позови оператора" / "operatorga ulang" / "live agent" → request_operator(reason="user_request")
+    - "заблокируйте мою карту прямо сейчас" → request_operator(reason="identity_required")"""
     lang = _lang_from_state(state)
     reason_lower = (reason or "").lower()
     if "identity" in reason_lower or "верификац" in reason_lower or "операци" in reason_lower:
@@ -1171,42 +974,15 @@ async def clarify(
     options: list[str],
     state: Annotated[dict, InjectedState] = None,
 ) -> str:
-    """Ask the customer a short, structured clarifying question when their
-    message is genuinely ambiguous between 2-4 SPECIFIC, DIFFERENT next
-    steps and nothing else (state, history, defaults) can resolve it.
-
-    The `options` become reply buttons (Telegram) / tap-chips (Mini App) —
-    the customer taps one and you get back that EXACT text next turn, never
-    free-form guessing. Ends the turn (question + buttons), same as any
-    other tool whose output is shown to the user as-is.
-
-    CALL ONLY when the request could reasonably branch into 2-4 concrete,
-    materially different answers and you have no other signal to pick one.
+    """Ask a short clarifying question with 2-4 reply buttons when the message is genuinely ambiguous between 2-4 materially different next steps and nothing (state, history, a sensible default) resolves it. The options become buttons; you get the tapped text back next turn. Ends the turn.
 
     EXAMPLES:
-    - "как заблокировать карту" when the customer has both an Uzcard and a
-      Humo card and the procedure differs → clarify(question="Уточните, пожалуйста, какая у вас карта — Uzcard или Humo?", options=["Uzcard", "Humo"])
-    - "хочу закрыть вклад досрочно" when both currency AND term change the
-      answer and neither is known → clarify(question="По какому вкладу вопрос — в сумах или в валюте?", options=["В сумах", "В валюте"])
-    - "I want to close my deposit early" (currency unknown, changes the
-      answer) → clarify(question="Which deposit is this about — UZS or foreign currency?", options=["UZS", "Foreign currency"])
+    - "как заблокировать карту" (client has Uzcard and Humo, the procedure differs) → clarify(question="Уточните, пожалуйста, какая у вас карта — Uzcard или Humo?", options=["Uzcard", "Humo"])
+    - "I want to close my deposit early" (currency unknown, changes the answer) → clarify(question="Which deposit is this about — UZS or foreign currency?", options=["UZS", "Foreign currency"])
 
-    DO NOT call when:
-    - you can just answer and note an assumption at the end ("Предполагаю,
-      вы про X — если не так, уточните.") — cheaper than a whole extra turn.
-    - there's a sensible default — pick the most common case and say so.
-    - the customer's PREVIOUS message was already a clarify question from
-      you (check <state>/history) and they replied with free text instead
-      of tapping a button — do NOT call clarify again on the same ambiguity.
-      Take their free-text reply at face value and answer it directly
-      (faq_lookup or your best answer) instead of re-asking. A programmatic
-      guard also enforces this, but do not rely on it — get it right first.
+    DO NOT call when you can answer and state an assumption, when there is a sensible default, or when your previous message was already a clarify question and the user replied with free text — then answer that reply directly (faq_lookup or your best answer).
 
-    Parameters:
-        question: the clarifying question, in the customer's language.
-        options: 2-4 short, DISTINCT reply options (button labels, a few
-                 words each) — not full sentences.
-    """
+    question: in the customer's language. options: 2-4 short, distinct button labels."""
     return question
 
 
